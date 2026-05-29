@@ -1,23 +1,79 @@
+# Dependencies
 node_modules/
 bun.lockb
 pnpm-lock.yaml
+
+# Environment / secrets
+.env
+.env.local
+credentials.json
+state.json
+
+# Build artifacts
 dist/
-.DS_Store
-.history/
-opencode.json
-.opencode/
-tmp
-tmp*
+build/
 *.tgz
 *.patched
-*first_fail*
-Heap-*.heapsnapshot
+
+# macOS / Apple sidecar files
+._*
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# OpenCode local config and cache
+opencode.json
+.opencode/
 .codex-cache
 .sisyphus/
-coverage/
-winston/
+
+# Skills
+.agents/
+skills-lock.json
+
+# IDE
+.history/
+.vscode/
+.idea/
+.shard/
+
+# Local Docker Compose overrides
+docker-compose.yaml
+docker-compose.local.yml
+docker-compose.local.yaml
+compose.local.yml
+compose.local.yaml
+
+# Temporary files
+tmp
+tmp*
 .tmp-plugin-test/
 .tmp-release-*.md
+
+# Debug logs
+debug_logs*/
+debug*.json
+winston/
+Heap-*.heapsnapshot
+*first_fail*
+
+# Project-specific notes and scratch files
+_notes/
+requests/
 task_plan.md
 findings.md
 progress.md
+
+# Testing and coverage
+coverage/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/

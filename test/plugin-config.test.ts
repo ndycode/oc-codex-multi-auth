@@ -5,6 +5,7 @@ import {
 	getCodexTuiV2,
 	getCodexTuiColorProfile,
 	getCodexTuiGlyphMode,
+	getCodexTuiMaskEmail,
 	getBeginnerSafeMode,
 	getFastSession,
 	getFastSessionStrategy,
@@ -55,6 +56,7 @@ describe('Plugin Configuration', () => {
 		'CODEX_TUI_V2',
 		'CODEX_TUI_COLOR_PROFILE',
 		'CODEX_TUI_GLYPHS',
+		'CODEX_TUI_MASK_EMAIL',
 		'CODEX_AUTH_FAST_SESSION',
 		'CODEX_AUTH_BEGINNER_SAFE_MODE',
 		'CODEX_AUTH_FAST_SESSION_STRATEGY',
@@ -98,6 +100,7 @@ describe('Plugin Configuration', () => {
 				codexTuiV2: true,
 				codexTuiColorProfile: 'truecolor',
 				codexTuiGlyphMode: 'ascii',
+				maskEmail: false,
 				beginnerSafeMode: false,
 				fastSession: false,
 				fastSessionStrategy: 'hybrid',
@@ -143,6 +146,7 @@ describe('Plugin Configuration', () => {
 				codexTuiV2: true,
 				codexTuiColorProfile: 'truecolor',
 				codexTuiGlyphMode: 'ascii',
+				maskEmail: false,
 				beginnerSafeMode: false,
 				fastSession: false,
 				fastSessionStrategy: 'hybrid',
@@ -185,6 +189,7 @@ describe('Plugin Configuration', () => {
 				codexTuiV2: true,
 				codexTuiColorProfile: 'truecolor',
 				codexTuiGlyphMode: 'ascii',
+				maskEmail: false,
 				beginnerSafeMode: false,
 				fastSession: false,
 				fastSessionStrategy: 'hybrid',
@@ -238,6 +243,7 @@ describe('Plugin Configuration', () => {
 		codexTuiV2: true,
 		codexTuiColorProfile: 'truecolor',
 		codexTuiGlyphMode: 'ascii',
+		maskEmail: false,
 		beginnerSafeMode: false,
 		fastSession: false,
 		fastSessionStrategy: 'hybrid',
@@ -285,6 +291,7 @@ describe('Plugin Configuration', () => {
 			codexTuiV2: true,
 			codexTuiColorProfile: 'truecolor',
 			codexTuiGlyphMode: 'ascii',
+			maskEmail: false,
 			beginnerSafeMode: false,
 			fastSession: false,
 			fastSessionStrategy: 'hybrid',
@@ -435,6 +442,25 @@ describe('Plugin Configuration', () => {
 			process.env.CODEX_TUI_GLYPHS = 'invalid';
 			expect(getCodexTuiGlyphMode({ codexTuiGlyphMode: 'unicode' })).toBe('unicode');
 			expect(getCodexTuiGlyphMode({})).toBe('ascii');
+		});
+	});
+
+	describe('getCodexTuiMaskEmail', () => {
+		it('should default to false', () => {
+			delete process.env.CODEX_TUI_MASK_EMAIL;
+			expect(getCodexTuiMaskEmail({})).toBe(false);
+		});
+
+		it('should use config value when env var not set', () => {
+			delete process.env.CODEX_TUI_MASK_EMAIL;
+			expect(getCodexTuiMaskEmail({ maskEmail: true })).toBe(true);
+		});
+
+		it('should prioritize env value over config', () => {
+			process.env.CODEX_TUI_MASK_EMAIL = '0';
+			expect(getCodexTuiMaskEmail({ maskEmail: true })).toBe(false);
+			process.env.CODEX_TUI_MASK_EMAIL = '1';
+			expect(getCodexTuiMaskEmail({ maskEmail: false })).toBe(true);
 		});
 	});
 
@@ -766,4 +792,3 @@ describe('Plugin Configuration', () => {
 		});
 	});
 });
-

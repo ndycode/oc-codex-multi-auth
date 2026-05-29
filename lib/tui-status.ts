@@ -56,6 +56,8 @@ const variantSuffixes: ReasoningVariant[] = [
 const STATUS_SEPARATOR = ` ${String.fromCharCode(183)} `;
 const WARNING_LIMIT_LEFT_PERCENT = 25;
 const DANGER_LIMIT_LEFT_PERCENT = 10;
+const MASKED_EMAIL = "*****";
+const EMAIL_PATTERN = /[^\s(),<>]+@[^\s(),<>]+/g;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -190,13 +192,24 @@ function isPercent(value: number | null): value is number {
 }
 
 function extractEmailFromLabel(label: string | undefined): string | undefined {
-	const match = label?.match(/[^\s(),<>]+@[^\s(),<>]+/);
+	const match = label?.match(EMAIL_PATTERN);
 	return match?.[0];
 }
 
-function formatAccountEmail(email: string | undefined): string | undefined {
+function formatAccountEmail(
+	email: string | undefined,
+	maskEmail: boolean,
+): string | undefined {
 	const trimmed = email?.trim() || undefined;
-	return trimmed ? `[${trimmed}]` : undefined;
+	return trimmed ? `[${maskEmail ? MASKED_EMAIL : trimmed}]` : undefined;
+}
+
+function maskEmailsInText(
+	value: string | undefined,
+	maskEmail: boolean,
+): string | undefined {
+	if (!value) return undefined;
+	return maskEmail ? value.replace(EMAIL_PATTERN, MASKED_EMAIL) : value;
 }
 
 function formatQuotaLimit(
@@ -212,7 +225,10 @@ function formatQuotaLimit(
 	return reset ? `${base} resets ${reset}` : base;
 }
 
-function formatAccountHint(quota: CompactQuotaStatus): string | undefined {
+function formatAccountHint(
+	quota: CompactQuotaStatus,
+	maskEmail = false,
+): string | undefined {
 	if (quota.type !== "ready") return undefined;
 	if (
 		typeof quota.accountIndex !== "number" ||
@@ -228,8 +244,8 @@ function formatAccountHint(quota: CompactQuotaStatus): string | undefined {
 		return undefined;
 	}
 	const email =
-		formatAccountEmail(quota.accountEmail) ??
-		formatAccountEmail(extractEmailFromLabel(quota.accountLabel));
+		formatAccountEmail(quota.accountEmail, maskEmail) ??
+		formatAccountEmail(extractEmailFromLabel(quota.accountLabel), maskEmail);
 	if (email) return email;
 	return `A${quota.accountIndex}`;
 }
@@ -286,9 +302,10 @@ export function formatPromptStatusText(params: {
 	variant?: ReasoningVariant;
 	quota: CompactQuotaStatus;
 	width?: number;
+	maskEmail?: boolean;
 }): string {
 	const variant = params.variant;
-	const account = formatAccountHint(params.quota);
+	const account = formatAccountHint(params.quota, params.maskEmail);
 	const quotaParts = formatQuotaParts(params.quota, true);
 	const quotaPartsWithoutReset = formatQuotaParts(params.quota, false);
 	const quota = quotaParts.length > 0
@@ -403,17 +420,19 @@ function formatDetailsLimit(limit: CompactQuotaLimit): string {
 export function formatQuotaDetailsText(
 	quota: CompactQuotaStatus,
 	now = Date.now(),
+	options: { maskEmail?: boolean } = {},
 ): string {
 	if (quota.type === "loading") return "Quota is loading.";
 	if (quota.type === "missing") return "No Codex OAuth account is configured.";
 	if (quota.type === "unavailable") return "Quota is unavailable.";
 
 	const lines: string[] = [];
-	const accountHint = formatAccountHint(quota);
-	if (quota.accountLabel && accountHint) {
-		lines.push(`Account: ${accountHint} (${quota.accountLabel})`);
-	} else if (quota.accountLabel) {
-		lines.push(`Account: ${quota.accountLabel}`);
+	const accountHint = formatAccountHint(quota, options.maskEmail);
+	const accountLabel = maskEmailsInText(quota.accountLabel, Boolean(options.maskEmail));
+	if (accountLabel && accountHint) {
+		lines.push(`Account: ${accountHint} (${accountLabel})`);
+	} else if (accountLabel) {
+		lines.push(`Account: ${accountLabel}`);
 	} else if (accountHint) {
 		lines.push(`Account: ${accountHint}`);
 	}

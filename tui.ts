@@ -3,6 +3,10 @@ import type { Event } from "@opencode-ai/sdk/v2";
 import type { JSX } from "@opentui/solid";
 
 import {
+	getCodexTuiMaskEmail,
+	loadPluginConfig,
+} from "./lib/config.js";
+import {
 	createUsageAccountFingerprint,
 	ensureCodexUsageAccessToken,
 	fetchCodexUsage,
@@ -275,6 +279,7 @@ export function shouldRefreshQuotaForEvent(event: Event): boolean {
 function createPromptStatus(
 	api: TuiPluginApi,
 	solid: SolidRuntime,
+	options: { maskEmail: boolean },
 ): JSX.Element {
 	const [quota, setQuota] = solid.createSignal<CompactQuotaStatus>({
 		type: "loading",
@@ -376,6 +381,7 @@ function createPromptStatus(
 				return formatPromptStatusText({
 					quota: quota(),
 					width: api.renderer.width,
+					maskEmail: options.maskEmail,
 				});
 			},
 			get fg() {
@@ -397,13 +403,13 @@ function createPromptStatus(
 	return node;
 }
 
-function showQuotaDetails(api: TuiPluginApi): void {
+function showQuotaDetails(api: TuiPluginApi, options: { maskEmail: boolean }): void {
 	void refreshQuotaStatus(api).then(
 		(status) => {
 			api.ui.dialog.replace(() =>
 				api.ui.DialogAlert({
 					title: "Codex quota",
-					message: formatQuotaDetailsText(status),
+					message: formatQuotaDetailsText(status, Date.now(), options),
 					onConfirm: () => api.ui.dialog.clear(),
 				}),
 			);
@@ -423,6 +429,9 @@ function showQuotaDetails(api: TuiPluginApi): void {
 const module: TuiPluginModule = {
 	id: "oc-codex-multi-auth.status",
 	async tui(api) {
+		const promptOptions = {
+			maskEmail: getCodexTuiMaskEmail(loadPluginConfig()),
+		};
 		const [{ createElement, spread }, { createSignal, onCleanup }] =
 			await Promise.all([import("@opentui/solid"), import("solid-js")]);
 		const solid: SolidRuntime = {
@@ -434,7 +443,7 @@ const module: TuiPluginModule = {
 
 		api.slots.register({
 			slots: {
-				session_prompt_right: () => createPromptStatus(api, solid),
+				session_prompt_right: () => createPromptStatus(api, solid, promptOptions),
 			},
 		});
 		const disposeCommand = api.command.register(() => [
@@ -444,7 +453,7 @@ const module: TuiPluginModule = {
 				description:
 					"Show active account usage, reset times, source, and last refresh.",
 				category: "Codex",
-				onSelect: () => showQuotaDetails(api),
+				onSelect: () => showQuotaDetails(api, promptOptions),
 			},
 		]);
 		api.lifecycle.onDispose(disposeCommand);

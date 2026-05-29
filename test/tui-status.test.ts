@@ -105,6 +105,34 @@ describe("TUI prompt status helpers", () => {
 		).toBe(`5h 88%${sep}7d 83%`);
 	});
 
+	it("masks account email in prompt status when requested", () => {
+		expect(
+			formatPromptStatusText({
+				quota: {
+					...quota,
+					accountIndex: 2,
+					accountCount: 3,
+					accountEmail: "user2@example.com",
+				},
+				width: 120,
+				maskEmail: true,
+			}),
+		).toBe(`[*****]${sep}5h 88%${sep}7d 83%`);
+
+		expect(
+			formatPromptStatusText({
+				quota: {
+					...quota,
+					accountIndex: 2,
+					accountCount: 3,
+					accountLabel: "Account 2 (user2@example.com)",
+				},
+				width: 120,
+				maskEmail: true,
+			}),
+		).toBe(`[*****]${sep}5h 88%${sep}7d 83%`);
+	});
+
 	it("prefers quota over variant when status space is tight", () => {
 		expect(
 			formatPromptStatusText({
@@ -181,6 +209,26 @@ describe("TUI prompt status helpers", () => {
 		expect(details).toContain("Active limit: 40");
 		expect(details).toContain("Source: response headers");
 		expect(details).toContain("Updated: just now");
+	});
+
+	it("masks account email in quota details when requested", () => {
+		const details = formatQuotaDetailsText(
+			{
+				...quota,
+				accountIndex: 2,
+				accountCount: 3,
+				accountEmail: "neil@example.com",
+				accountLabel: "Account 2 (neil@example.com)",
+				source: "usage",
+				fetchedAt: 1_000,
+			},
+			31_000,
+			{ maskEmail: true },
+		);
+
+		expect(details).toContain("Account: [*****] (Account 2 (*****))");
+		expect(details).not.toContain("neil@example.com");
+		expect(details).toContain("5h: 88% left");
 	});
 
 	it("resolves the selected variant from session messages before config defaults", () => {
