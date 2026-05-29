@@ -10,6 +10,7 @@ import {
   type AccountStorageV3,
 } from "../lib/storage.js";
 import type { ModelFamily } from "../lib/prompts/codex.js";
+import { runCleanup } from "../lib/shutdown.js";
 
 const TEST_ACCOUNTS = [
   { email: "account1@example.com", refresh_token: "fake_refresh_token_1_for_testing_only" },
@@ -65,6 +66,12 @@ describe("Multi-Account Rotation Integration", () => {
   });
 
   afterAll(async () => {
+    // Drain any pending debounced saves while TEST_STORAGE_PATH is still the
+    // active target. runCleanup() awaits every registered shutdown-flush
+    // handler (AccountManager.flushPendingSave), so a timer that resolves after
+    // this point has nothing left to write. Without this, a leaked debounced
+    // save would land in the real user store once the path is reset to null.
+    await runCleanup();
     try {
       await fs.unlink(TEST_STORAGE_PATH);
     } catch (error) {
@@ -265,12 +272,18 @@ describe("Multi-Account Rotation Integration", () => {
   });
 
   describe("Debounced save", () => {
-    it("saveToDiskDebounced does not throw", () => {
+    it("saveToDiskDebounced does not throw", async () => {
       const storage = createStorageFromTestAccounts(TEST_ACCOUNTS.slice(0, 3));
       const manager = new AccountManager(undefined, storage);
 
       expect(() => manager.saveToDiskDebounced()).not.toThrow();
       expect(() => manager.saveToDiskDebounced(100)).not.toThrow();
+
+      // Flush the pending debounced write while TEST_STORAGE_PATH is still
+      // active. Without this, the 100ms timer resolves after afterAll() resets
+      // the storage path to null and the save lands in the real user store.
+      await manager.flushPendingSave();
+      manager.disposeShutdownHandler();
     });
 
     it("flushPendingSave completes pending save", async () => {
@@ -279,6 +292,7 @@ describe("Multi-Account Rotation Integration", () => {
 
       manager.saveToDiskDebounced(1000);
       await manager.flushPendingSave();
+      manager.disposeShutdownHandler();
     });
   });
 
