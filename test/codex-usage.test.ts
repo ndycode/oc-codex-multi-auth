@@ -126,6 +126,36 @@ describe("codex usage helpers", () => {
 		expect(deduplicateUsageAccountIndices(storage)).toEqual([0, 1]);
 	});
 
+	it("handles sparse/undefined account slots without throwing", () => {
+		const storage = {
+			version: 3,
+			activeIndex: 5,
+			accounts: [
+				undefined,
+				{ refreshToken: "r1", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 10 },
+			],
+		} as unknown as AccountStorageV3;
+
+		expect(() => resolveCodexUsageActiveAccount(storage)).not.toThrow();
+		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
+			index: 1,
+			account: { accountId: "acc-1" },
+		});
+	});
+
+	it("returns null when every account slot is empty or disabled", () => {
+		const storage = {
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				undefined,
+				{ refreshToken: "r2", accountId: "acc-2", enabled: false, addedAt: 0, lastUsed: 0 },
+			],
+		} as unknown as AccountStorageV3;
+
+		expect(resolveCodexUsageActiveAccount(storage)).toBeNull();
+	});
+
 	it("uses the most recently persisted request account for usage display", () => {
 		const storage: AccountStorageV3 = {
 			version: 3,

@@ -535,7 +535,12 @@ export function resolveCodexUsageActiveAccount(
 		Math.min(storage.accounts.length - 1, Math.trunc(numericIndex)),
 	);
 	const activeAccount = storage.accounts[index];
-	if (!activeAccount && storage.accounts.every((account) => account.enabled === false)) return null;
+	if (
+		!activeAccount &&
+		storage.accounts.every((account) => !account || account.enabled === false)
+	) {
+		return null;
+	}
 
 	const activeLastUsed =
 		activeAccount?.enabled !== false &&
