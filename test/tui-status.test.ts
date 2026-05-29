@@ -231,6 +231,24 @@ describe("TUI prompt status helpers", () => {
 		expect(details).toContain("5h: 88% left");
 	});
 
+	it("preserves account email in quota details when masking is disabled", () => {
+		const details = formatQuotaDetailsText(
+			{
+				...quota,
+				accountIndex: 2,
+				accountCount: 3,
+				accountEmail: "neil@example.com",
+				accountLabel: "Account 2 (neil@example.com)",
+				source: "usage",
+				fetchedAt: 1_000,
+			},
+			31_000,
+			{ maskEmail: false },
+		);
+
+		expect(details).toContain("Account: [neil@example.com] (Account 2 (neil@example.com))");
+	});
+
 	it("resolves the selected variant from session messages before config defaults", () => {
 		const messages: PromptStatusMessage[] = [
 			{

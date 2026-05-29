@@ -36,6 +36,7 @@ const DEFAULT_CONFIG: PluginConfig = {
 	codexTuiColorProfile: "truecolor",
 	codexTuiGlyphMode: "ascii",
 	maskEmail: false,
+	maskEmailInQuotaDetails: false,
 	beginnerSafeMode: false,
 	fastSession: false,
 	fastSessionStrategy: "hybrid",
@@ -288,6 +289,16 @@ export function getCodexTuiMaskEmail(pluginConfig: PluginConfig): boolean {
 	return resolveBooleanSetting(
 		"CODEX_TUI_MASK_EMAIL",
 		pluginConfig.maskEmail,
+		false,
+	);
+}
+
+export function getCodexTuiMaskEmailInQuotaDetails(
+	pluginConfig: PluginConfig,
+): boolean {
+	return resolveBooleanSetting(
+		"CODEX_TUI_MASK_EMAIL_DETAILS",
+		pluginConfig.maskEmailInQuotaDetails,
 		false,
 	);
 }

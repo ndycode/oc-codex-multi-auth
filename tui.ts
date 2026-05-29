@@ -4,6 +4,7 @@ import type { JSX } from "@opentui/solid";
 
 import {
 	getCodexTuiMaskEmail,
+	getCodexTuiMaskEmailInQuotaDetails,
 	loadPluginConfig,
 } from "./lib/config.js";
 import {
@@ -279,7 +280,7 @@ export function shouldRefreshQuotaForEvent(event: Event): boolean {
 function createPromptStatus(
 	api: TuiPluginApi,
 	solid: SolidRuntime,
-	options: { maskEmail: boolean },
+	options: { maskEmail: boolean; maskEmailInQuotaDetails: boolean },
 ): JSX.Element {
 	const [quota, setQuota] = solid.createSignal<CompactQuotaStatus>({
 		type: "loading",
@@ -403,13 +404,18 @@ function createPromptStatus(
 	return node;
 }
 
-function showQuotaDetails(api: TuiPluginApi, options: { maskEmail: boolean }): void {
+function showQuotaDetails(
+	api: TuiPluginApi,
+	options: { maskEmail: boolean; maskEmailInQuotaDetails: boolean },
+): void {
 	void refreshQuotaStatus(api).then(
 		(status) => {
 			api.ui.dialog.replace(() =>
 				api.ui.DialogAlert({
 					title: "Codex quota",
-					message: formatQuotaDetailsText(status, Date.now(), options),
+					message: formatQuotaDetailsText(status, Date.now(), {
+						maskEmail: options.maskEmail && options.maskEmailInQuotaDetails,
+					}),
 					onConfirm: () => api.ui.dialog.clear(),
 				}),
 			);
@@ -429,8 +435,10 @@ function showQuotaDetails(api: TuiPluginApi, options: { maskEmail: boolean }): v
 const module: TuiPluginModule = {
 	id: "oc-codex-multi-auth.status",
 	async tui(api) {
+		const pluginConfig = loadPluginConfig();
 		const promptOptions = {
-			maskEmail: getCodexTuiMaskEmail(loadPluginConfig()),
+			maskEmail: getCodexTuiMaskEmail(pluginConfig),
+			maskEmailInQuotaDetails: getCodexTuiMaskEmailInQuotaDetails(pluginConfig),
 		};
 		const [{ createElement, spread }, { createSignal, onCleanup }] =
 			await Promise.all([import("@opentui/solid"), import("solid-js")]);

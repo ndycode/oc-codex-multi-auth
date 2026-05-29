@@ -17,6 +17,7 @@ export const PluginConfigSchema = z.object({
 	codexTuiColorProfile: z.enum(["truecolor", "ansi16", "ansi256"]).optional(),
 	codexTuiGlyphMode: z.enum(["ascii", "unicode", "auto"]).optional(),
 	maskEmail: z.boolean().optional(),
+	maskEmailInQuotaDetails: z.boolean().optional(),
 	beginnerSafeMode: z.boolean().optional(),
 	fastSession: z.boolean().optional(),
 	fastSessionStrategy: z.enum(["hybrid", "always"]).optional(),

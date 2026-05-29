@@ -78,7 +78,7 @@ Use this checklist to keep `oc-codex-multi-auth` aligned with the Antigravity-st
 - Visual controls:
   - `codexTuiColorProfile`: `truecolor` / `ansi256` / `ansi16`
   - `codexTuiGlyphMode`: `ascii` / `unicode` / `auto`
-- Privacy control: `maskEmail: true` or `CODEX_TUI_MASK_EMAIL=1` hides account email in prompt quota status and quota details.
+- Privacy controls: `maskEmail: true` or `CODEX_TUI_MASK_EMAIL=1` hides account email in prompt quota status only; `maskEmailInQuotaDetails: true` or `CODEX_TUI_MASK_EMAIL_DETAILS=1` extends masking to quota details.
 
 ## Tooling Parity
 
