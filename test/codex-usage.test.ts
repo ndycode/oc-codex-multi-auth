@@ -94,6 +94,38 @@ describe("codex usage helpers", () => {
 		});
 	});
 
+	it("keeps same-token workspace entries distinct and skips disabled usage accounts", () => {
+		const storage: AccountStorageV3 = {
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				{ refreshToken: "r1", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r1", accountId: "acc-2", organizationId: "org-2", addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r2", accountId: "acc-3", enabled: false, addedAt: 0, lastUsed: 50 },
+				{ refreshToken: "r3", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 0 },
+			],
+		};
+
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([0, 1]);
+		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
+			index: 0,
+			account: { accountId: "acc-1" },
+		});
+	});
+
+	it("deduplicates workspace identities without delimiter collisions", () => {
+		const storage: AccountStorageV3 = {
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				{ refreshToken: "r1", accountId: "acc:1", organizationId: "org", addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r2", accountId: "acc", organizationId: "1:org", addedAt: 0, lastUsed: 0 },
+			],
+		};
+
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([0, 1]);
+	});
+
 	it("uses the most recently persisted request account for usage display", () => {
 		const storage: AccountStorageV3 = {
 			version: 3,

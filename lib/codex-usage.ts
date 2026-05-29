@@ -490,18 +490,34 @@ export async function ensureCodexUsageAccessToken(params: {
 	return { accessToken, refreshed: true, persisted };
 }
 
+function normalizeUsageIdentityPart(value: string | undefined): string {
+	return typeof value === "string" ? value.trim() : "";
+}
+
+export function getUsageAccountDedupeKey(
+	account: AccountMetadataV3,
+): string | undefined {
+	const accountId = normalizeUsageIdentityPart(account.accountId);
+	const organizationId = normalizeUsageIdentityPart(account.organizationId);
+	if (accountId || organizationId) {
+		return JSON.stringify(["workspace", accountId, organizationId]);
+	}
+
+	const refreshToken = normalizeUsageIdentityPart(account.refreshToken);
+	return refreshToken ? JSON.stringify(["refresh", refreshToken]) : undefined;
+}
+
 export function deduplicateUsageAccountIndices(storage: AccountStorageV3): number[] {
-	const seenTokens = new Set<string>();
+	const seenIdentities = new Set<string>();
 	const uniqueIndices: number[] = [];
 	for (let i = 0; i < storage.accounts.length; i += 1) {
 		const account = storage.accounts[i];
 		if (!account) continue;
-		const refreshToken =
-			typeof account.refreshToken === "string"
-				? account.refreshToken.trim()
-				: "";
-		if (refreshToken && seenTokens.has(refreshToken)) continue;
-		if (refreshToken) seenTokens.add(refreshToken);
+		if (account.enabled === false) continue;
+		const key = getUsageAccountDedupeKey(account);
+		if (!key) continue;
+		if (seenIdentities.has(key)) continue;
+		seenIdentities.add(key);
 		uniqueIndices.push(i);
 	}
 	return uniqueIndices;
@@ -519,25 +535,28 @@ export function resolveCodexUsageActiveAccount(
 		Math.min(storage.accounts.length - 1, Math.trunc(numericIndex)),
 	);
 	const activeAccount = storage.accounts[index];
-	if (!activeAccount) return null;
+	if (!activeAccount && storage.accounts.every((account) => account.enabled === false)) return null;
 
 	const activeLastUsed =
-		typeof activeAccount.lastUsed === "number" && Number.isFinite(activeAccount.lastUsed)
+		activeAccount?.enabled !== false &&
+		typeof activeAccount?.lastUsed === "number" && Number.isFinite(activeAccount.lastUsed)
 			? activeAccount.lastUsed
-			: 0;
-	let newestIndex = index;
+			: -1;
+	let newestIndex = activeAccount?.enabled === false ? -1 : index;
 	let newestLastUsed = activeLastUsed;
 	for (let i = 0; i < storage.accounts.length; i += 1) {
 		const account = storage.accounts[i];
+		if (!account || account.enabled === false) continue;
 		const lastUsed =
-			typeof account?.lastUsed === "number" && Number.isFinite(account.lastUsed)
+			typeof account.lastUsed === "number" && Number.isFinite(account.lastUsed)
 				? account.lastUsed
 				: 0;
-		if (account && lastUsed > newestLastUsed) {
+		if (lastUsed > newestLastUsed) {
 			newestIndex = i;
 			newestLastUsed = lastUsed;
 		}
 	}
+	if (newestIndex < 0) return null;
 
 	const account = storage.accounts[newestIndex];
 	return account ? { index: newestIndex, account } : null;

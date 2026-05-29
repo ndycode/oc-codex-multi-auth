@@ -1090,7 +1090,7 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(mockStorage.accounts[0]?.accessToken).toBe("refreshed-access");
 		});
 
-		it("deduplicates accounts with same refreshToken and keeps the active marker", async () => {
+		it("keeps same-token workspace accounts separate and keeps the active marker", async () => {
 			const { createCodexHeaders } = await import("../lib/request/fetch-helpers.js");
 			mockStorage.accounts = [
 				{
@@ -1134,13 +1134,19 @@ describe("OpenAIOAuthPlugin", () => {
 
 			const result = await plugin.tool["codex-limits"].execute();
 
-			expect(result).toContain("2 account");
-			expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+			expect(result).toContain("3 account");
+			expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+			expect(result).toContain("Account 1 (a@test.com, id:acc-1):");
 			expect(result).toContain("Account 2 (a@test.com, id:acc-2) [active]:");
 			expect(result.match(/Account 2 \(a@test\.com, id:acc-2\)/g)).toHaveLength(1);
-			expect(result).not.toContain("Account 1 (a@test.com, id:acc-1):");
 			expect(result).toContain("Account 3 (b@test.com, id:acc-3):");
 			expect(result).not.toContain("Account 2 (a@test.com, id:acc-2):");
+			expect(vi.mocked(createCodexHeaders)).toHaveBeenCalledWith(
+				undefined,
+				"acc-1",
+				"shared-access",
+				expect.objectContaining({ organizationId: "org-1" }),
+			);
 			expect(vi.mocked(createCodexHeaders)).toHaveBeenCalledWith(
 				undefined,
 				"acc-2",

@@ -11,6 +11,7 @@ import {
 	fetchCodexUsage,
 	formatUsageLimitSummary,
 	formatUsageLimitTitle,
+	getUsageAccountDedupeKey,
 	hasUsageWindow,
 	parseCodexUsagePayload,
 	resolveCodexUsageAccountId,
@@ -97,14 +98,27 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 				activeIndex < storage.accounts.length
 					? storage.accounts[activeIndex]?.refreshToken?.trim() || undefined
 					: undefined;
+			const activeAccount =
+				typeof activeIndex === "number" &&
+				activeIndex >= 0 &&
+				activeIndex < storage.accounts.length
+					? storage.accounts[activeIndex]
+					: undefined;
+			const activeUsageKey = activeAccount
+				? getUsageAccountDedupeKey(activeAccount)
+				: undefined;
 			let storageChanged = false;
 			const jsonAccounts: Array<Record<string, unknown>> = [];
 
 			for (const i of uniqueIndices) {
 				const account = storage.accounts[i];
 				if (!account) continue;
+				const accountUsageKey = getUsageAccountDedupeKey(account);
 				const sharesActiveCredential =
-					!!activeRefreshToken && account.refreshToken === activeRefreshToken;
+					!!activeRefreshToken &&
+					account.refreshToken === activeRefreshToken &&
+					!!activeUsageKey &&
+					accountUsageKey === activeUsageKey;
 				const displayIndex =
 					sharesActiveCredential && typeof activeIndex === "number"
 						? activeIndex
