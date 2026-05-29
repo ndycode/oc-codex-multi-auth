@@ -490,10 +490,32 @@ export async function ensureCodexUsageAccessToken(params: {
 	return { accessToken, refreshed: true, persisted };
 }
 
+/**
+ * Normalize an account identity field to a trimmed string.
+ *
+ * Non-string values collapse to an empty string so callers can treat
+ * "missing" and "blank" identity parts uniformly when building dedupe keys.
+ */
 function normalizeUsageIdentityPart(value: string | undefined): string {
 	return typeof value === "string" ? value.trim() : "";
 }
 
+/**
+ * Derive a stable usage-quota dedupe key for an account.
+ *
+ * A single OAuth credential can authorize multiple ChatGPT workspaces, each
+ * exposing distinct `accountId` / `organizationId` values while sharing one
+ * refresh token. Quota deduplication must therefore key on workspace identity
+ * first so separate workspaces are not collapsed into one row, falling back to
+ * the refresh token only when no workspace identity is available.
+ *
+ * Keys are emitted as `JSON.stringify` arrays (tagged `"workspace"` or
+ * `"refresh"`) so values containing delimiter characters cannot collide.
+ *
+ * @param account - Stored account metadata to derive the key from.
+ * @returns A unique identity key, or `undefined` when the account carries no
+ *   workspace identity and no refresh token.
+ */
 export function getUsageAccountDedupeKey(
 	account: AccountMetadataV3,
 ): string | undefined {
@@ -507,6 +529,16 @@ export function getUsageAccountDedupeKey(
 	return refreshToken ? JSON.stringify(["refresh", refreshToken]) : undefined;
 }
 
+/**
+ * Collect the indices of accounts that represent distinct usage quotas.
+ *
+ * Disabled accounts are skipped, and entries sharing the same
+ * {@link getUsageAccountDedupeKey} identity are collapsed to their first
+ * occurrence so the same workspace/credential is only queried once.
+ *
+ * @param storage - The account storage to scan.
+ * @returns Storage indices of unique, enabled usage accounts in original order.
+ */
 export function deduplicateUsageAccountIndices(storage: AccountStorageV3): number[] {
 	const seenIdentities = new Set<string>();
 	const uniqueIndices: number[] = [];
@@ -523,6 +555,19 @@ export function deduplicateUsageAccountIndices(storage: AccountStorageV3): numbe
 	return uniqueIndices;
 }
 
+/**
+ * Resolve which account's usage quota should be shown as active.
+ *
+ * Starts from the persisted active index (preferring the Codex family index)
+ * and then prefers the most-recently-used enabled account by `lastUsed`, so the
+ * displayed quota tracks the credential actually serving requests. Disabled
+ * accounts are ignored, and invalid/missing `lastUsed` values are treated as
+ * oldest.
+ *
+ * @param storage - The account storage to inspect.
+ * @returns The selected account and its index, or `null` when no enabled
+ *   account is available.
+ */
 export function resolveCodexUsageActiveAccount(
 	storage: AccountStorageV3,
 ): UsageAccountSelection | null {
