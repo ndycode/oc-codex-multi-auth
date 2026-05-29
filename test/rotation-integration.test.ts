@@ -10,7 +10,6 @@ import {
   type AccountStorageV3,
 } from "../lib/storage.js";
 import type { ModelFamily } from "../lib/prompts/codex.js";
-import { runCleanup } from "../lib/shutdown.js";
 
 const TEST_ACCOUNTS = [
   { email: "account1@example.com", refresh_token: "fake_refresh_token_1_for_testing_only" },
@@ -66,12 +65,13 @@ describe("Multi-Account Rotation Integration", () => {
   });
 
   afterAll(async () => {
-    // Drain any pending debounced saves while TEST_STORAGE_PATH is still the
-    // active target. runCleanup() awaits every registered shutdown-flush
-    // handler (AccountManager.flushPendingSave), so a timer that resolves after
-    // this point has nothing left to write. Without this, a leaked debounced
-    // save would land in the real user store once the path is reset to null.
-    await runCleanup();
+    // Tests that schedule debounced saves (see "Debounced save") flush and
+    // dispose their own managers while TEST_STORAGE_PATH is still active, so
+    // no pending write can outlive this teardown. We deliberately do NOT call
+    // the global runCleanup() here: it drains the shared shutdown-flush queue
+    // in lib/shutdown.ts, which under non-default vitest pools (singleThread /
+    // vmForks) would also flush AccountManager handlers registered by other
+    // test files in the same process against the wrong storage path.
     try {
       await fs.unlink(TEST_STORAGE_PATH);
     } catch (error) {

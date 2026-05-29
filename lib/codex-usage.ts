@@ -532,12 +532,16 @@ export function getUsageAccountDedupeKey(
 /**
  * Collect the indices of accounts that represent distinct usage quotas.
  *
- * Disabled accounts are skipped, and entries sharing the same
- * {@link getUsageAccountDedupeKey} identity are collapsed to their first
- * occurrence so the same workspace/credential is only queried once.
+ * Disabled accounts are skipped. Accounts with no usable identity — no
+ * `accountId`, no `organizationId`, and no `refreshToken`, i.e. those for which
+ * {@link getUsageAccountDedupeKey} returns `undefined` — are also dropped, since
+ * they cannot be attributed to a quota and have no token to query. Remaining
+ * entries sharing the same dedupe key are collapsed to their first occurrence
+ * so the same workspace/credential is only queried once.
  *
  * @param storage - The account storage to scan.
- * @returns Storage indices of unique, enabled usage accounts in original order.
+ * @returns Storage indices of unique, enabled, identifiable usage accounts in
+ *   original order.
  */
 export function deduplicateUsageAccountIndices(storage: AccountStorageV3): number[] {
 	const seenIdentities = new Set<string>();
@@ -587,12 +591,20 @@ export function resolveCodexUsageActiveAccount(
 		return null;
 	}
 
+	// An enabled active account with a missing/invalid `lastUsed` must fall back
+	// to 0 (same as every other enabled account), not -1. Using -1 would let a
+	// lower-index enabled account with `lastUsed` 0 win the `0 > -1` comparison
+	// and steal the active marker before the active account's own iteration.
+	const activeEnabled = !!activeAccount && activeAccount.enabled !== false;
 	const activeLastUsed =
-		activeAccount?.enabled !== false &&
-		typeof activeAccount?.lastUsed === "number" && Number.isFinite(activeAccount.lastUsed)
+		activeEnabled &&
+		typeof activeAccount?.lastUsed === "number" &&
+		Number.isFinite(activeAccount.lastUsed)
 			? activeAccount.lastUsed
-			: -1;
-	let newestIndex = activeAccount?.enabled === false ? -1 : index;
+			: activeEnabled
+				? 0
+				: -1;
+	let newestIndex = activeEnabled ? index : -1;
 	let newestLastUsed = activeLastUsed;
 	for (let i = 0; i < storage.accounts.length; i += 1) {
 		const account = storage.accounts[i];

@@ -156,6 +156,38 @@ describe("codex usage helpers", () => {
 		expect(resolveCodexUsageActiveAccount(storage)).toBeNull();
 	});
 
+	it("keeps the active account when its lastUsed is missing", () => {
+		const storage = {
+			version: 3,
+			activeIndex: 1,
+			accounts: [
+				{ refreshToken: "r1", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r2", accountId: "acc-2", organizationId: "org-2", addedAt: 0 },
+			],
+		} as unknown as AccountStorageV3;
+
+		// The active account (index 1) has no lastUsed. It must not lose the
+		// marker to index 0's lastUsed:0 via a 0 > -1 comparison.
+		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
+			index: 1,
+			account: { accountId: "acc-2" },
+		});
+	});
+
+	it("drops accounts that have no workspace identity and no refresh token", () => {
+		const storage: AccountStorageV3 = {
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				{ addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r1", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 0 },
+			],
+		};
+
+		// The identity-less entry (index 0) yields no dedupe key and is excluded.
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([1]);
+	});
+
 	it("uses the most recently persisted request account for usage display", () => {
 		const storage: AccountStorageV3 = {
 			version: 3,

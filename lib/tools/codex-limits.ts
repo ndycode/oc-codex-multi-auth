@@ -119,6 +119,20 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 			const activeUsageKey = activeAccount
 				? getUsageAccountDedupeKey(activeAccount)
 				: undefined;
+			// If the active account was deduplicated out of uniqueIndices (e.g. it
+			// is a later occurrence of a workspace whose first occurrence carries a
+			// re-issued refresh token), warn so the missing `[active]` marker is
+			// diagnosable. The key-based match below still recovers the marker.
+			if (
+				typeof activeIndex === "number" &&
+				activeIndex >= 0 &&
+				activeIndex < storage.accounts.length &&
+				!uniqueIndices.includes(activeIndex)
+			) {
+				logWarn(
+					`[${PLUGIN_NAME}] active account index ${activeIndex} was deduplicated out of the usage list; matching the active workspace by identity instead.`,
+				);
+			}
 			let storageChanged = false;
 			const jsonAccounts: Array<Record<string, unknown>> = [];
 
@@ -126,11 +140,15 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 				const account = storage.accounts[i];
 				if (!account) continue;
 				const accountUsageKey = getUsageAccountDedupeKey(account);
-				const sharesActiveCredential =
-					!!activeRefreshToken &&
-					account.refreshToken === activeRefreshToken &&
-					!!activeUsageKey &&
-					accountUsageKey === activeUsageKey;
+				// Match the active account by workspace identity first: two entries
+				// for the same workspace can carry different refresh tokens (e.g. a
+				// re-issued token after re-add), so an exact token match alone would
+				// drop the `[active]` marker. Fall back to refresh-token equality for
+				// accounts that have no workspace identity (token-only dedupe key).
+				const sharesActiveCredential = activeUsageKey
+					? accountUsageKey === activeUsageKey
+					: !!activeRefreshToken &&
+						account.refreshToken === activeRefreshToken;
 				const displayIndex =
 					sharesActiveCredential && typeof activeIndex === "number"
 						? activeIndex
