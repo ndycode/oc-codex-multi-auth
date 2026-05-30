@@ -87,11 +87,109 @@ describe("codex usage helpers", () => {
 			],
 		};
 
-		expect(deduplicateUsageAccountIndices(storage)).toEqual([0, 2]);
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([1, 2]);
 		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
 			index: 2,
 			account: { accountId: "acc-2" },
 		});
+	});
+
+	it("keeps same-token workspace entries distinct, skips disabled, and prefers the freshest duplicate", () => {
+		const storage: AccountStorageV3 = {
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				{ refreshToken: "r1", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r1", accountId: "acc-2", organizationId: "org-2", addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r2", accountId: "acc-3", enabled: false, addedAt: 0, lastUsed: 50 },
+				{ refreshToken: "r3", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 0 },
+			],
+		};
+
+		// org-1 (key W) appears at index 0 and again at index 3 (re-added with a
+		// fresh token r3); org-2 (key X) at index 1; index 2 disabled. Display
+		// order follows first appearance (W then X), but W resolves to its
+		// freshest occurrence (index 3, token r3), not the stale index 0.
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([3, 1]);
+		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
+			index: 0,
+			account: { accountId: "acc-1" },
+		});
+	});
+
+	it("deduplicates workspace identities without delimiter collisions", () => {
+		const storage: AccountStorageV3 = {
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				{ refreshToken: "r1", accountId: "acc:1", organizationId: "org", addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r2", accountId: "acc", organizationId: "1:org", addedAt: 0, lastUsed: 0 },
+			],
+		};
+
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([0, 1]);
+	});
+
+	it("handles sparse/undefined account slots without throwing", () => {
+		const storage = {
+			version: 3,
+			activeIndex: 5,
+			accounts: [
+				undefined,
+				{ refreshToken: "r1", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 10 },
+			],
+		} as unknown as AccountStorageV3;
+
+		expect(() => resolveCodexUsageActiveAccount(storage)).not.toThrow();
+		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
+			index: 1,
+			account: { accountId: "acc-1" },
+		});
+	});
+
+	it("returns null when every account slot is empty or disabled", () => {
+		const storage = {
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				undefined,
+				{ refreshToken: "r2", accountId: "acc-2", enabled: false, addedAt: 0, lastUsed: 0 },
+			],
+		} as unknown as AccountStorageV3;
+
+		expect(resolveCodexUsageActiveAccount(storage)).toBeNull();
+	});
+
+	it("keeps the active account when its lastUsed is missing", () => {
+		const storage = {
+			version: 3,
+			activeIndex: 1,
+			accounts: [
+				{ refreshToken: "r1", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r2", accountId: "acc-2", organizationId: "org-2", addedAt: 0 },
+			],
+		} as unknown as AccountStorageV3;
+
+		// The active account (index 1) has no lastUsed. It must not lose the
+		// marker to index 0's lastUsed:0 via a 0 > -1 comparison.
+		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
+			index: 1,
+			account: { accountId: "acc-2" },
+		});
+	});
+
+	it("drops accounts that have no workspace identity and no refresh token", () => {
+		const storage: AccountStorageV3 = {
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				{ addedAt: 0, lastUsed: 0 },
+				{ refreshToken: "r1", accountId: "acc-1", organizationId: "org-1", addedAt: 0, lastUsed: 0 },
+			],
+		};
+
+		// The identity-less entry (index 0) yields no dedupe key and is excluded.
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([1]);
 	});
 
 	it("uses the most recently persisted request account for usage display", () => {

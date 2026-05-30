@@ -65,6 +65,13 @@ describe("Multi-Account Rotation Integration", () => {
   });
 
   afterAll(async () => {
+    // Tests that schedule debounced saves (see "Debounced save") flush and
+    // dispose their own managers while TEST_STORAGE_PATH is still active, so
+    // no pending write can outlive this teardown. We deliberately do NOT call
+    // the global runCleanup() here: it drains the shared shutdown-flush queue
+    // in lib/shutdown.ts, which under non-default vitest pools (singleThread /
+    // vmForks) would also flush AccountManager handlers registered by other
+    // test files in the same process against the wrong storage path.
     try {
       await fs.unlink(TEST_STORAGE_PATH);
     } catch (error) {
@@ -265,12 +272,18 @@ describe("Multi-Account Rotation Integration", () => {
   });
 
   describe("Debounced save", () => {
-    it("saveToDiskDebounced does not throw", () => {
+    it("saveToDiskDebounced does not throw", async () => {
       const storage = createStorageFromTestAccounts(TEST_ACCOUNTS.slice(0, 3));
       const manager = new AccountManager(undefined, storage);
 
       expect(() => manager.saveToDiskDebounced()).not.toThrow();
       expect(() => manager.saveToDiskDebounced(100)).not.toThrow();
+
+      // Flush the pending debounced write while TEST_STORAGE_PATH is still
+      // active. Without this, the 100ms timer resolves after afterAll() resets
+      // the storage path to null and the save lands in the real user store.
+      await manager.flushPendingSave();
+      manager.disposeShutdownHandler();
     });
 
     it("flushPendingSave completes pending save", async () => {
@@ -279,6 +292,7 @@ describe("Multi-Account Rotation Integration", () => {
 
       manager.saveToDiskDebounced(1000);
       await manager.flushPendingSave();
+      manager.disposeShutdownHandler();
     });
   });
 

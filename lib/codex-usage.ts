@@ -490,23 +490,92 @@ export async function ensureCodexUsageAccessToken(params: {
 	return { accessToken, refreshed: true, persisted };
 }
 
+/**
+ * Normalize an account identity field to a trimmed string.
+ *
+ * Non-string values collapse to an empty string so callers can treat
+ * "missing" and "blank" identity parts uniformly when building dedupe keys.
+ */
+function normalizeUsageIdentityPart(value: string | undefined): string {
+	return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Derive a stable usage-quota dedupe key for an account.
+ *
+ * A single OAuth credential can authorize multiple ChatGPT workspaces, each
+ * exposing distinct `accountId` / `organizationId` values while sharing one
+ * refresh token. Quota deduplication must therefore key on workspace identity
+ * first so separate workspaces are not collapsed into one row, falling back to
+ * the refresh token only when no workspace identity is available.
+ *
+ * Keys are emitted as `JSON.stringify` arrays (tagged `"workspace"` or
+ * `"refresh"`) so values containing delimiter characters cannot collide.
+ *
+ * @param account - Stored account metadata to derive the key from.
+ * @returns A unique identity key, or `undefined` when the account carries no
+ *   workspace identity and no refresh token.
+ */
+export function getUsageAccountDedupeKey(
+	account: AccountMetadataV3,
+): string | undefined {
+	const accountId = normalizeUsageIdentityPart(account.accountId);
+	const organizationId = normalizeUsageIdentityPart(account.organizationId);
+	if (accountId || organizationId) {
+		return JSON.stringify(["workspace", accountId, organizationId]);
+	}
+
+	const refreshToken = normalizeUsageIdentityPart(account.refreshToken);
+	return refreshToken ? JSON.stringify(["refresh", refreshToken]) : undefined;
+}
+
+/**
+ * Collect the indices of accounts that represent distinct usage quotas.
+ *
+ * Disabled accounts are skipped. Accounts with no usable identity — no
+ * `accountId`, no `organizationId`, and no `refreshToken`, i.e. those for which
+ * {@link getUsageAccountDedupeKey} returns `undefined` — are also dropped, since
+ * they cannot be attributed to a quota and have no token to query. Entries
+ * sharing the same dedupe key are collapsed to a single index.
+ *
+ * When a workspace key appears more than once (e.g. an account re-added after a
+ * token re-issue), the *last* (most recently added) occurrence is kept so the
+ * freshest credential is queried — keeping the first occurrence could surface
+ * an invalidated refresh token after re-auth. First-appearance order is still
+ * used for display stability.
+ *
+ * @param storage - The account storage to scan.
+ * @returns Storage indices of unique, enabled, identifiable usage accounts in
+ *   first-appearance order, each pointing at its freshest occurrence.
+ */
 export function deduplicateUsageAccountIndices(storage: AccountStorageV3): number[] {
-	const seenTokens = new Set<string>();
-	const uniqueIndices: number[] = [];
+	const indexByIdentity = new Map<string, number>();
 	for (let i = 0; i < storage.accounts.length; i += 1) {
 		const account = storage.accounts[i];
 		if (!account) continue;
-		const refreshToken =
-			typeof account.refreshToken === "string"
-				? account.refreshToken.trim()
-				: "";
-		if (refreshToken && seenTokens.has(refreshToken)) continue;
-		if (refreshToken) seenTokens.add(refreshToken);
-		uniqueIndices.push(i);
+		if (account.enabled === false) continue;
+		const key = getUsageAccountDedupeKey(account);
+		if (!key) continue;
+		// Map keeps first-insertion key order (stable display) while overwriting
+		// the value so the latest occurrence's index wins (freshest credential).
+		indexByIdentity.set(key, i);
 	}
-	return uniqueIndices;
+	return [...indexByIdentity.values()];
 }
 
+/**
+ * Resolve which account's usage quota should be shown as active.
+ *
+ * Starts from the persisted active index (preferring the Codex family index)
+ * and then prefers the most-recently-used enabled account by `lastUsed`, so the
+ * displayed quota tracks the credential actually serving requests. Disabled
+ * accounts are ignored, and invalid/missing `lastUsed` values are treated as
+ * oldest.
+ *
+ * @param storage - The account storage to inspect.
+ * @returns The selected account and its index, or `null` when no enabled
+ *   account is available.
+ */
 export function resolveCodexUsageActiveAccount(
 	storage: AccountStorageV3,
 ): UsageAccountSelection | null {
@@ -519,25 +588,41 @@ export function resolveCodexUsageActiveAccount(
 		Math.min(storage.accounts.length - 1, Math.trunc(numericIndex)),
 	);
 	const activeAccount = storage.accounts[index];
-	if (!activeAccount) return null;
+	if (
+		!activeAccount &&
+		storage.accounts.every((account) => !account || account.enabled === false)
+	) {
+		return null;
+	}
 
+	// An enabled active account with a missing/invalid `lastUsed` must fall back
+	// to 0 (same as every other enabled account), not -1. Using -1 would let a
+	// lower-index enabled account with `lastUsed` 0 win the `0 > -1` comparison
+	// and steal the active marker before the active account's own iteration.
+	const activeEnabled = !!activeAccount && activeAccount.enabled !== false;
 	const activeLastUsed =
-		typeof activeAccount.lastUsed === "number" && Number.isFinite(activeAccount.lastUsed)
+		activeEnabled &&
+		typeof activeAccount?.lastUsed === "number" &&
+		Number.isFinite(activeAccount.lastUsed)
 			? activeAccount.lastUsed
-			: 0;
-	let newestIndex = index;
+			: activeEnabled
+				? 0
+				: -1;
+	let newestIndex = activeEnabled ? index : -1;
 	let newestLastUsed = activeLastUsed;
 	for (let i = 0; i < storage.accounts.length; i += 1) {
 		const account = storage.accounts[i];
+		if (!account || account.enabled === false) continue;
 		const lastUsed =
-			typeof account?.lastUsed === "number" && Number.isFinite(account.lastUsed)
+			typeof account.lastUsed === "number" && Number.isFinite(account.lastUsed)
 				? account.lastUsed
 				: 0;
-		if (account && lastUsed > newestLastUsed) {
+		if (lastUsed > newestLastUsed) {
 			newestIndex = i;
 			newestLastUsed = lastUsed;
 		}
 	}
+	if (newestIndex < 0) return null;
 
 	const account = storage.accounts[newestIndex];
 	return account ? { index: newestIndex, account } : null;

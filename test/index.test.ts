@@ -1090,7 +1090,7 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(mockStorage.accounts[0]?.accessToken).toBe("refreshed-access");
 		});
 
-		it("deduplicates accounts with same refreshToken and keeps the active marker", async () => {
+		it("keeps same-token workspace accounts separate and keeps the active marker", async () => {
 			const { createCodexHeaders } = await import("../lib/request/fetch-helpers.js");
 			mockStorage.accounts = [
 				{
@@ -1134,19 +1134,69 @@ describe("OpenAIOAuthPlugin", () => {
 
 			const result = await plugin.tool["codex-limits"].execute();
 
-			expect(result).toContain("2 account");
-			expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+			expect(result).toContain("3 account");
+			expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+			expect(result).toContain("Account 1 (a@test.com, id:acc-1):");
 			expect(result).toContain("Account 2 (a@test.com, id:acc-2) [active]:");
 			expect(result.match(/Account 2 \(a@test\.com, id:acc-2\)/g)).toHaveLength(1);
-			expect(result).not.toContain("Account 1 (a@test.com, id:acc-1):");
 			expect(result).toContain("Account 3 (b@test.com, id:acc-3):");
 			expect(result).not.toContain("Account 2 (a@test.com, id:acc-2):");
+			expect(vi.mocked(createCodexHeaders)).toHaveBeenCalledWith(
+				undefined,
+				"acc-1",
+				"shared-access",
+				expect.objectContaining({ organizationId: "org-1" }),
+			);
 			expect(vi.mocked(createCodexHeaders)).toHaveBeenCalledWith(
 				undefined,
 				"acc-2",
 				"shared-access",
 				expect.objectContaining({ organizationId: "org-2" }),
 			);
+		});
+
+		it("keeps the active marker when the active account was deduped out by a re-issued token", async () => {
+			// Two entries for the same workspace (acc-1/org-1). The active entry is
+			// the later duplicate carrying a re-issued refresh token, so dedupe keeps
+			// the first occurrence (older token). The active marker must still attach
+			// to that surviving entry via workspace-identity match, not token match.
+			mockStorage.accounts = [
+				{
+					refreshToken: "rt_old",
+					accountId: "acc-1",
+					organizationId: "org-1",
+					email: "a@test.com",
+					accessToken: "access-old",
+					expiresAt: Date.now() + 3600_000,
+				},
+				{
+					refreshToken: "rt_reissued",
+					accountId: "acc-1",
+					organizationId: "org-1",
+					email: "a@test.com",
+					accessToken: "access-reissued",
+					expiresAt: Date.now() + 3600_000,
+				},
+			];
+			mockStorage.activeIndex = 1;
+			mockStorage.activeIndexByFamily = { codex: 1 };
+			globalThis.fetch = vi.fn().mockImplementation(async () =>
+				new Response(
+					JSON.stringify({
+						rate_limit: {
+							primary_window: { used_percent: 50, limit_window_seconds: 18000, reset_at: Math.floor(Date.now() / 1000) + 1800 },
+							secondary_window: { used_percent: 50, limit_window_seconds: 604800, reset_at: Math.floor(Date.now() / 1000) + 86400 },
+						},
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+			);
+
+			const result = await plugin.tool["codex-limits"].execute();
+
+			// Only the first occurrence survives dedupe, and it still shows [active].
+			expect(result).toContain("1 account");
+			expect(result).toContain("[active]");
 		});
 
 		it("does not deduplicate accounts that are missing refreshToken", async () => {
