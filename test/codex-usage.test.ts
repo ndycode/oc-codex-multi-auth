@@ -87,14 +87,14 @@ describe("codex usage helpers", () => {
 			],
 		};
 
-		expect(deduplicateUsageAccountIndices(storage)).toEqual([0, 2]);
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([1, 2]);
 		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
 			index: 2,
 			account: { accountId: "acc-2" },
 		});
 	});
 
-	it("keeps same-token workspace entries distinct and skips disabled usage accounts", () => {
+	it("keeps same-token workspace entries distinct, skips disabled, and prefers the freshest duplicate", () => {
 		const storage: AccountStorageV3 = {
 			version: 3,
 			activeIndex: 0,
@@ -106,7 +106,11 @@ describe("codex usage helpers", () => {
 			],
 		};
 
-		expect(deduplicateUsageAccountIndices(storage)).toEqual([0, 1]);
+		// org-1 (key W) appears at index 0 and again at index 3 (re-added with a
+		// fresh token r3); org-2 (key X) at index 1; index 2 disabled. Display
+		// order follows first appearance (W then X), but W resolves to its
+		// freshest occurrence (index 3, token r3), not the stale index 0.
+		expect(deduplicateUsageAccountIndices(storage)).toEqual([3, 1]);
 		expect(resolveCodexUsageActiveAccount(storage)).toMatchObject({
 			index: 0,
 			account: { accountId: "acc-1" },

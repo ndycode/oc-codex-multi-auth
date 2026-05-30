@@ -535,28 +535,32 @@ export function getUsageAccountDedupeKey(
  * Disabled accounts are skipped. Accounts with no usable identity — no
  * `accountId`, no `organizationId`, and no `refreshToken`, i.e. those for which
  * {@link getUsageAccountDedupeKey} returns `undefined` — are also dropped, since
- * they cannot be attributed to a quota and have no token to query. Remaining
- * entries sharing the same dedupe key are collapsed to their first occurrence
- * so the same workspace/credential is only queried once.
+ * they cannot be attributed to a quota and have no token to query. Entries
+ * sharing the same dedupe key are collapsed to a single index.
+ *
+ * When a workspace key appears more than once (e.g. an account re-added after a
+ * token re-issue), the *last* (most recently added) occurrence is kept so the
+ * freshest credential is queried — keeping the first occurrence could surface
+ * an invalidated refresh token after re-auth. First-appearance order is still
+ * used for display stability.
  *
  * @param storage - The account storage to scan.
  * @returns Storage indices of unique, enabled, identifiable usage accounts in
- *   original order.
+ *   first-appearance order, each pointing at its freshest occurrence.
  */
 export function deduplicateUsageAccountIndices(storage: AccountStorageV3): number[] {
-	const seenIdentities = new Set<string>();
-	const uniqueIndices: number[] = [];
+	const indexByIdentity = new Map<string, number>();
 	for (let i = 0; i < storage.accounts.length; i += 1) {
 		const account = storage.accounts[i];
 		if (!account) continue;
 		if (account.enabled === false) continue;
 		const key = getUsageAccountDedupeKey(account);
 		if (!key) continue;
-		if (seenIdentities.has(key)) continue;
-		seenIdentities.add(key);
-		uniqueIndices.push(i);
+		// Map keeps first-insertion key order (stable display) while overwriting
+		// the value so the latest occurrence's index wins (freshest credential).
+		indexByIdentity.set(key, i);
 	}
-	return uniqueIndices;
+	return [...indexByIdentity.values()];
 }
 
 /**
