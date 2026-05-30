@@ -119,10 +119,12 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 			const activeUsageKey = activeAccount
 				? getUsageAccountDedupeKey(activeAccount)
 				: undefined;
-			// If the active account was deduplicated out of uniqueIndices (e.g. it
-			// is a later occurrence of a workspace whose first occurrence carries a
-			// re-issued refresh token), warn so the missing `[active]` marker is
-			// diagnosable. The key-based match below still recovers the marker.
+			// If the active account index isn't in uniqueIndices, the active
+			// account was dropped from the usage list — e.g. it is an earlier
+			// occurrence of a workspace whose freshest (last) occurrence was kept,
+			// or it is disabled. Warn so the missing `[active]` marker is
+			// diagnosable. The key-based match below recovers the marker onto the
+			// surviving workspace entry.
 			if (
 				typeof activeIndex === "number" &&
 				activeIndex >= 0 &&

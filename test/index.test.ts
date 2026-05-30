@@ -1156,10 +1156,11 @@ describe("OpenAIOAuthPlugin", () => {
 		});
 
 		it("keeps the active marker when the active account was deduped out by a re-issued token", async () => {
-			// Two entries for the same workspace (acc-1/org-1). The active entry is
-			// the later duplicate carrying a re-issued refresh token, so dedupe keeps
-			// the first occurrence (older token). The active marker must still attach
-			// to that surviving entry via workspace-identity match, not token match.
+			// Two entries for the same workspace (acc-1/org-1). Dedupe keeps the
+			// freshest (last) occurrence — index 1, carrying the re-issued token.
+			// The active index points at the earlier occurrence (index 0), which is
+			// deduped out, so the [active] marker must be recovered onto the
+			// surviving entry via workspace-identity match, not refresh-token match.
 			mockStorage.accounts = [
 				{
 					refreshToken: "rt_old",
@@ -1178,8 +1179,8 @@ describe("OpenAIOAuthPlugin", () => {
 					expiresAt: Date.now() + 3600_000,
 				},
 			];
-			mockStorage.activeIndex = 1;
-			mockStorage.activeIndexByFamily = { codex: 1 };
+			mockStorage.activeIndex = 0;
+			mockStorage.activeIndexByFamily = { codex: 0 };
 			globalThis.fetch = vi.fn().mockImplementation(async () =>
 				new Response(
 					JSON.stringify({
@@ -1194,7 +1195,8 @@ describe("OpenAIOAuthPlugin", () => {
 
 			const result = await plugin.tool["codex-limits"].execute();
 
-			// Only the first occurrence survives dedupe, and it still shows [active].
+			// The active occurrence (index 0) was deduped out, but the surviving
+			// freshest workspace entry still shows [active] via identity match.
 			expect(result).toContain("1 account");
 			expect(result).toContain("[active]");
 		});

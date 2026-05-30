@@ -133,6 +133,21 @@ describe("TUI prompt status helpers", () => {
 		).toBe(`[*****]${sep}5h 88%${sep}7d 83%`);
 	});
 
+	it("preserves account email in prompt status when masking is disabled", () => {
+		expect(
+			formatPromptStatusText({
+				quota: {
+					...quota,
+					accountIndex: 2,
+					accountCount: 3,
+					accountEmail: "user2@example.com",
+				},
+				width: 120,
+				maskEmail: false,
+			}),
+		).toBe(`[user2@example.com]${sep}5h 88%${sep}7d 83%`);
+	});
+
 	it("prefers quota over variant when status space is tight", () => {
 		expect(
 			formatPromptStatusText({
