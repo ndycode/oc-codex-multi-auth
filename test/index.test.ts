@@ -136,7 +136,7 @@ vi.mock("../lib/config.js", () => ({
 	getCodexTuiV2: () => false,
 	getCodexTuiColorProfile: () => "ansi16",
 	getCodexTuiGlyphMode: () => "ascii",
-	getCodexTuiMaskEmail: () => false,
+	getCodexTuiMaskEmail: vi.fn(() => false),
 	getBeginnerSafeMode: () => false,
 	loadPluginConfig: () => ({}),
 }));
@@ -479,7 +479,9 @@ vi.mock("../lib/accounts.js", () => {
 			(_storedId: string | undefined, _source: string | undefined, tokenId: string | undefined) =>
 				tokenId,
 		),
-		formatAccountLabel: (_account: unknown, index: number) => `Account ${index + 1}`,
+		formatAccountLabel: vi.fn(
+			(_account: unknown, index: number) => `Account ${index + 1}`,
+		),
 		formatCooldown: () => null,
 		formatWaitTime: (ms: number) => `${Math.round(ms / 1000)}s`,
 		sanitizeEmail: (email: string) => email,
@@ -2882,6 +2884,47 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			"refresh-1",
 			ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
 			"auth-failure",
+		);
+	});
+
+	it("passes maskEmail to the account label on the auth-failure removal path", async () => {
+		const fetchHelpers = await import("../lib/request/fetch-helpers.js");
+		const accountsModule = await import("../lib/accounts.js");
+		const configModule = await import("../lib/config.js");
+		const { AccountManager } = accountsModule;
+		const { ACCOUNT_LIMITS } = await import("../lib/constants.js");
+
+		vi.mocked(configModule.getCodexTuiMaskEmail).mockReturnValue(true);
+		vi.spyOn(fetchHelpers, "shouldRefreshToken").mockReturnValue(true);
+		vi.mocked(fetchHelpers.refreshAndUpdateToken).mockRejectedValue(
+			new Error("Token expired"),
+		);
+		vi.spyOn(AccountManager.prototype, "incrementAuthFailures").mockReturnValue(
+			ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL,
+		);
+		// Returning 1 drives the single-account removal branch that renders the
+		// account label in the user-facing removal toast.
+		vi.spyOn(
+			AccountManager.prototype,
+			"removeAccountsWithSameRefreshToken",
+		).mockReturnValue(1);
+
+		globalThis.fetch = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ content: "should-not-fetch" }), { status: 200 }),
+		);
+
+		const { sdk } = await setupPlugin();
+		await sdk.fetch!("https://api.openai.com/v1/chat", {
+			method: "POST",
+			body: JSON.stringify({ model: "gpt-5.1" }),
+		});
+
+		// The runtime label must be built with masking enabled. If the
+		// `{ maskEmail }` option is dropped from this call site, this fails.
+		expect(vi.mocked(accountsModule.formatAccountLabel)).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.any(Number),
+			{ maskEmail: true },
 		);
 	});
 
