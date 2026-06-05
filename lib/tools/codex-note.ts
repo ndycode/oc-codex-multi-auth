@@ -15,6 +15,7 @@ export function createCodexNoteTool(ctx: ToolContext): ToolDefinition {
 		promptAccountIndexSelection,
 		supportsInteractiveMenus,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		cachedAccountManagerRef,
 		accountManagerPromiseRef,
 	} = ctx;
@@ -33,6 +34,7 @@ export function createCodexNoteTool(ctx: ToolContext): ToolDefinition {
 		},
 		async execute({ index, note }: { index?: number; note: string }) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const storage = await loadAccounts();
 			if (!storage || storage.accounts.length === 0) {
 				return "No Codex accounts configured. Run: opencode auth login";
@@ -90,7 +92,7 @@ export function createCodexNoteTool(ctx: ToolContext): ToolDefinition {
 				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
 			}
 
-			const accountLabel = formatCommandAccountLabel(account, targetIndex);
+			const accountLabel = formatCommandAccountLabel(account, targetIndex, { maskEmail });
 			if (normalizedNote.length === 0) {
 				return `Cleared note for ${accountLabel}`;
 			}

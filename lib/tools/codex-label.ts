@@ -20,6 +20,7 @@ export function createCodexLabelTool(ctx: ToolContext): ToolDefinition {
 		promptAccountIndexSelection,
 		supportsInteractiveMenus,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		getStatusMarker,
 		cachedAccountManagerRef,
 		accountManagerPromiseRef,
@@ -42,6 +43,7 @@ export function createCodexLabelTool(ctx: ToolContext): ToolDefinition {
 		},
 		async execute({ index, label }: { index?: number; label: string }) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const storage = await loadAccounts();
 			if (!storage || storage.accounts.length === 0) {
 				if (ui.v2Enabled) {
@@ -175,7 +177,7 @@ export function createCodexLabelTool(ctx: ToolContext): ToolDefinition {
 				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
 			}
 
-			const accountLabel = formatCommandAccountLabel(account, targetIndex);
+			const accountLabel = formatCommandAccountLabel(account, targetIndex, { maskEmail });
 			if (ui.v2Enabled) {
 				const statusText =
 					normalizedLabel.length === 0

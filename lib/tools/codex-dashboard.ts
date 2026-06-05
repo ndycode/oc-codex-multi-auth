@@ -23,6 +23,7 @@ export function createCodexDashboardTool(ctx: ToolContext): ToolDefinition {
 		resolveUiRuntime,
 		resolveActiveIndex,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		buildJsonAccountIdentity,
 		buildRoutingVisibilitySnapshot,
 		appendRoutingVisibilityText,
@@ -56,6 +57,7 @@ export function createCodexDashboardTool(ctx: ToolContext): ToolDefinition {
 			includeSensitive?: boolean;
 		} = {}) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const outputFormat = normalizeToolOutputFormat(format);
 			const includeSensitiveOutput = includeSensitive === true;
 			const storage = await loadAccounts();
@@ -194,6 +196,7 @@ export function createCodexDashboardTool(ctx: ToolContext): ToolDefinition {
 					const label = formatCommandAccountLabel(
 						storage.accounts[entry.index],
 						entry.index,
+						{ maskEmail },
 					);
 					const state = entry.eligible
 						? formatUiBadge(ui, "eligible", "success")
@@ -249,6 +252,7 @@ export function createCodexDashboardTool(ctx: ToolContext): ToolDefinition {
 				const label = formatCommandAccountLabel(
 					storage.accounts[entry.index],
 					entry.index,
+					{ maskEmail },
 				);
 				lines.push(
 					`  - ${label}: ${entry.eligible ? "eligible" : "blocked"} | health=${Math.round(entry.healthScore)} | tokens=${entry.tokensAvailable.toFixed(1)} | reasons=${entry.reasons.join(", ")}`,

@@ -72,4 +72,49 @@ describe("auth-menu", () => {
 			expect.stringContaining("shared@example.com | workspace:Workspace A | id:org-aaaa...bb2222"),
 		);
 	});
+
+	it("masks emails in the account menu when maskEmail is enabled", async () => {
+		vi.mocked(select).mockResolvedValueOnce({ type: "cancel" });
+
+		const accounts: AccountInfo[] = [
+			{
+				index: 0,
+				email: "shared@example.com",
+				accountLabel: "Workspace A",
+				accountId: "org-aaaa1111bbbb2222",
+			},
+		];
+
+		await showAuthMenu(accounts, { maskEmail: true });
+
+		const firstCall = vi.mocked(select).mock.calls[0];
+		const items = firstCall?.[0] as Array<{ label: string; value?: { type?: string } }>;
+		const accountRows = items.filter((item) => item.value?.type === "select-account");
+		expect(accountRows[0]?.label).toContain("sh***@example.com");
+		expect(accountRows[0]?.label).not.toContain("shared@example.com");
+		expect(accountRows[0]?.label).toContain("workspace:Workspace A");
+	});
+
+	it("masks the email in the delete confirmation when maskEmail is enabled", async () => {
+		vi.mocked(select).mockResolvedValueOnce("delete");
+		vi.mocked(confirm).mockResolvedValueOnce(true);
+
+		const action = await showAccountDetails(
+			{
+				index: 0,
+				email: "shared@example.com",
+				accountLabel: "Workspace A",
+				accountId: "org-aaaa1111bbbb2222",
+			},
+			{ maskEmail: true },
+		);
+
+		expect(action).toBe("delete");
+		expect(vi.mocked(confirm)).toHaveBeenCalledWith(
+			expect.stringContaining("sh***@example.com | workspace:Workspace A"),
+		);
+		expect(vi.mocked(confirm)).not.toHaveBeenCalledWith(
+			expect.stringContaining("shared@example.com"),
+		);
+	});
 });

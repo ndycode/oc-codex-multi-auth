@@ -23,6 +23,7 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 		resolveUiRuntime,
 		resolveActiveIndex,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		formatRateLimitEntry,
 		buildJsonAccountIdentity,
 	} = ctx;
@@ -55,6 +56,7 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 			includeSensitive?: boolean;
 		} = {}) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const storage = await loadAccounts();
 			const storePath = getStoragePath();
 			const outputFormat = normalizeToolOutputFormat(format);
@@ -201,7 +203,7 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 				];
 
 				filteredEntries.forEach(({ account, index }) => {
-					const label = formatCommandAccountLabel(account, index);
+					const label = formatCommandAccountLabel(account, index, { maskEmail });
 					const badges: string[] = [];
 					if (index === activeIndex)
 						badges.push(formatUiBadge(ui, "current", "accent"));
@@ -282,7 +284,7 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 			];
 
 			filteredEntries.forEach(({ account, index }) => {
-				const label = formatCommandAccountLabel(account, index);
+				const label = formatCommandAccountLabel(account, index, { maskEmail });
 				const statuses: string[] = [];
 				const rateLimit = formatRateLimitEntry(account, now);
 				if (index === activeIndex) statuses.push("active");

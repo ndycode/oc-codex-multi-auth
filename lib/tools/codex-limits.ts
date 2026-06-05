@@ -44,6 +44,7 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 		resolveUiRuntime,
 		resolveActiveIndex,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		buildJsonAccountIdentity,
 		invalidateAccountManagerCache,
 	} = ctx;
@@ -70,6 +71,7 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 			includeSensitive?: boolean;
 		} = {}) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const outputFormat = normalizeToolOutputFormat(format);
 			const includeSensitiveOutput = includeSensitive === true;
 			const storage = await loadAccounts();
@@ -166,6 +168,11 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 					effectiveDisplayAccount,
 					displayIndex,
 				);
+				const displayLabel = formatCommandAccountLabel(
+					effectiveDisplayAccount,
+					displayIndex,
+					{ maskEmail },
+				);
 				const isActive = i === activeIndex || sharesActiveCredential;
 				const activeSuffix = isActive
 					? ui.v2Enabled
@@ -210,7 +217,7 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 					});
 
 					if (ui.v2Enabled) {
-						lines.push(formatUiItem(ui, `${label}${activeSuffix}`));
+						lines.push(formatUiItem(ui, `${displayLabel}${activeSuffix}`));
 						lines.push(
 							`  ${formatUiKeyValue(ui, formatUsageLimitTitle(usage.primary.windowMinutes), formatUsageLimitSummary(usage.primary), "muted")}`,
 						);
@@ -238,7 +245,7 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 							);
 						}
 					} else {
-						lines.push(`${label}${activeSuffix}:`);
+						lines.push(`${displayLabel}${activeSuffix}:`);
 						lines.push(
 							`  ${formatUsageLimitTitle(usage.primary.windowMinutes)}: ${formatUsageLimitSummary(usage.primary)}`,
 						);
@@ -276,12 +283,12 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 						error: message.slice(0, 160),
 					});
 					if (ui.v2Enabled) {
-						lines.push(formatUiItem(ui, `${label}${activeSuffix}`));
+						lines.push(formatUiItem(ui, `${displayLabel}${activeSuffix}`));
 						lines.push(
 							`  ${formatUiKeyValue(ui, "Error", message.slice(0, 160), "danger")}`,
 						);
 					} else {
-						lines.push(`${label}${activeSuffix}:`);
+						lines.push(`${displayLabel}${activeSuffix}:`);
 						lines.push(`  Error: ${message.slice(0, 160)}`);
 					}
 				}

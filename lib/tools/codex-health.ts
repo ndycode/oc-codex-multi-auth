@@ -14,6 +14,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 	const {
 		resolveUiRuntime,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		getStatusMarker,
 		buildJsonAccountIdentity,
 	} = ctx;
@@ -40,6 +41,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 			includeSensitive?: boolean;
 		} = {}) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const outputFormat = normalizeToolOutputFormat(format);
 			const includeSensitiveOutput = includeSensitive === true;
 			const storage = await loadAccounts();
@@ -78,6 +80,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 				if (!account) continue;
 
 				const label = formatCommandAccountLabel(account, i);
+				const displayLabel = formatCommandAccountLabel(account, i, { maskEmail });
 				try {
 					const refreshResult = await queuedRefresh(account.refreshToken);
 					if (refreshResult.type === "success") {
@@ -90,7 +93,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 							status: "healthy",
 						});
 						results.push(
-							`  ${getStatusMarker(ui, "ok")} ${label}: Healthy`,
+							`  ${getStatusMarker(ui, "ok")} ${displayLabel}: Healthy`,
 						);
 						healthyCount++;
 					} else {
@@ -104,7 +107,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 							error: refreshResult.message ?? refreshResult.reason,
 						});
 						results.push(
-							`  ${getStatusMarker(ui, "error")} ${label}: Token refresh failed`,
+							`  ${getStatusMarker(ui, "error")} ${displayLabel}: Token refresh failed`,
 						);
 						unhealthyCount++;
 					}
@@ -121,7 +124,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 						error: errorMsg.slice(0, 120),
 					});
 					results.push(
-						`  ${getStatusMarker(ui, "error")} ${label}: Error - ${errorMsg.slice(0, 120)}`,
+						`  ${getStatusMarker(ui, "error")} ${displayLabel}: Error - ${errorMsg.slice(0, 120)}`,
 					);
 					unhealthyCount++;
 				}

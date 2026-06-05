@@ -6,6 +6,7 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
 import { loadAccounts, saveAccounts } from "../storage.js";
 import { AccountManager } from "../accounts.js";
+import { resolveDisplayEmail } from "../account-display.js";
 import { logWarn } from "../logger.js";
 import { MODEL_FAMILIES } from "../prompts/codex.js";
 import {
@@ -21,6 +22,7 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 		promptAccountIndexSelection,
 		supportsInteractiveMenus,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		getStatusMarker,
 		cachedAccountManagerRef,
 		accountManagerPromiseRef,
@@ -50,6 +52,7 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 			confirm,
 		}: { index?: number; confirm?: boolean } = {}) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			if (confirm !== true) {
 				const guidance =
 					"codex-remove requires confirm=true to proceed. " +
@@ -145,7 +148,7 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 				return `Account ${resolvedIndex} not found.`;
 			}
 
-			const label = formatCommandAccountLabel(account, targetIndex);
+			const label = formatCommandAccountLabel(account, targetIndex, { maskEmail });
 
 			storage.accounts.splice(targetIndex, 1);
 
@@ -206,12 +209,13 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 				? storage.accounts.filter((entry) => entry.email === account.email)
 						.length
 				: 0;
+			const displayEmail = resolveDisplayEmail(account.email, maskEmail);
 			if (ui.v2Enabled) {
 				const postRemoveHint =
-					matchingEmailRemaining > 0 && account.email
+					matchingEmailRemaining > 0 && displayEmail
 						? formatUiItem(
 								ui,
-								`Other entries for ${account.email} remain: ${matchingEmailRemaining}`,
+								`Other entries for ${displayEmail} remain: ${matchingEmailRemaining}`,
 								"muted",
 							)
 						: formatUiItem(
@@ -238,8 +242,8 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 				].join("\n");
 			}
 			const postRemoveHint =
-				matchingEmailRemaining > 0 && account.email
-					? `Other entries for ${account.email} remain: ${matchingEmailRemaining}`
+				matchingEmailRemaining > 0 && displayEmail
+					? `Other entries for ${displayEmail} remain: ${matchingEmailRemaining}`
 					: "Only the selected entry was removed.";
 			return [
 				`Removed selected entry: ${label}`,

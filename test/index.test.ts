@@ -136,6 +136,7 @@ vi.mock("../lib/config.js", () => ({
 	getCodexTuiV2: () => false,
 	getCodexTuiColorProfile: () => "ansi16",
 	getCodexTuiGlyphMode: () => "ascii",
+	getCodexTuiMaskEmail: vi.fn(() => false),
 	getBeginnerSafeMode: () => false,
 	loadPluginConfig: () => ({}),
 }));
@@ -174,6 +175,13 @@ vi.mock("../lib/context-overflow.js", () => ({
 
 vi.mock("../lib/rotation.js", () => ({
 	addJitter: (ms: number) => ms,
+}));
+
+// The interactive account picker (`promptAccountIndexSelection`) and setup
+// wizard dynamically import this; mocking it lets us capture the menu items
+// (account labels) without a real TTY. Only active when a test stubs isTTY.
+vi.mock("../lib/ui/select.js", () => ({
+	select: vi.fn(async () => null),
 }));
 
 vi.mock("../lib/prompts/codex.js", () => ({
@@ -478,7 +486,9 @@ vi.mock("../lib/accounts.js", () => {
 			(_storedId: string | undefined, _source: string | undefined, tokenId: string | undefined) =>
 				tokenId,
 		),
-		formatAccountLabel: (_account: unknown, index: number) => `Account ${index + 1}`,
+		formatAccountLabel: vi.fn(
+			(_account: unknown, index: number) => `Account ${index + 1}`,
+		),
 		formatCooldown: () => null,
 		formatWaitTime: (ms: number) => `${Math.round(ms / 1000)}s`,
 		sanitizeEmail: (email: string) => email,
@@ -2283,6 +2293,217 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(observedSnapshots).toEqual(["s1", "s2"]);
 		});
 	});
+
+	// Regression suite for #163: when `maskEmail` is enabled, no human-facing
+	// account-display surface may render a raw email. These drive the REAL
+	// plugin tools (and thus the real `formatCommandAccountLabel` closure), so a
+	// regression that drops `{ maskEmail }` at any call site fails here.
+	describe("issue #163: email masking across all display surfaces", () => {
+		const RAW_EMAIL = "alice.example@example.com";
+		const MASKED_EMAIL = "al***@example.com";
+
+		const enableMasking = async () => {
+			const configModule = await import("../lib/config.js");
+			vi.mocked(configModule.getCodexTuiMaskEmail).mockReturnValue(true);
+		};
+		const disableMasking = async () => {
+			const configModule = await import("../lib/config.js");
+			vi.mocked(configModule.getCodexTuiMaskEmail).mockReturnValue(false);
+		};
+
+		const seedSingleAccount = () => {
+			mockStorage.accounts = [
+				{ refreshToken: "r1", email: RAW_EMAIL, accountId: "acc-1" },
+			];
+		};
+
+		// Each entry: a label and a thunk that returns the tool's rendered TEXT
+		// output for a single seeded account. Index-bearing tools target index 1.
+		const textSurfaces: Array<{
+			name: string;
+			run: () => Promise<string>;
+		}> = [
+			{
+				name: "codex-list",
+				run: async () =>
+					(await plugin.tool["codex-list"].execute()) as string,
+			},
+			{
+				name: "codex-status",
+				run: async () =>
+					(await plugin.tool["codex-status"].execute()) as string,
+			},
+			{
+				name: "codex-health",
+				run: async () =>
+					(await plugin.tool["codex-health"].execute()) as string,
+			},
+			{
+				name: "codex-switch",
+				run: async () =>
+					(await plugin.tool["codex-switch"].execute({ index: 1 })) as string,
+			},
+			{
+				name: "codex-label",
+				run: async () =>
+					(await plugin.tool["codex-label"].execute({
+						index: 1,
+						label: "Work",
+					})) as string,
+			},
+			{
+				name: "codex-tag",
+				run: async () =>
+					(await plugin.tool["codex-tag"].execute({
+						index: 1,
+						tags: "work",
+					})) as string,
+			},
+			{
+				name: "codex-note",
+				run: async () =>
+					(await plugin.tool["codex-note"].execute({
+						index: 1,
+						note: "primary",
+					})) as string,
+			},
+			{
+				name: "codex-remove",
+				run: async () =>
+					(await plugin.tool["codex-remove"].execute({
+						index: 1,
+						confirm: true,
+					})) as string,
+			},
+		];
+
+		// PLACEHOLDER_163_TESTS
+		for (const surface of textSurfaces) {
+			it(`${surface.name}: never renders the raw email when maskEmail is enabled`, async () => {
+				await enableMasking();
+				seedSingleAccount();
+
+				const output = await surface.run();
+
+				expect(output).toContain(MASKED_EMAIL);
+				expect(output).not.toContain(RAW_EMAIL);
+			});
+
+			it(`${surface.name}: renders the raw email when maskEmail is disabled (backward compatible)`, async () => {
+				await disableMasking();
+				seedSingleAccount();
+
+				const output = await surface.run();
+
+				expect(output).toContain(RAW_EMAIL);
+				expect(output).not.toContain(MASKED_EMAIL);
+			});
+		}
+
+		it("codex-list: masks every email when multiple accounts are listed", async () => {
+			await enableMasking();
+			mockStorage.accounts = [
+				{ refreshToken: "r1", email: "alice@example.com", accountId: "acc-1" },
+				{ refreshToken: "r2", email: "bob@other.org", accountId: "acc-2" },
+			];
+
+			const output = (await plugin.tool["codex-list"].execute()) as string;
+
+			expect(output).toContain("al***@example.com");
+			expect(output).toContain("bo***@other.org");
+			expect(output).not.toContain("alice@example.com");
+			expect(output).not.toContain("bob@other.org");
+		});
+
+		it("codex-remove: masks the email in the duplicate-entries hint when maskEmail is enabled", async () => {
+			await enableMasking();
+			// Two entries share the same email so the post-remove duplicate hint fires.
+			mockStorage.accounts = [
+				{ refreshToken: "r1", email: RAW_EMAIL, accountId: "acc-1" },
+				{ refreshToken: "r2", email: RAW_EMAIL, accountId: "acc-2" },
+			];
+
+			const output = (await plugin.tool["codex-remove"].execute({
+				index: 1,
+				confirm: true,
+			})) as string;
+
+			expect(output).toContain("Other entries for");
+			expect(output).toContain(MASKED_EMAIL);
+			expect(output).not.toContain(RAW_EMAIL);
+		});
+
+		it("codex-remove: shows the raw email in the duplicate-entries hint when maskEmail is disabled", async () => {
+			await disableMasking();
+			mockStorage.accounts = [
+				{ refreshToken: "r1", email: RAW_EMAIL, accountId: "acc-1" },
+				{ refreshToken: "r2", email: RAW_EMAIL, accountId: "acc-2" },
+			];
+
+			const output = (await plugin.tool["codex-remove"].execute({
+				index: 1,
+				confirm: true,
+			})) as string;
+
+			expect(output).toContain(`Other entries for ${RAW_EMAIL} remain`);
+		});
+
+		it("codex-list --includeSensitive: still emits the raw email in opt-in JSON even when masking is enabled", async () => {
+			await enableMasking();
+			seedSingleAccount();
+
+			const result = parseJsonOutput<{
+				accounts: Array<{ label: string; email: string | null }>;
+			}>(
+				(await plugin.tool["codex-list"].execute({
+					format: "json",
+					includeSensitive: true,
+				})) as string,
+			);
+
+			// The privacy boundary: --includeSensitive is the one opt-in surface
+			// where raw identity is intentionally preserved for tooling.
+			expect(result.accounts[0]?.email).toBe(RAW_EMAIL);
+			expect(result.accounts[0]?.label).toContain(RAW_EMAIL);
+		});
+
+		it("interactive account picker: masks emails in the selection menu when maskEmail is enabled", async () => {
+			await enableMasking();
+			mockStorage.accounts = [
+				{ refreshToken: "r1", email: RAW_EMAIL, accountId: "acc-1" },
+				{ refreshToken: "r2", email: "bob@other.org", accountId: "acc-2" },
+			];
+
+			const { select } = await import("../lib/ui/select.js");
+			vi.mocked(select).mockResolvedValueOnce(null);
+
+			// promptAccountIndexSelection only runs when an interactive TTY is
+			// available; stub both streams for the duration of this test.
+			const stdinDesc = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+			const stdoutDesc = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+			Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+
+			try {
+				// No index => falls through to the interactive picker.
+				await plugin.tool["codex-switch"].execute({});
+
+				expect(vi.mocked(select)).toHaveBeenCalled();
+				const items = vi.mocked(select).mock.calls[0]?.[0] as Array<{
+					label: string;
+				}>;
+				const labels = items.map((item) => item.label).join("\n");
+
+				expect(labels).toContain("al***@example.com");
+				expect(labels).toContain("bo***@other.org");
+				expect(labels).not.toContain(RAW_EMAIL);
+				expect(labels).not.toContain("bob@other.org");
+			} finally {
+				if (stdinDesc) Object.defineProperty(process.stdin, "isTTY", stdinDesc);
+				if (stdoutDesc) Object.defineProperty(process.stdout, "isTTY", stdoutDesc);
+			}
+		});
+	});
 });
 
 describe("OpenAIOAuthPlugin edge cases", () => {
@@ -2881,6 +3102,47 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			"refresh-1",
 			ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
 			"auth-failure",
+		);
+	});
+
+	it("passes maskEmail to the account label on the auth-failure removal path", async () => {
+		const fetchHelpers = await import("../lib/request/fetch-helpers.js");
+		const accountsModule = await import("../lib/accounts.js");
+		const configModule = await import("../lib/config.js");
+		const { AccountManager } = accountsModule;
+		const { ACCOUNT_LIMITS } = await import("../lib/constants.js");
+
+		vi.mocked(configModule.getCodexTuiMaskEmail).mockReturnValue(true);
+		vi.spyOn(fetchHelpers, "shouldRefreshToken").mockReturnValue(true);
+		vi.mocked(fetchHelpers.refreshAndUpdateToken).mockRejectedValue(
+			new Error("Token expired"),
+		);
+		vi.spyOn(AccountManager.prototype, "incrementAuthFailures").mockReturnValue(
+			ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL,
+		);
+		// Returning 1 drives the single-account removal branch that renders the
+		// account label in the user-facing removal toast.
+		vi.spyOn(
+			AccountManager.prototype,
+			"removeAccountsWithSameRefreshToken",
+		).mockReturnValue(1);
+
+		globalThis.fetch = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ content: "should-not-fetch" }), { status: 200 }),
+		);
+
+		const { sdk } = await setupPlugin();
+		await sdk.fetch!("https://api.openai.com/v1/chat", {
+			method: "POST",
+			body: JSON.stringify({ model: "gpt-5.1" }),
+		});
+
+		// The runtime label must be built with masking enabled. If the
+		// `{ maskEmail }` option is dropped from this call site, this fails.
+		expect(vi.mocked(accountsModule.formatAccountLabel)).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.any(Number),
+			{ maskEmail: true },
 		);
 	});
 
@@ -4643,6 +4905,76 @@ describe("OpenAIOAuthPlugin persistAccountPool", () => {
 			version: 1,
 			accounts: [],
 		});
+	});
+
+	it("masks the email in the interactive delete confirmation when maskEmail is enabled", async () => {
+		const cliModule = await import("../lib/cli.js");
+		const configModule = await import("../lib/config.js");
+
+		vi.mocked(configModule.getCodexTuiMaskEmail).mockReturnValue(true);
+
+		mockStorage.accounts = [
+			{ refreshToken: "r1", email: "user@example.com", accountId: "acc-1" },
+		];
+
+		vi.mocked(cliModule.promptLoginMode)
+			.mockReset()
+			.mockResolvedValueOnce({ mode: "manage", deleteAccountIndex: 0 })
+			.mockResolvedValue({ mode: "cancel" });
+
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		const mockClient = createMockClient();
+		const { OpenAIOAuthPlugin } = await import("../index.js");
+		const plugin = (await OpenAIOAuthPlugin({
+			client: mockClient,
+		} as never)) as unknown as PluginType;
+		const autoMethod = plugin.auth.methods[0] as unknown as {
+			authorize: (inputs?: Record<string, string>) => Promise<{ instructions: string }>;
+		};
+
+		await autoMethod.authorize();
+
+		const logged = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
+		expect(logged).toContain("Deleted us***@example.com");
+		expect(logged).not.toContain("user@example.com");
+
+		logSpy.mockRestore();
+	});
+
+	it("masks the email in the interactive enable/disable confirmation when maskEmail is enabled", async () => {
+		const cliModule = await import("../lib/cli.js");
+		const configModule = await import("../lib/config.js");
+
+		vi.mocked(configModule.getCodexTuiMaskEmail).mockReturnValue(true);
+
+		mockStorage.accounts = [
+			{ refreshToken: "r1", email: "user@example.com", accountId: "acc-1" },
+		];
+
+		vi.mocked(cliModule.promptLoginMode)
+			.mockReset()
+			.mockResolvedValueOnce({ mode: "manage", toggleAccountIndex: 0 })
+			.mockResolvedValue({ mode: "cancel" });
+
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		const mockClient = createMockClient();
+		const { OpenAIOAuthPlugin } = await import("../index.js");
+		const plugin = (await OpenAIOAuthPlugin({
+			client: mockClient,
+		} as never)) as unknown as PluginType;
+		const autoMethod = plugin.auth.methods[0] as unknown as {
+			authorize: (inputs?: Record<string, string>) => Promise<{ instructions: string }>;
+		};
+
+		await autoMethod.authorize();
+
+		const logged = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
+		expect(logged).toContain("us***@example.com");
+		expect(logged).not.toContain("user@example.com");
+
+		logSpy.mockRestore();
 	});
 
 	it("keeps workspace-deactivated flagged entries out of verify-flagged restore", async () => {

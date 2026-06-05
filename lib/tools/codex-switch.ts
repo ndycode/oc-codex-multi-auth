@@ -22,6 +22,7 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 		promptAccountIndexSelection,
 		supportsInteractiveMenus,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		getStatusMarker,
 		cachedAccountManagerRef,
 		accountManagerPromiseRef,
@@ -39,6 +40,7 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 		},
 		async execute({ index }: { index?: number } = {}) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const storage = await loadAccounts();
 			if (!storage || storage.accounts.length === 0) {
 				if (ui.v2Enabled) {
@@ -132,7 +134,7 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 				logWarn("Failed to save account switch", {
 					error: String(saveError),
 				});
-				const label = formatCommandAccountLabel(account, targetIndex);
+				const label = formatCommandAccountLabel(account, targetIndex, { maskEmail });
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Switch account"),
@@ -161,7 +163,7 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
 			}
 
-			const label = formatCommandAccountLabel(account, targetIndex);
+			const label = formatCommandAccountLabel(account, targetIndex, { maskEmail });
 			if (ui.v2Enabled) {
 				return [
 					...formatUiHeader(ui, "Switch account"),

@@ -214,11 +214,29 @@ describe("CLI Module", () => {
 		it("displays only label when no email", async () => {
 			mockRl.question.mockResolvedValueOnce("a");
 			const consoleSpy = vi.spyOn(console, "log");
-			
+
 			const { promptLoginMode } = await import("../lib/cli.js");
 			await promptLoginMode([{ index: 0, accountLabel: "Personal" }]);
-			
+
 			expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("1. workspace:Personal"));
+		});
+
+		it("masks the email when maskEmail is enabled", async () => {
+			mockRl.question.mockResolvedValueOnce("a");
+			const consoleSpy = vi.spyOn(console, "log");
+
+			const { promptLoginMode } = await import("../lib/cli.js");
+			await promptLoginMode(
+				[{ index: 0, accountLabel: "Work", email: "work@example.com" }],
+				{ maskEmail: true },
+			);
+
+			expect(consoleSpy).toHaveBeenCalledWith(
+				expect.stringContaining("wo***@example.com | workspace:Work"),
+			);
+			expect(consoleSpy).not.toHaveBeenCalledWith(
+				expect.stringContaining("work@example.com | workspace:Work"),
+			);
 		});
 	});
 

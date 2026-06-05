@@ -414,6 +414,28 @@ describe("AccountManager", () => {
     expect(formatAccountLabel({ accountLabel: "Work", email: "work@co.com", accountId: "abcdef123456" }, 0)).toBe("Account 1 (Work, work@co.com, id:123456)");
   });
 
+  it("masks the email when maskEmail is enabled", () => {
+    expect(
+      formatAccountLabel({ email: "user@example.com" }, 0, { maskEmail: true }),
+    ).toBe("Account 1 (us***@example.com)");
+    expect(
+      formatAccountLabel(
+        { accountLabel: "Work", email: "work@co.com" },
+        0,
+        { maskEmail: true },
+      ),
+    ).toBe("Account 1 (Work, wo***@co.com)");
+  });
+
+  it("leaves the email raw when maskEmail is disabled or omitted", () => {
+    expect(
+      formatAccountLabel({ email: "user@example.com" }, 0, { maskEmail: false }),
+    ).toBe("Account 1 (user@example.com)");
+    expect(formatAccountLabel({ email: "user@example.com" }, 0)).toBe(
+      "Account 1 (user@example.com)",
+    );
+  });
+
   it("formats account label with short accountId", () => {
     expect(formatAccountLabel({ accountId: "abc" }, 0)).toBe("Account 1 (abc)");
     expect(formatAccountLabel({ accountId: "123456" }, 0)).toBe("Account 1 (123456)");

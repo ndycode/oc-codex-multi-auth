@@ -3,6 +3,7 @@ import { confirm } from "./confirm.js";
 import { getUiRuntimeOptions } from "./runtime.js";
 import { select, type MenuItem } from "./select.js";
 import { paintUiText, formatUiBadge } from "./format.js";
+import { resolveDisplayEmail } from "../account-display.js";
 
 export type AccountStatus =
 	| "active"
@@ -28,6 +29,7 @@ export interface AccountInfo {
 
 export interface AuthMenuOptions {
 	flaggedCount?: number;
+	maskEmail?: boolean;
 }
 
 export type AuthMenuAction =
@@ -108,8 +110,8 @@ function formatAccountIdSuffix(accountId: string | undefined): string | undefine
 		: trimmed;
 }
 
-function accountTitle(account: AccountInfo): string {
-	const email = account.email?.trim();
+function accountTitle(account: AccountInfo, maskEmail = false): string {
+	const email = resolveDisplayEmail(account.email, maskEmail);
 	const label = account.accountLabel?.trim();
 	const accountIdSuffix = formatAccountIdSuffix(account.accountId);
 
@@ -132,6 +134,7 @@ export async function showAuthMenu(
 ): Promise<AuthMenuAction> {
 	const ui = getUiRuntimeOptions();
 	const flaggedCount = options.flaggedCount ?? 0;
+	const maskEmail = options.maskEmail ?? false;
 	const verifyLabel =
 		flaggedCount > 0
 			? `Verify flagged accounts (${flaggedCount})`
@@ -156,7 +159,7 @@ export async function showAuthMenu(
 					? (ui.v2Enabled ? ` ${formatUiBadge(ui, "disabled", "danger")}` : ` ${ANSI.red}[disabled]${ANSI.reset}`)
 					: "";
 			const statusSuffix = badge ? ` ${badge}` : "";
-			const label = `${accountTitle(account)}${currentBadge}${statusSuffix}${disabledBadge}`;
+			const label = `${accountTitle(account, maskEmail)}${currentBadge}${statusSuffix}${disabledBadge}`;
 			return {
 				label: ui.v2Enabled ? paintUiText(ui, label, "heading") : label,
 				hint: `used ${formatRelativeTime(account.lastUsed)}`,
@@ -186,10 +189,14 @@ export async function showAuthMenu(
 	}
 }
 
-export async function showAccountDetails(account: AccountInfo): Promise<AccountAction> {
+export async function showAccountDetails(
+	account: AccountInfo,
+	options: { maskEmail?: boolean } = {},
+): Promise<AccountAction> {
 	const ui = getUiRuntimeOptions();
+	const maskEmail = options.maskEmail ?? false;
 	const header =
-		`${accountTitle(account)} ${statusBadge(account.status)}` +
+		`${accountTitle(account, maskEmail)} ${statusBadge(account.status)}` +
 		(account.enabled === false
 			? (ui.v2Enabled
 				? ` ${formatUiBadge(ui, "disabled", "danger")}`
@@ -220,11 +227,11 @@ export async function showAccountDetails(account: AccountInfo): Promise<AccountA
 
 		if (!action) return "cancel";
 		if (action === "delete") {
-			const confirmed = await confirm(`Delete ${accountTitle(account)}?`);
+			const confirmed = await confirm(`Delete ${accountTitle(account, maskEmail)}?`);
 			if (!confirmed) continue;
 		}
 		if (action === "refresh") {
-			const confirmed = await confirm(`Re-authenticate ${accountTitle(account)}?`);
+			const confirmed = await confirm(`Re-authenticate ${accountTitle(account, maskEmail)}?`);
 			if (!confirmed) continue;
 		}
 		return action;

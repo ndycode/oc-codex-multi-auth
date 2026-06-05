@@ -14,6 +14,7 @@ export function createCodexRefreshTool(ctx: ToolContext): ToolDefinition {
 	const {
 		resolveUiRuntime,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		getStatusMarker,
 		cachedAccountManagerRef,
 		accountManagerPromiseRef,
@@ -24,6 +25,7 @@ export function createCodexRefreshTool(ctx: ToolContext): ToolDefinition {
 		args: {},
 		async execute() {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const storage = await loadAccounts();
 			if (!storage || storage.accounts.length === 0) {
 				if (ui.v2Enabled) {
@@ -47,7 +49,7 @@ export function createCodexRefreshTool(ctx: ToolContext): ToolDefinition {
 			for (let i = 0; i < storage.accounts.length; i++) {
 				const account = storage.accounts[i];
 				if (!account) continue;
-				const label = formatCommandAccountLabel(account, i);
+				const label = formatCommandAccountLabel(account, i, { maskEmail });
 
 				try {
 					const refreshResult = await queuedRefresh(account.refreshToken);

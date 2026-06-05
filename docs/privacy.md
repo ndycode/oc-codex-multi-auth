@@ -145,6 +145,12 @@ All network communication uses HTTPS:
 - API requests: Encrypted
 - Token refresh: Encrypted
 
+### Email Masking in Account Displays
+Account emails are personally identifying and can be exposed in screenshots, screen sharing, and terminal recordings during pair programming or shared OpenCode TUI sessions. To avoid this:
+- Set a stable, non-identifying label for each account with `codex-label` (for example `plus-1`, `plus-2`, `pro-1`). Labels are always preferred over emails in account displays.
+- Enable `maskEmail` in `~/.opencode/openai-codex-auth-config.json` to reduce any remaining emails to a masked form such as `us***@example.com` across the account menu, command output, and TUI quota status.
+- Raw emails are only emitted in `--includeSensitive` JSON output, which is opt-in and never shown by default.
+
 ---
 
 ## Compliance

@@ -20,6 +20,7 @@ export function createCodexTagTool(ctx: ToolContext): ToolDefinition {
 		promptAccountIndexSelection,
 		supportsInteractiveMenus,
 		formatCommandAccountLabel,
+		resolveMaskEmail,
 		getStatusMarker,
 		normalizeAccountTags,
 		cachedAccountManagerRef,
@@ -42,6 +43,7 @@ export function createCodexTagTool(ctx: ToolContext): ToolDefinition {
 		},
 		async execute({ index, tags }: { index?: number; tags: string }) {
 			const ui = resolveUiRuntime();
+			const maskEmail = resolveMaskEmail();
 			const storage = await loadAccounts();
 			if (!storage || storage.accounts.length === 0) {
 				if (ui.v2Enabled) {
@@ -111,7 +113,7 @@ export function createCodexTagTool(ctx: ToolContext): ToolDefinition {
 				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
 			}
 
-			const accountLabel = formatCommandAccountLabel(account, targetIndex);
+			const accountLabel = formatCommandAccountLabel(account, targetIndex, { maskEmail });
 			const previousText =
 				previousTags.length > 0 ? previousTags.join(", ") : "none";
 			const nextText =

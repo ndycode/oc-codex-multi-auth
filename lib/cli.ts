@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import type { AccountIdSource } from "./types.js";
+import { resolveDisplayEmail } from "./account-display.js";
 import {
 	showAuthMenu,
 	showAccountDetails,
@@ -62,6 +63,7 @@ export interface ExistingAccountInfo {
 
 export interface LoginMenuOptions {
 	flaggedCount?: number;
+	maskEmail?: boolean;
 }
 
 export interface LoginMenuResult {
@@ -72,10 +74,14 @@ export interface LoginMenuResult {
 	deleteAll?: boolean;
 }
 
-function formatAccountLabel(account: ExistingAccountInfo, index: number): string {
+function formatAccountLabel(
+	account: ExistingAccountInfo,
+	index: number,
+	options: { maskEmail?: boolean } = {},
+): string {
 	const num = index + 1;
 	const label = account.accountLabel?.trim();
-	const email = account.email?.trim();
+	const email = resolveDisplayEmail(account.email, options.maskEmail ?? false);
 	const accountId = account.accountId?.trim();
 	const accountIdDisplay =
 		accountId && accountId.length > 14
@@ -101,13 +107,16 @@ async function promptDeleteAllTypedConfirm(): Promise<boolean> {
 	}
 }
 
-async function promptLoginModeFallback(existingAccounts: ExistingAccountInfo[]): Promise<LoginMenuResult> {
+async function promptLoginModeFallback(
+	existingAccounts: ExistingAccountInfo[],
+	maskEmail = false,
+): Promise<LoginMenuResult> {
 	const rl = createInterface({ input, output });
 	try {
 		if (existingAccounts.length > 0) {
 			console.log(`\n${existingAccounts.length} account(s) saved:`);
 			for (const account of existingAccounts) {
-				console.log(`  ${formatAccountLabel(account, account.index)}`);
+				console.log(`  ${formatAccountLabel(account, account.index, { maskEmail })}`);
 			}
 			console.log("");
 		}
@@ -136,13 +145,16 @@ export async function promptLoginMode(
 		return { mode: "add" };
 	}
 
+	const maskEmail = options.maskEmail ?? false;
+
 	if (!isTTY()) {
-		return promptLoginModeFallback(existingAccounts);
+		return promptLoginModeFallback(existingAccounts, maskEmail);
 	}
 
 	while (true) {
 		const action = await showAuthMenu(existingAccounts, {
 			flaggedCount: options.flaggedCount ?? 0,
+			maskEmail,
 		});
 
 		switch (action.type) {
@@ -161,7 +173,7 @@ export async function promptLoginMode(
 			case "verify-flagged":
 				return { mode: "verify-flagged" };
 			case "select-account": {
-				const accountAction = await showAccountDetails(action.account);
+				const accountAction = await showAccountDetails(action.account, { maskEmail });
 				if (accountAction === "delete") {
 					return { mode: "manage", deleteAccountIndex: action.account.index };
 				}

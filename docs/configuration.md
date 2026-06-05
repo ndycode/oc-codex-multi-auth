@@ -159,7 +159,7 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `codexTuiV2` | `true` | enables codex-style terminal ui output (set `false` to keep legacy output) |
 | `codexTuiColorProfile` | `truecolor` | terminal color profile for codex ui (`truecolor`, `ansi256`, `ansi16`) |
 | `codexTuiGlyphMode` | `ascii` | glyph set for codex ui (`ascii`, `unicode`, `auto`) |
-| `maskEmail` | `false` | masks the active account email in the TUI prompt quota status only |
+| `maskEmail` | `false` | masks account emails across account-display surfaces: the TUI prompt quota status, command output (`codex-list`, `codex-status`, `codex-limits`, `codex-health`, `codex-dashboard`, `codex-refresh`, `codex-switch`, `codex-label`, `codex-tag`, `codex-note`, `codex-remove`), the interactive account menu, and the standalone login menu. Account labels (set via `codex-label`) are preferred and always shown; emails are reduced to a masked form such as `us***@example.com`. Raw emails are still emitted in `--includeSensitive` JSON output, which is opt-in. |
 | `maskEmailInQuotaDetails` | `false` | also masks the active account email in the quota details dialog when `maskEmail` is enabled |
 | `beginnerSafeMode` | `false` | enables conservative beginner-safe runtime behavior for retries and recovery |
 | `fastSession` | `false` | forces low-latency settings per request (`reasoningEffort=none/low`, `reasoningSummary=auto`, `textVerbosity=low`) |
@@ -245,7 +245,7 @@ override any config with env vars:
 | `CODEX_TUI_V2=0` | disable codex-style ui (use legacy output) |
 | `CODEX_TUI_COLOR_PROFILE=ansi16` | force color profile for codex ui |
 | `CODEX_TUI_GLYPHS=unicode` | override glyph mode (`ascii`, `unicode`, `auto`) |
-| `CODEX_TUI_MASK_EMAIL=1` | mask the active account email in the TUI prompt quota status only |
+| `CODEX_TUI_MASK_EMAIL=1` | mask account emails across account-display surfaces (TUI prompt quota status, command output, interactive account menu, and standalone login menu) |
 | `CODEX_TUI_MASK_EMAIL_DETAILS=1` | also mask the active account email in quota details when prompt masking is enabled |
 | `CODEX_AUTH_PREWARM=0` | disable startup prewarm (prompt/instruction cache warmup) |
 | `CODEX_AUTH_FAST_SESSION=1` | enable fast-session defaults |

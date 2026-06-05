@@ -29,6 +29,7 @@ import {
 } from "./accounts/state.js";
 import { formatWaitTime, type RateLimitReason } from "./accounts/rate-limits.js";
 import { nowMs } from "./utils.js";
+import { resolveDisplayEmail } from "./account-display.js";
 
 export type { AccountSelectionExplainability, ManagedAccount } from "./accounts/state.js";
 
@@ -332,9 +333,10 @@ export class AccountManager {
 export function formatAccountLabel(
 	account: { email?: string; accountId?: string; accountLabel?: string } | undefined,
 	index: number,
+	options: { maskEmail?: boolean } = {},
 ): string {
 	const accountLabel = account?.accountLabel?.trim();
-	const email = account?.email?.trim();
+	const email = resolveDisplayEmail(account?.email, options.maskEmail ?? false);
 	const accountId = account?.accountId?.trim();
 	const idSuffix = accountId
 		? accountId.length > 6

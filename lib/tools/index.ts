@@ -111,7 +111,9 @@ export interface ToolContext {
 			  }
 			| undefined,
 		index: number,
+		options?: { maskEmail?: boolean },
 	) => string;
+	resolveMaskEmail: () => boolean;
 	normalizeAccountTags: (raw: string) => string[];
 	supportsInteractiveMenus: () => boolean;
 	promptAccountIndexSelection: (
