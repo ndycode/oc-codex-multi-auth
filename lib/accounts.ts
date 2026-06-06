@@ -328,6 +328,10 @@ export class AccountManager {
 	removeAccountsWithSameRefreshToken(account: ManagedAccount): number {
 		return this.recovery.removeAccountsWithSameRefreshToken(account);
 	}
+
+	removeAccountsByWorkspaceIdentity(account: ManagedAccount): number {
+		return this.recovery.removeAccountsByWorkspaceIdentity(account);
+	}
 }
 
 export function formatAccountLabel(

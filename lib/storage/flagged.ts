@@ -18,7 +18,12 @@ import {
 import { createLogger } from "../logger.js";
 import { renameWithWindowsRetry } from "./atomic-write.js";
 import { getWorkspaceIdentityKey, isRecord } from "./identity.js";
-import { getStoragePath, withStorageLock } from "./state.js";
+import { getStoragePath, getCurrentProjectStorageKey, withStorageLock } from "./state.js";
+import {
+  isKeychainOptInEnabled,
+  readFlaggedFromKeychain,
+  writeFlaggedToKeychain,
+} from "./keychain.js";
 import type { AccountMetadataV3 } from "./migrations.js";
 
 const log = createLogger("storage");
@@ -147,6 +152,28 @@ async function loadFlaggedAccountsUnlocked(
   const path = getFlaggedAccountsPath();
   const empty: FlaggedAccountStorageV1 = { version: 1, accounts: [] };
 
+  // Keychain-first when opt-in is enabled, mirroring the main account store.
+  // A null/throw is treated as "fall back to JSON" — never as "no flagged
+  // accounts" — so a locked keychain doesn't hide the on-disk copy.
+  if (isKeychainOptInEnabled()) {
+    try {
+      const blob = await readFlaggedFromKeychain(getCurrentProjectStorageKey());
+      if (blob !== null) {
+        try {
+          return normalizeFlaggedStorage(JSON.parse(blob) as unknown);
+        } catch (parseErr) {
+          log.warn("keychain: flagged payload failed to parse; falling back to JSON", {
+            error: String(parseErr),
+          });
+        }
+      }
+    } catch (err) {
+      log.warn("keychain: flagged read failed; falling back to JSON", {
+        error: String(err),
+      });
+    }
+  }
+
   try {
     const content = await fs.readFile(path, "utf-8");
     const data = JSON.parse(content) as unknown;
@@ -197,12 +224,35 @@ async function loadFlaggedAccountsUnlocked(
 
 async function saveFlaggedAccountsUnlocked(storage: FlaggedAccountStorageV1): Promise<void> {
   const path = getFlaggedAccountsPath();
+  const normalized = normalizeFlaggedStorage(storage);
+  const content = JSON.stringify(normalized, null, 2);
+
+  // When keychain opt-in is enabled, store flagged credentials in the OS
+  // keychain like the main account store. Flagged records carry raw refresh
+  // tokens (required to restore via verify-flagged), so writing them as
+  // plaintext JSON would defeat the keychain protection the user opted into.
+  if (isKeychainOptInEnabled()) {
+    const projectKey = getCurrentProjectStorageKey();
+    const result = await writeFlaggedToKeychain(projectKey, content);
+    if (result.ok) {
+      // Remove any stale plaintext file so the secret does not linger on disk.
+      try {
+        await fs.unlink(path);
+      } catch {
+        // Best effort: file may not exist.
+      }
+      return;
+    }
+    log.warn("keychain: flagged write failed; falling back to JSON for this save", {
+      error: result.error,
+    });
+  }
+
   const uniqueSuffix = `${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
   const tempPath = `${path}.${uniqueSuffix}.tmp`;
 
   try {
     await fs.mkdir(dirname(path), { recursive: true });
-    const content = JSON.stringify(normalizeFlaggedStorage(storage), null, 2);
     await fs.writeFile(tempPath, content, { encoding: "utf-8", mode: 0o600 });
     await renameWithWindowsRetry(tempPath, path);
   } catch (error) {

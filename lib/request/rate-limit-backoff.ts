@@ -92,6 +92,30 @@ export function resetRateLimitBackoff(accountIndex: number, quotaKey: string): v
 	rateLimitStateByAccountQuota.delete(`${accountIndex}:${quotaKey}`);
 }
 
+/**
+ * Re-key backoff state after the account at `removedIndex` is removed and the
+ * survivors are reindexed in place. Without this, a surviving account inherits
+ * the removed (or a shifted neighbor's) backoff schedule. Mirrors the tracker
+ * remap in lib/rotation.ts. Kept self-contained to avoid a cross-layer import.
+ */
+export function remapRateLimitBackoffAfterRemoval(removedIndex: number): void {
+	const entries = [...rateLimitStateByAccountQuota.entries()];
+	rateLimitStateByAccountQuota.clear();
+	for (const [key, value] of entries) {
+		const colon = key.indexOf(":");
+		const indexPart = colon === -1 ? key : key.slice(0, colon);
+		const suffix = colon === -1 ? "" : key.slice(colon);
+		const parsed = Number(indexPart);
+		if (!Number.isInteger(parsed) || `${parsed}` !== indexPart) {
+			rateLimitStateByAccountQuota.set(key, value);
+			continue;
+		}
+		if (parsed === removedIndex) continue;
+		const newIndex = parsed > removedIndex ? parsed - 1 : parsed;
+		rateLimitStateByAccountQuota.set(`${newIndex}${suffix}`, value);
+	}
+}
+
 export function clearRateLimitBackoffState(): void {
 	rateLimitStateByAccountQuota.clear();
 }

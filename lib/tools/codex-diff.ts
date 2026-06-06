@@ -100,15 +100,76 @@ function redactPath(p: string): string {
  *
  * Non-string primitives are round-tripped through `JSON.stringify` so
  * numbers, booleans, and `null` keep their JSON form (`42`, `true`,
- * `null`). Any final string is passed through `maskString` so JWT- and
- * token-shaped substrings get masked, and then through `redactHomePaths`
- * as defence in depth against home directories embedded in values.
+ * `null`). The result is then redacted in two layers:
+ *  1. Key-aware: if the leaf's own key (e.g. `refreshToken`, `accountId`)
+ *     names a sensitive field, the ENTIRE value is masked unconditionally.
+ *     This is required because opaque tokens / ids / labels are not
+ *     token-SHAPED, so `maskString` alone would emit them verbatim.
+ *  2. Shape-based: `maskString` still catches JWT/`sk-`/hex/Bearer-shaped
+ *     substrings embedded anywhere, and `redactHomePaths` scrubs home dirs.
+ *
+ * `terminalKey` is the final segment of the leaf's dotted path
+ * (e.g. `refreshToken` for `accounts[0].refreshToken`).
  */
-function redactValue(value: unknown): string {
+function redactValue(value: unknown, terminalKey?: string): string {
 	if (value === undefined) return "undefined";
 	const rendered =
 		typeof value === "string" ? value : JSON.stringify(value);
+	if (terminalKey !== undefined && isSensitiveLeafKey(terminalKey)) {
+		// Mask the whole value regardless of shape; sensitive by key.
+		return redactHomePaths(maskString(maskSensitiveLeaf(rendered)));
+	}
 	return redactHomePaths(maskString(rendered));
+}
+
+/**
+ * Sensitive leaf keys whose VALUES must always be masked in diff output,
+ * independent of whether the value looks token-shaped. Mirrors (a subset of)
+ * the SENSITIVE_KEYS set in lib/logger.ts; kept local to avoid exporting the
+ * logger internals. Keys are compared after stripping `-`/`_` and lowercasing.
+ */
+const SENSITIVE_LEAF_KEYS = new Set([
+	"refreshtoken",
+	"accesstoken",
+	"idtoken",
+	"token",
+	"refresh",
+	"access",
+	"apikey",
+	"authorization",
+	"cookie",
+	"setcookie",
+	"clientsecret",
+	"secret",
+	"password",
+]);
+
+function isSensitiveLeafKey(key: string): boolean {
+	return SENSITIVE_LEAF_KEYS.has(key.toLowerCase().replace(/[-_]/g, ""));
+}
+
+/**
+ * Mask a sensitive leaf value while keeping a short, non-identifying hint of
+ * length so a diff still shows "this field changed" without leaking the value.
+ */
+function maskSensitiveLeaf(value: string): string {
+	const trimmed = value.trim();
+	if (trimmed.length === 0) return value;
+	if (trimmed.length <= 8) return "***";
+	return `${trimmed.slice(0, 3)}***${trimmed.slice(-2)}`;
+}
+
+/**
+ * Extract the terminal key from a leaf path produced by collectLeafPaths.
+ * `accounts[0].refreshToken` -> `refreshToken`; `accounts[2]` -> undefined
+ * (array index, not a named field).
+ */
+function terminalKeyOfPath(path: string): string | undefined {
+	const lastDot = path.lastIndexOf(".");
+	const seg = lastDot === -1 ? path : path.slice(lastDot + 1);
+	// Strip a trailing array index (e.g. `tokens[3]`).
+	const cleaned = seg.replace(/\[\d+\]$/, "");
+	return cleaned.length > 0 && !/^\[\d+\]$/.test(seg) ? cleaned : undefined;
 }
 
 /**
@@ -185,23 +246,24 @@ export function computeCodexDiff(
 		const rightVal = rightPaths.get(key);
 		if (hasLeft && hasRight) {
 			if (leafValuesEqual(leftVal, rightVal)) continue;
+			const terminalKey = terminalKeyOfPath(key);
 			entries.push({
 				path: key,
 				kind: "changed",
-				leftValue: redactValue(leftVal),
-				rightValue: redactValue(rightVal),
+				leftValue: redactValue(leftVal, terminalKey),
+				rightValue: redactValue(rightVal, terminalKey),
 			});
 		} else if (hasRight) {
 			entries.push({
 				path: key,
 				kind: "added",
-				rightValue: redactValue(rightVal),
+				rightValue: redactValue(rightVal, terminalKeyOfPath(key)),
 			});
 		} else {
 			entries.push({
 				path: key,
 				kind: "removed",
-				leftValue: redactValue(leftVal),
+				leftValue: redactValue(leftVal, terminalKeyOfPath(key)),
 			});
 		}
 	}

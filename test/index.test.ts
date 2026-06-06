@@ -452,6 +452,7 @@ vi.mock("../lib/accounts.js", () => {
 		markSwitched() {}
 		removeAccount() {}
 		removeAccountsWithSameRefreshToken() { return 1; }
+		removeAccountsByWorkspaceIdentity() { return 1; }
 
 		getMinWaitTimeForFamily() {
 			return 0;
@@ -3799,7 +3800,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			expect(response.status).toBe(200);
 		});
 
-		it("removes all entries sharing the deactivated refresh token and fails over to a healthy account", async () => {
+		it("removes only the deactivated workspace (not refresh-token siblings) and fails over to a healthy account", async () => {
 			const fetchHelpers = await import("../lib/request/fetch-helpers.js");
 			const storageModule = await import("../lib/storage.js");
 			const accountsModule = await import("../lib/accounts.js");
@@ -3852,6 +3853,24 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 				});
 				return removedCount;
 			});
+			// Workspace-scoped removal: drops only the account(s) matching the
+			// failing workspace's org/account identity, leaving refresh-token
+			// siblings (distinct workspaces) intact.
+			const removeAccountsByWorkspaceIdentity = vi.fn((target: typeof deadWorkspace) => {
+				const nextAccounts = accounts.filter(
+					(account) =>
+						!(
+							account.organizationId === target.organizationId &&
+							account.accountId === target.accountId
+						),
+				);
+				const removedCount = accounts.length - nextAccounts.length;
+				accounts.splice(0, accounts.length, ...nextAccounts);
+				accounts.forEach((account, index) => {
+					account.index = index;
+				});
+				return removedCount;
+			});
 
 			const customManager = {
 				getAccountCount: () => accounts.length,
@@ -3886,6 +3905,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 				markSwitched: vi.fn(),
 				removeAccount,
 				removeAccountsWithSameRefreshToken,
+				removeAccountsByWorkspaceIdentity,
 				recordFailure: vi.fn(),
 				recordSuccess: vi.fn(),
 				getMinWaitTimeForFamily: vi.fn(() => 0),
@@ -3933,8 +3953,17 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			expect(response.status).toBe(200);
 			expect(globalThis.fetch).toHaveBeenCalledTimes(2);
 			expect(removeAccount).not.toHaveBeenCalled();
-			expect(removeAccountsWithSameRefreshToken).toHaveBeenCalledTimes(1);
-			expect(accounts.map((account) => account.accountId)).toEqual(["org-live"]);
+			// Only the deactivated workspace is removed by identity; refresh-token
+			// siblings (distinct workspaces) must survive in rotation.
+			expect(removeAccountsWithSameRefreshToken).not.toHaveBeenCalled();
+			expect(removeAccountsByWorkspaceIdentity).toHaveBeenCalledTimes(1);
+			// Only the deactivated workspace (org-dead) is removed by identity; the
+			// refresh-token sibling survives. Its accountId is re-derived by the
+			// retry path's extractAccountId mock (-> "account-1").
+			expect(accounts.map((account) => account.accountId)).toEqual([
+				"account-1",
+				"org-live",
+			]);
 			expect(vi.mocked(storageModule.withFlaggedAccountStorageTransaction)).toHaveBeenCalledTimes(1);
 			expect(mockFlaggedStorage.accounts).toEqual(
 				expect.arrayContaining([
@@ -3967,6 +3996,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			const markAccountCoolingDown = vi.fn();
 			const saveToDiskDebounced = vi.fn();
 			const removeAccountsWithSameRefreshToken = vi.fn(() => 0);
+			const removeAccountsByWorkspaceIdentity = vi.fn(() => 0);
 			const customManager = {
 				getAccountCount: () => 1,
 				getCurrentOrNextForFamilyHybrid: () => deadWorkspace,
@@ -4001,6 +4031,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 				markSwitched: vi.fn(),
 				removeAccount: vi.fn(() => false),
 				removeAccountsWithSameRefreshToken,
+				removeAccountsByWorkspaceIdentity,
 				recordFailure: vi.fn(),
 				recordSuccess: vi.fn(),
 				getMinWaitTimeForFamily: vi.fn(() => 0),
@@ -4038,7 +4069,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 
 			expect(response.status).toBe(503);
 			expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-			expect(removeAccountsWithSameRefreshToken).toHaveBeenCalledTimes(1);
+			expect(removeAccountsByWorkspaceIdentity).toHaveBeenCalledTimes(1);
 			expect(markAccountCoolingDown).toHaveBeenCalledWith(
 				deadWorkspace,
 				expect.any(Number),

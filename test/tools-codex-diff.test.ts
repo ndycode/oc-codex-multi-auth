@@ -62,6 +62,75 @@ describe("computeCodexDiff (pure helper)", () => {
 	});
 });
 
+// Audit fix #6: redaction must be KEY-AWARE, not only shape-based. Opaque
+// OpenAI refresh tokens / account ids are not token-SHAPED (no eyJ/sk-/hex-40/
+// Bearer prefix), so the old shape-only maskString emitted them verbatim. The
+// fix masks values whose terminal key names a sensitive field, while leaving
+// non-sensitive fields (e.g. `label`) untouched.
+describe("computeCodexDiff key-aware redaction (audit fix #6)", () => {
+	const OPAQUE_RT = "opaque-rt-abcdef123456"; // not token-shaped
+
+	it("masks an opaque refreshToken value by key name in changed entries", () => {
+		const left = { accounts: [{ refreshToken: OPAQUE_RT }] };
+		const right = { accounts: [{ refreshToken: "opaque-rt-zzzzzz987654" }] };
+
+		const entries = computeCodexDiff(left, right);
+		const tokenChange = entries.find(
+			(e) => e.path === "accounts[0].refreshToken",
+		);
+		expect(tokenChange).toBeDefined();
+		expect(tokenChange?.kind).toBe("changed");
+
+		// OLD behavior: the opaque value passed maskString unchanged and leaked.
+		expect(tokenChange?.leftValue).not.toBe(OPAQUE_RT);
+		expect(tokenChange?.leftValue).not.toContain(OPAQUE_RT);
+		// A masked form is still emitted so "this changed" is visible.
+		expect(typeof tokenChange?.leftValue).toBe("string");
+		expect(tokenChange?.leftValue).toContain("***");
+		// Defence in depth: serialized output never contains the raw value.
+		expect(JSON.stringify(entries)).not.toContain(OPAQUE_RT);
+	});
+
+	it("masks an opaque refreshToken value on a top-level key too", () => {
+		const entries = computeCodexDiff(
+			{ refreshToken: OPAQUE_RT },
+			{ refreshToken: "different-opaque-rt-7777" },
+		);
+		const change = entries.find((e) => e.path === "refreshToken");
+		expect(change?.leftValue).not.toContain(OPAQUE_RT);
+		expect(change?.leftValue).toContain("***");
+	});
+
+	it("masks an opaque refreshToken value in added entries", () => {
+		const entries = computeCodexDiff(
+			{ accounts: [{}] },
+			{ accounts: [{ refreshToken: OPAQUE_RT }] },
+		);
+		const added = entries.find(
+			(e) => e.path === "accounts[0].refreshToken",
+		);
+		expect(added?.kind).toBe("added");
+		expect(added?.rightValue).not.toContain(OPAQUE_RT);
+		expect(added?.rightValue).toContain("***");
+	});
+
+	it("does NOT over-mask a non-sensitive key like `label`", () => {
+		const labelValue = "primary-laptop-workspace";
+		const entries = computeCodexDiff(
+			{ accounts: [{ label: labelValue }] },
+			{ accounts: [{ label: "secondary-desktop" }] },
+		);
+		const labelChange = entries.find(
+			(e) => e.path === "accounts[0].label",
+		);
+		expect(labelChange).toBeDefined();
+		// `label` is not sensitive, so its (non-token-shaped) value survives
+		// verbatim — the fix must not blanket-mask every field.
+		expect(labelChange?.leftValue).toBe(labelValue);
+		expect(labelChange?.rightValue).toBe("secondary-desktop");
+	});
+});
+
 describe("codex-diff tool", () => {
 	const createdPaths: string[] = [];
 

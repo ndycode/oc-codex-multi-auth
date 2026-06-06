@@ -101,6 +101,15 @@ export class CodexApiError extends CodexError {
 export interface CodexAuthErrorOptions extends CodexErrorOptions {
 	accountId?: string;
 	retryable?: boolean;
+	/**
+	 * The underlying token-refresh failure reason, if known. Lets callers
+	 * distinguish transient failures (network_error / 5xx http_error) from
+	 * genuine auth invalidation (4xx http_error / missing_refresh) so a flaky
+	 * network or upstream outage does not count toward permanent account removal.
+	 */
+	refreshFailureReason?: string;
+	/** HTTP status code from the refresh attempt, when reason is http_error. */
+	statusCode?: number;
 }
 
 /**
@@ -110,11 +119,15 @@ export class CodexAuthError extends CodexError {
 	override readonly name = "CodexAuthError";
 	readonly accountId?: string;
 	readonly retryable: boolean;
+	readonly refreshFailureReason?: string;
+	readonly statusCode?: number;
 
 	constructor(message: string, options?: CodexAuthErrorOptions) {
 		super(message, { ...options, code: options?.code ?? ErrorCode.AUTH_ERROR });
 		this.accountId = options?.accountId;
 		this.retryable = options?.retryable ?? false;
+		this.refreshFailureReason = options?.refreshFailureReason;
+		this.statusCode = options?.statusCode;
 	}
 }
 

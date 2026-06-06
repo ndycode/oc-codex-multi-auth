@@ -204,6 +204,17 @@ export function buildKeychainAccountKey(projectStorageKey: string | null): strin
 }
 
 /**
+ * Keychain account key for the FLAGGED-account sibling store. Distinct from the
+ * main accounts key so the two blobs never collide. Flagged records carry raw
+ * refresh tokens (needed to restore via verify-flagged), so they must get the
+ * same keychain protection as the main store when opt-in is enabled.
+ */
+export function buildKeychainFlaggedKey(projectStorageKey: string | null): string {
+	if (!projectStorageKey) return `${GLOBAL_KEYCHAIN_ACCOUNT_KEY}:flagged`;
+	return `flagged:${projectStorageKey}`;
+}
+
+/**
  * Reads the V3 JSON blob from the OS keychain for the given project storage
  * key. Returns `null` when:
  *   - the native module is unavailable (not installed, missing prebuilt)
@@ -269,6 +280,42 @@ export async function deleteFromKeychain(
 	if (!backend) return false;
 	const account = buildKeychainAccountKey(projectStorageKey);
 	return backend.delete(KEYCHAIN_SERVICE_NAME, account);
+}
+
+/**
+ * Flagged-store variants of the keychain read/write/delete helpers. They use
+ * the dedicated flagged account key so flagged credentials get the same
+ * keychain protection as the main store without colliding with it.
+ */
+export async function readFlaggedFromKeychain(
+	projectStorageKey: string | null,
+): Promise<string | null> {
+	const backend = await getBackend();
+	if (!backend) return null;
+	return backend.get(KEYCHAIN_SERVICE_NAME, buildKeychainFlaggedKey(projectStorageKey));
+}
+
+export async function writeFlaggedToKeychain(
+	projectStorageKey: string | null,
+	jsonBlob: string,
+): Promise<KeychainWriteResult> {
+	const backend = await getBackend();
+	if (!backend) {
+		return { ok: false, error: "backend unavailable" };
+	}
+	const account = buildKeychainFlaggedKey(projectStorageKey);
+	try {
+		await backend.set(KEYCHAIN_SERVICE_NAME, account, jsonBlob);
+		return { ok: true };
+	} catch (err) {
+		const message = (err as Error).message;
+		log.error("keychain: flagged write failed", {
+			service: KEYCHAIN_SERVICE_NAME,
+			account,
+			error: message,
+		});
+		return { ok: false, error: message };
+	}
 }
 
 /**

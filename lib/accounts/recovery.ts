@@ -20,6 +20,7 @@ import { CodexCliAccountsSchema } from "../schemas.js";
 import { nowMs } from "../utils.js";
 import type { AccountPersistence } from "./persistence.js";
 import type { AccountState, ManagedAccount } from "./state.js";
+import { getWorkspaceIdentityKey } from "../storage/identity.js";
 
 const log = createLogger("accounts");
 
@@ -268,6 +269,45 @@ export class AccountRecovery {
 
 		// Clear stale auth failure state for this refresh token
 		this.state.authFailuresByRefreshToken.delete(refreshToken);
+
+		return removedCount;
+	}
+
+	/**
+	 * Remove only the account(s) matching the given account's WORKSPACE identity
+	 * (org/account id), not every sibling that merely shares its refresh token.
+	 *
+	 * A single multi-org OAuth login produces several ManagedAccounts that share
+	 * one refresh token but represent distinct, independently-valid workspaces.
+	 * When ONE workspace is deactivated, removing all refresh-token siblings would
+	 * silently drop the still-valid workspaces from rotation. This scopes removal
+	 * to the deactivated workspace only.
+	 *
+	 * @returns Number of accounts removed
+	 */
+	removeAccountsByWorkspaceIdentity(account: ManagedAccount): number {
+		const targetKey = getWorkspaceIdentityKey(account);
+		// Snapshot first because removeAccount mutates the accounts array.
+		const accountsToRemove = this.state.accounts.filter(
+			(acc) => getWorkspaceIdentityKey(acc) === targetKey,
+		);
+		let removedCount = 0;
+
+		for (const accountToRemove of accountsToRemove) {
+			if (this.state.removeAccount(accountToRemove)) {
+				removedCount++;
+			}
+		}
+
+		// Only clear auth-failure state for the refresh token if no sibling
+		// workspace still uses it (siblings remain valid and may still fail/recover).
+		const refreshToken = account.refreshToken;
+		const refreshTokenStillInUse = this.state.accounts.some(
+			(acc) => acc.refreshToken === refreshToken,
+		);
+		if (!refreshTokenStillInUse) {
+			this.state.authFailuresByRefreshToken.delete(refreshToken);
+		}
 
 		return removedCount;
 	}

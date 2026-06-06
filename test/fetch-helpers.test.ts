@@ -1124,13 +1124,63 @@ describe('Fetch Helpers Module', () => {
 			expect(rateLimit?.retryAfterMs).toBeGreaterThan(0);
 		});
 
-	it('normalizes small retryAfterMs values as seconds', async () => {
+	it('treats retry_after_ms as milliseconds verbatim (no seconds rescale)', async () => {
+		// `retry_after_ms` is, by name, already in milliseconds. A small value
+		// like 5 means 5ms — it must NOT be rescaled to 5000ms. (Regression
+		// guard for the unit-confusion bug where retry_after_ms and retry_after
+		// were collapsed and run through a <1000 "looks like seconds" heuristic.)
 		const body = { error: { message: 'rate limited', retry_after_ms: 5 } };
 		const response = new Response(JSON.stringify(body), { status: 429 });
-		
+
 		const { rateLimit } = await handleErrorResponse(response);
-		
+
+		expect(rateLimit?.retryAfterMs).toBe(5);
+	});
+
+	it('treats retry_after (no _ms suffix) as seconds', async () => {
+		// `retry_after` is seconds; 5 means 5000ms.
+		const body = { error: { message: 'rate limited', retry_after: 5 } };
+		const response = new Response(JSON.stringify(body), { status: 429 });
+
+		const { rateLimit } = await handleErrorResponse(response);
+
 		expect(rateLimit?.retryAfterMs).toBe(5000);
+	});
+
+	it('treats retry_after_ms:250 as 250ms verbatim (no seconds rescale)', async () => {
+		// Regression guard: a sub-second retry_after_ms must stay in ms. The old
+		// unit-confusion bug fed values < 1000 through a "looks like seconds"
+		// heuristic, ballooning 250ms into 250_000ms.
+		const body = { error: { message: 'rate limited', retry_after_ms: 250 } };
+		const response = new Response(JSON.stringify(body), { status: 429 });
+
+		const { rateLimit } = await handleErrorResponse(response);
+
+		expect(rateLimit?.retryAfterMs).toBe(250);
+	});
+
+	it('scales retry_after:2 (seconds) to 2000ms', async () => {
+		const body = { error: { message: 'rate limited', retry_after: 2 } };
+		const response = new Response(JSON.stringify(body), { status: 429 });
+
+		const { rateLimit } = await handleErrorResponse(response);
+
+		expect(rateLimit?.retryAfterMs).toBe(2000);
+	});
+
+	it('prefers retry_after_ms over retry_after when both are present (ms wins)', async () => {
+		// When the body carries BOTH fields, the explicit-millisecond field must
+		// win verbatim — it must NOT be overridden by retry_after*1000. Here ms
+		// (250) and seconds (2 -> 2000) disagree, so the result proves which one
+		// the parser honored.
+		const body = {
+			error: { message: 'rate limited', retry_after_ms: 250, retry_after: 2 },
+		};
+		const response = new Response(JSON.stringify(body), { status: 429 });
+
+		const { rateLimit } = await handleErrorResponse(response);
+
+		expect(rateLimit?.retryAfterMs).toBe(250);
 	});
 
 	it('caps retryAfterMs at 5 minutes', async () => {

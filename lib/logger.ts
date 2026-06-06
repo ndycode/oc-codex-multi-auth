@@ -82,6 +82,11 @@ const SENSITIVE_KEYS = new Set([
 	"email",
 	"accountid",
 	"account_id",
+	// Cookie-family headers carry session/opaque credentials that are not
+	// token-SHAPED, so the shape-based maskString would emit them verbatim.
+	"cookie",
+	"setcookie",
+	"xauthtoken",
 ]);
 
 function maskToken(token: string): string {
@@ -151,7 +156,14 @@ function sanitizeValue(value: unknown, depth = 0): unknown {
 		for (const [key, val] of Object.entries(value)) {
 			const normalizedKey = key.toLowerCase().replace(/[-_]/g, "");
 			if (SENSITIVE_KEYS.has(normalizedKey)) {
-				sanitized[key] = typeof val === "string" ? maskToken(val) : "***MASKED***";
+				if (typeof val === "string") {
+					// Emails get domain-preserving masking rather than the generic
+					// token mask (which would leak the first 6 chars of the local part).
+					sanitized[key] =
+						normalizedKey === "email" ? maskEmail(val) : maskToken(val);
+				} else {
+					sanitized[key] = "***MASKED***";
+				}
 			} else {
 				sanitized[key] = sanitizeValue(val, depth + 1);
 			}

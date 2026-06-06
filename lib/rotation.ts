@@ -10,6 +10,40 @@ import { createLogger } from "./logger.js";
 
 const log = createLogger("rotation");
 
+/**
+ * Re-key a map whose keys are `${accountIndex}` or `${accountIndex}:${quotaKey}`
+ * after the account at `removedIndex` is removed and survivors are reindexed
+ * in place (every account at a higher position shifts down by one).
+ *
+ * Entries for the removed index are dropped; entries for higher indices are
+ * shifted down by one so per-account state stays attached to the right account.
+ * Keys that don't parse to a leading integer are preserved untouched.
+ */
+export function remapIndexedKeys<V>(
+  source: Map<string, V>,
+  removedIndex: number,
+): Map<string, V> {
+  const next = new Map<string, V>();
+  for (const [key, value] of source.entries()) {
+    const colon = key.indexOf(":");
+    const indexPart = colon === -1 ? key : key.slice(0, colon);
+    const suffix = colon === -1 ? "" : key.slice(colon);
+    const parsed = Number(indexPart);
+    if (!Number.isInteger(parsed) || `${parsed}` !== indexPart) {
+      // Not an index-keyed entry; keep as-is.
+      next.set(key, value);
+      continue;
+    }
+    if (parsed === removedIndex) {
+      // Drop the removed account's state entirely.
+      continue;
+    }
+    const newIndex = parsed > removedIndex ? parsed - 1 : parsed;
+    next.set(`${newIndex}${suffix}`, value);
+  }
+  return next;
+}
+
 // ============================================================================
 // Health Score Tracking
 // ============================================================================
@@ -119,6 +153,17 @@ export class HealthScoreTracker {
   reset(accountIndex: number, quotaKey?: string): void {
     const key = this.getKey(accountIndex, quotaKey);
     this.entries.delete(key);
+  }
+
+  /**
+   * Re-key entries after an account at `removedIndex` is removed and the
+   * survivors are reindexed in place. Entries for the removed index are
+   * dropped; entries for higher indices shift down by one so they stay
+   * attached to the same account. Without this, survivors would inherit the
+   * removed (or a shifted neighbor's) health state — see removeAccount.
+   */
+  remapAfterRemoval(removedIndex: number): void {
+    this.entries = remapIndexedKeys(this.entries, removedIndex);
   }
 
   clear(): void {
@@ -253,6 +298,14 @@ export class TokenBucketTracker {
   reset(accountIndex: number, quotaKey?: string): void {
     const key = this.getKey(accountIndex, quotaKey);
     this.buckets.delete(key);
+  }
+
+  /**
+   * Re-key buckets after an account at `removedIndex` is removed and the
+   * survivors are reindexed in place. Mirrors HealthScoreTracker.remapAfterRemoval.
+   */
+  remapAfterRemoval(removedIndex: number): void {
+    this.buckets = remapIndexedKeys(this.buckets, removedIndex);
   }
 
   clear(): void {

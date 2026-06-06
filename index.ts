@@ -120,10 +120,12 @@ import {
 	lookupCodexCliTokensByEmail,
 } from "./lib/accounts.js";
 import { resolveDisplayEmail } from "./lib/account-display.js";
+import { CodexAuthError } from "./lib/errors.js";
 import {
 	getStoragePath,
 	loadAccounts,
 	saveAccounts,
+	withAccountStorageTransaction,
 	clearAccounts,
 	setStoragePath,
 	loadFlaggedAccounts,
@@ -756,15 +758,33 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
                 if (accountsToHydrate.length === 0) return storage;
 
                 let changed = false;
+                // Record hydrated field updates keyed by the account's ORIGINAL
+                // refresh token (captured before the network call) so we can
+                // re-apply them onto a freshly-loaded snapshot inside a storage
+                // transaction — avoiding a lost-update race with concurrent saves.
+                const hydrationUpdates = new Map<
+                        string,
+                        {
+                                accountId?: string;
+                                accountIdSource?: "token";
+                                email?: string;
+                                accessToken?: string;
+                                expiresAt?: number;
+                                oauthScope?: string;
+                                refreshToken?: string;
+                        }
+                >();
                 // process in chunks of 3 to avoid auth0 rate limits (429) on startup
                 const chunkSize = 3;
                 for (let i = 0; i < accountsToHydrate.length; i += chunkSize) {
                         const chunk = accountsToHydrate.slice(i, i + chunkSize);
                         await Promise.all(
                                 chunk.map(async (account) => {
+                                const originalRefreshToken = account.refreshToken;
                                 try {
                                         const refreshed = await queuedRefresh(account.refreshToken);
                                         if (refreshed.type !== "success") return;
+                                        const update = hydrationUpdates.get(originalRefreshToken) ?? {};
                                         const id = extractAccountId(refreshed.access);
                                         const email = sanitizeEmail(extractAccountEmail(refreshed.access, refreshed.idToken));
                                         if (
@@ -774,27 +794,37 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
                                         ) {
                                                 account.accountId = id;
                                                 account.accountIdSource = "token";
+                                                update.accountId = id;
+                                                update.accountIdSource = "token";
                                                 changed = true;
                                         }
                                         if (email && email !== account.email) {
                                                 account.email = email;
+                                                update.email = email;
                                                 changed = true;
                                         }
 					if (refreshed.access && refreshed.access !== account.accessToken) {
 						account.accessToken = refreshed.access;
+						update.accessToken = refreshed.access;
 						changed = true;
 					}
 					if (typeof refreshed.expires === "number" && refreshed.expires !== account.expiresAt) {
 						account.expiresAt = refreshed.expires;
+						update.expiresAt = refreshed.expires;
 						changed = true;
 					}
 					if (refreshed.scope && refreshed.scope !== account.oauthScope) {
 						account.oauthScope = refreshed.scope;
+						update.oauthScope = refreshed.scope;
 						changed = true;
 					}
                                         if (refreshed.refresh && refreshed.refresh !== account.refreshToken) {
                                                 account.refreshToken = refreshed.refresh;
+                                                update.refreshToken = refreshed.refresh;
                                                 changed = true;
+                                        }
+                                        if (Object.keys(update).length > 0) {
+                                                hydrationUpdates.set(originalRefreshToken, update);
                                         }
 				} catch {
 					logWarn(`[${PLUGIN_NAME}] Failed to hydrate email for account`);
@@ -804,8 +834,28 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
                 }
 
                 if (changed) {
+                        // Persist under the storage lock against a fresh snapshot so a
+                        // concurrent save during the (potentially multi-second) hydration
+                        // network loop is not clobbered. Match accounts by their original
+                        // refresh token.
+                        await withAccountStorageTransaction(async (current, persist) => {
+                                if (!current) return;
+                                for (const acc of current.accounts) {
+                                        const update = hydrationUpdates.get(acc.refreshToken);
+                                        if (!update) continue;
+                                        if (update.accountId !== undefined) acc.accountId = update.accountId;
+                                        if (update.accountIdSource !== undefined) acc.accountIdSource = update.accountIdSource;
+                                        if (update.email !== undefined) acc.email = update.email;
+                                        if (update.accessToken !== undefined) acc.accessToken = update.accessToken;
+                                        if (update.expiresAt !== undefined) acc.expiresAt = update.expiresAt;
+                                        if (update.oauthScope !== undefined) acc.oauthScope = update.oauthScope;
+                                        // Apply the rotated refresh token LAST so the map key
+                                        // (original token) still matches above.
+                                        if (update.refreshToken !== undefined) acc.refreshToken = update.refreshToken;
+                                }
+                                await persist(current);
+                        });
                         storage.accounts = accountsCopy;
-                        await saveAccounts(storage);
                 }
                 return storage;
         };
@@ -1279,8 +1329,25 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 		};
 
 		const invalidateAccountManagerCache = (): void => {
+			// Dispose the outgoing manager so we don't leak its shutdown handler
+			// into the global cleanup queue or leave a pending debounce timer
+			// pointing at a stale instance. Flush first (best-effort, in the
+			// background) so any queued debounced save is not silently dropped.
+			const previous = cachedAccountManager;
 			cachedAccountManager = null;
 			accountManagerPromise = null;
+			if (previous) {
+				void previous
+					.flushPendingSave()
+					.catch((error: unknown) => {
+						logWarn(
+							`Failed to flush pending save while invalidating account manager: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					})
+					.finally(() => {
+						previous.disposeShutdownHandler();
+					});
+			}
 		};
 
 		const persistAuthenticatedSelections = async (
@@ -1929,6 +1996,33 @@ while (attempted.size < Math.max(1, accountCount)) {
 				runtimeMetrics.accountRotations++;
 				runtimeMetrics.lastError = (err as Error)?.message ?? String(err);
 				runtimeMetrics.lastErrorCategory = "auth-refresh";
+
+				// Transient refresh failures (network blip / upstream 5xx) must NOT
+				// count toward permanent account removal — the credentials are still
+				// valid and a flaky network or outage would otherwise silently delete
+				// them. Cool the account down briefly and rotate instead.
+				const isTransientRefreshFailure =
+					err instanceof CodexAuthError && err.retryable === true;
+				if (isTransientRefreshFailure) {
+					const cooledCount = accountManager.markAccountsWithRefreshTokenCoolingDown(
+						account.refreshToken,
+						ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
+						"auth-failure",
+					);
+					if (cooledCount <= 0) {
+						accountManager.markAccountCoolingDown(
+							account,
+							ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
+							"auth-failure",
+						);
+					}
+					accountManager.saveToDiskDebounced();
+					logWarn(
+						`[${PLUGIN_NAME}] Transient auth refresh failure for account ${account.index + 1} (${err.refreshFailureReason ?? "unknown"}${err.statusCode ? ` ${err.statusCode}` : ""}); cooling down without counting toward removal.`,
+					);
+					continue;
+				}
+
 				const failures = await accountManager.incrementAuthFailures(account);
 				const accountLabel = formatAccountLabel(account, account.index, {
 					maskEmail: maskEmailEnabled,
@@ -2043,7 +2137,11 @@ while (attempted.size < Math.max(1, accountCount)) {
 									logWarn(
 										`Skipping account ${account.index + 1}: local token bucket depleted for ${modelFamily}${model ? `:${model}` : ""}`,
 									);
-									break;
+									// Skip THIS account and rotate to the next one. `account.index` is
+									// already in `attempted` (added above), so the traversal loop guard
+									// prevents reselecting it and terminates once all are exhausted.
+									// Using `break` here would abandon every other healthy account.
+									continue;
 								}
 
 							// RC-8: per-(account, family) circuit-breaker key. The breaker gates
@@ -2213,12 +2311,13 @@ while (attempted.size < Math.max(1, accountCount)) {
 					);
 				}
 
-					// Keep deactivated workspace cleanup aligned with the existing
-					// refresh-token removal path. saveToDiskDebounced reuses the
-					// storage temp-file + EPERM/EBUSY retry path covered in
-					// test/storage.test.ts, and surfaced persistence failures stay
-					// sanitized by the redaction checks in test/login-runner.test.ts.
-					const removedCount = accountManager.removeAccountsWithSameRefreshToken(account);
+					// Remove ONLY the deactivated workspace, scoped by workspace
+					// identity (org/account id). A single multi-org OAuth login
+					// produces sibling accounts that share one refresh token but are
+					// independently valid; removing all refresh-token siblings here
+					// would silently drop still-valid workspaces from rotation. The
+					// refresh token itself is still good, so siblings must survive.
+					const removedCount = accountManager.removeAccountsByWorkspaceIdentity(account);
 					if (removedCount > 0) {
 						accountManager.saveToDiskDebounced();
 						restartAccountTraversalAfterWorkspaceDeactivation = true;
@@ -2538,9 +2637,33 @@ while (attempted.size < Math.max(1, accountCount)) {
 
 					resetRateLimitBackoff(account.index, quotaKey);
 					runtimeMetrics.cumulativeLatencyMs += fetchLatencyMs;
-					const successResponse = await handleSuccessResponse(response, isStreaming, {
-						streamStallTimeoutMs,
-					});
+					let successResponse: Response;
+					try {
+						successResponse = await handleSuccessResponse(response, isStreaming, {
+							streamStallTimeoutMs,
+						});
+					} catch (streamError) {
+						// A stream stall or SSE-parse failure happened AFTER a token was
+						// consumed (line ~token-consume above). Without this catch the
+						// exception escaped both loops, leaking the consumed token and
+						// skipping account rotation. Refund, mark the breaker/account
+						// failed, and rotate to the next account.
+						accountManager.refundToken(account, modelFamily, model);
+						accountManager.recordFailure(account, modelFamily, model);
+						circuitBreaker.recordFailure();
+						account.lastSwitchReason = "rotation";
+						runtimeMetrics.failedRequests++;
+						runtimeMetrics.accountRotations++;
+						runtimeMetrics.lastError =
+							streamError instanceof Error ? streamError.message : String(streamError);
+						runtimeMetrics.lastErrorCategory = "stream";
+						logWarn(
+							`Stream/response handling failed for account ${account.index + 1}: ${runtimeMetrics.lastError}. Rotating.`,
+						);
+						// Account for the server-class retry budget, then rotate.
+						consumeRetryBudget("server", "Stream/response handling failure");
+						break;
+					}
 
 					if (!successResponse.ok) {
 						runtimeMetrics.failedRequests++;
@@ -2570,10 +2693,12 @@ while (attempted.size < Math.max(1, accountCount)) {
 										"warning",
 										{ duration: toastDurationMs },
 									);
-									accountManager.refundToken(account, modelFamily, model);
-									accountManager.recordFailure(account, modelFamily, model);
 									await sleep(addJitter(emptyResponseRetryDelayMs, 0.2));
-									break;
+									// Re-issue against the SAME account by re-entering the inner
+									// request loop. Using `break` here exited to account rotation,
+									// which is a no-op for single-account pools and surfaced a
+									// misleading "all accounts failed" 503 instead of retrying.
+									continue;
 								}
 								logWarn(`Empty response after ${emptyResponseMaxRetries} retries. Returning as-is.`);
 							}
@@ -3236,7 +3361,46 @@ while (attempted.size < Math.max(1, accountCount)) {
 								}
 
 								if (storageChanged) {
-									await saveAccounts(workingStorage);
+									// Persist under the storage lock against a fresh snapshot so
+									// concurrent saves during the (long) health-check network loop
+									// are not clobbered. Re-apply this run's per-account quota/state
+									// updates by workspace identity and re-apply removals.
+									const workingByIdentity = new Map(
+										workingStorage.accounts.map((account) => [
+											getWorkspaceIdentityKey(account),
+											account,
+										]),
+									);
+									await withAccountStorageTransaction(async (current, persist) => {
+										if (!current) {
+											// No on-disk state to merge into; fall back to the working copy.
+											await persist(workingStorage);
+											return;
+										}
+										const merged: typeof current.accounts = [];
+										for (const acc of current.accounts) {
+											const identity = getWorkspaceIdentityKey(acc);
+											if (removeFromActive.has(identity)) continue;
+											const updated = workingByIdentity.get(identity);
+											if (updated) {
+												// Carry forward ONLY the token/identity fields this health
+												// check refreshes. Labels, tags, notes, and rate-limit /
+												// cooldown state stay as the fresh snapshot has them so a
+												// concurrent edit during the network loop is not reverted.
+												acc.accountId = updated.accountId;
+												acc.accountIdSource = updated.accountIdSource;
+												acc.refreshToken = updated.refreshToken;
+												acc.accessToken = updated.accessToken;
+												acc.expiresAt = updated.expiresAt;
+												acc.oauthScope = updated.oauthScope;
+												acc.email = updated.email;
+											}
+											merged.push(acc);
+										}
+										current.accounts = merged;
+										clampActiveIndices(current);
+										await persist(current);
+									});
 									invalidateAccountManagerCache();
 								}
 								if (flaggedChanged) {

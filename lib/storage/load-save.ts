@@ -305,21 +305,41 @@ async function loadAccountsInternal(
     try {
       const blob = await readFromKeychain(projectKey);
       if (blob !== null) {
+        let parsed: unknown;
         try {
-          const parsed = JSON.parse(blob) as unknown;
-          const normalized = normalizeAccountStorage(parsed, "<keychain>");
-          if (normalized) return normalized;
+          parsed = JSON.parse(blob) as unknown;
         } catch (parseErr) {
           // Corrupt keychain entry: log but fall through to JSON so the
           // user can recover from their on-disk backup.
           log.warn("keychain: stored payload failed to parse; falling back to JSON", {
             error: String(parseErr),
           });
+          parsed = undefined;
+        }
+        if (parsed !== undefined) {
+          // normalizeAccountStorage throws typed StorageErrors for
+          // forward-compat (UNSUPPORTED_SCHEMA_VERSION) and quarantined V2
+          // payloads. These must NOT be swallowed here — otherwise a keychain
+          // user silently falls through to an empty/JSON load and the next
+          // save clobbers their future-format credentials. Let them propagate
+          // exactly as the JSON path below does.
+          const normalized = normalizeAccountStorage(parsed, "<keychain>");
+          if (normalized) return normalized;
         }
       } else {
         log.info("keychain: no entry found; falling back to JSON read");
       }
     } catch (err) {
+      // Forward-compat and quarantined-V2 rejects from normalizeAccountStorage
+      // must reach the caller, not be downgraded to a JSON fallback that could
+      // clobber the user's credentials on the next save (mirrors the JSON path).
+      if (
+        err instanceof StorageError &&
+        (err.code === "UNSUPPORTED_SCHEMA_VERSION" ||
+          err.code === UNKNOWN_V2_FORMAT_CODE)
+      ) {
+        throw err;
+      }
       log.warn("keychain: read failed; falling back to JSON", {
         error: String(err),
       });

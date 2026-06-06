@@ -980,4 +980,55 @@ describe('Logger Module', () => {
 			expect(out).toMatch(/"access_token":"access...4321"/);
 		});
 	});
+
+	// Audit fix #7: structured `email` keys must use domain-preserving maskEmail,
+	// NOT the generic maskToken (which keeps the first 6 chars and would leak the
+	// local part). Cookie-family header keys must be in SENSITIVE_KEYS so their
+	// opaque, non-token-shaped values are masked rather than emitted verbatim.
+	describe('sanitizeValue email + cookie masking (audit fix #7)', () => {
+		it('masks an email key domain-preserving (not maskToken first-6 leak)', async () => {
+			const { __testOnly } = await import('../lib/logger.js');
+			const out = __testOnly.sanitizeValue({ email: 'alice@example.com' }) as {
+				email: string;
+			};
+			// NEW: domain-preserving mask.
+			expect(out.email).toBe('al***@***.com');
+			// OLD behavior used maskToken, which (len 17 > 12) would emit
+			// "alice@...e.com", leaking the full local part "alice".
+			expect(out.email).not.toContain('alice@');
+			expect(out.email).not.toBe('alice@...e.com');
+		});
+
+		it('masks a Cookie header key whose value is not token-shaped', async () => {
+			const { __testOnly } = await import('../lib/logger.js');
+			const rawCookie = 'sessionid=abc123def456; Path=/';
+			const out = __testOnly.sanitizeValue({ Cookie: rawCookie }) as {
+				Cookie: string;
+			};
+			// OLD behavior: "cookie" was not a sensitive key, so the opaque value
+			// fell through to maskString and (being non-token-shaped) survived
+			// verbatim. NEW: the value is masked.
+			expect(out.Cookie).not.toBe(rawCookie);
+			expect(out.Cookie).not.toContain('abc123def456');
+		});
+
+		it('masks a Set-Cookie header key (normalized to setcookie)', async () => {
+			const { __testOnly } = await import('../lib/logger.js');
+			const rawSetCookie = 'auth=topsecretvalue9999; HttpOnly';
+			const out = __testOnly.sanitizeValue({ 'Set-Cookie': rawSetCookie }) as {
+				'Set-Cookie': string;
+			};
+			expect(out['Set-Cookie']).not.toBe(rawSetCookie);
+			expect(out['Set-Cookie']).not.toContain('topsecretvalue9999');
+		});
+
+		it('masks email even when nested inside an object', async () => {
+			const { __testOnly } = await import('../lib/logger.js');
+			const out = __testOnly.sanitizeValue({
+				account: { email: 'bob.smith@corp.example.org' },
+			}) as { account: { email: string } };
+			expect(out.account.email).toBe('bo***@***.org');
+			expect(out.account.email).not.toContain('bob.smith');
+		});
+	});
 });

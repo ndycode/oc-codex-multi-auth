@@ -459,7 +459,25 @@ export async function refreshAndUpdateToken(
 	const refreshResult = await queuedRefresh(refreshToken);
 
 	if (refreshResult.type === "failed") {
-		throw new CodexAuthError(ERROR_MESSAGES.TOKEN_REFRESH_FAILED, { retryable: false });
+		// Distinguish transient failures (network blip / upstream 5xx) from
+		// genuine auth invalidation. Transient failures must NOT count toward
+		// permanent account removal — the credentials are still valid.
+		const reason = refreshResult.reason;
+		const statusCode =
+			typeof refreshResult.statusCode === "number"
+				? refreshResult.statusCode
+				: undefined;
+		const isTransient =
+			reason === "network_error" ||
+			reason === "invalid_response" ||
+			(reason === "http_error" &&
+				statusCode !== undefined &&
+				statusCode >= 500);
+		throw new CodexAuthError(ERROR_MESSAGES.TOKEN_REFRESH_FAILED, {
+			retryable: isTransient,
+			refreshFailureReason: reason,
+			statusCode,
+		});
 	}
 
 	const currentScope = currentAuth.scope;
@@ -885,7 +903,18 @@ function parseRateLimitBody(
 	const type = typeof error.type === "string" ? error.type : undefined;
 	const contextType = typeof error.context?.type === "string" ? error.context.type : undefined;
 	const resetsAt = toNumber(error.resets_at ?? error.reset_at);
-	const retryAfterMs = toNumber(error.retry_after_ms ?? error.retry_after);
+	// `retry_after_ms` is milliseconds; `retry_after` is seconds. Keep their
+	// scales distinct: collapsing them and feeding the result through
+	// normalizeRetryAfter's <1000 "looks like seconds" heuristic turned a
+	// sub-second `retry_after_ms` (e.g. 500) into a multi-minute backoff.
+	const retryAfterMsRaw = toNumber(error.retry_after_ms);
+	const retryAfterSeconds = toNumber(error.retry_after);
+	const retryAfterMs =
+		retryAfterMsRaw !== undefined
+			? retryAfterMsRaw
+			: retryAfterSeconds !== undefined
+				? retryAfterSeconds * 1000
+				: undefined;
 	return { code, type, contextType, resetsAt, retryAfterMs };
 }
 
@@ -1044,7 +1073,14 @@ function parseRetryAfterMs(
         parsedBody?: { resetsAt?: number; retryAfterMs?: number },
 ): number | null {
         if (parsedBody?.retryAfterMs !== undefined) {
-                return normalizeRetryAfter(parsedBody.retryAfterMs);
+                // Already normalized to milliseconds in parseRateLimitBody (ms field
+                // used verbatim, seconds field converted via *1000). Do NOT pass
+                // through a <1000 "looks like seconds" heuristic, which would
+                // mis-scale a genuine sub-second value into minutes. Cap at 5 min.
+                const ms = parsedBody.retryAfterMs;
+                if (Number.isFinite(ms) && ms > 0) {
+                        return Math.min(Math.floor(ms), MAX_RETRY_DELAY_MS);
+                }
         }
 
         const retryAfterMsHeader = response.headers.get("retry-after-ms");
@@ -1098,17 +1134,7 @@ function parseRetryAfterMs(
         return null;
 }
 
-function normalizeRetryAfter(value: number): number {
-        if (!Number.isFinite(value)) return 60000;
-        let ms: number;
-        if (value > 0 && value < 1000) {
-                ms = Math.floor(value * 1000);
-        } else {
-                ms = Math.floor(value);
-        }
-        const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
-        return Math.min(ms, MAX_RETRY_DELAY_MS);
-}
+const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
 
 function toNumber(value: unknown): number | undefined {
         if (value === null || value === undefined) return undefined;
