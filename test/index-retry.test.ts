@@ -45,6 +45,16 @@ vi.mock("../lib/request/fetch-helpers.js", () => ({
 		return { response };
 	},
 	isDeactivatedWorkspaceError: () => false,
+	createAbortError: (signal?: AbortSignal | null) => {
+		const reason = (signal as any)?.reason;
+		if (reason instanceof Error) {
+			if (reason.name !== "AbortError") reason.name = "AbortError";
+			return reason;
+		}
+		const err = new Error(typeof reason === "string" && reason.length > 0 ? reason : "Aborted");
+		err.name = "AbortError";
+		return err;
+	},
 	isInvalidatedAuthTokenError: (_errorBody: unknown, status?: number) => status === 401,
 	resolveUnsupportedCodexFallbackModel: () => undefined,
 	getUnsupportedCodexModelInfo: () => ({
@@ -262,6 +272,40 @@ describe("OpenAIAuthPlugin rate-limit retry", () => {
 		const response = await fetchPromise;
 		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
 		expect(response.status).toBe(200);
+	});
+
+	it("rejects with a named AbortError when the caller aborts mid retry-wait (#176)", async () => {
+		const { OpenAIAuthPlugin } = (await import("../index.js")) as any;
+		const client = {
+			tui: { showToast: vi.fn() },
+			auth: { set: vi.fn() },
+		} as any;
+
+		const plugin = await OpenAIAuthPlugin({ client } as any);
+		const getAuth = async () => ({
+			type: "oauth" as const,
+			access: "a",
+			refresh: "r",
+			expires: Date.now() + 60_000,
+			multiAccount: true,
+		});
+		const sdk = (await (plugin.auth as any).loader(getAuth, { options: {}, models: {} } as any)) as any;
+
+		// All accounts are rate-limited, so the request enters sleepWithCountdown
+		// (getMinWaitTimeForFamily=1000) BEFORE any fetch. Abort mid-wait.
+		const controller = new AbortController();
+		const fetchPromise = sdk.fetch("https://example.com", { signal: controller.signal });
+		const assertion = expect(fetchPromise).rejects.toMatchObject({ name: "AbortError" });
+
+		// Let the wait begin, then abort with an explicit reason and drain timers.
+		await vi.advanceTimersByTimeAsync(10);
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+		controller.abort(new Error("client cancelled"));
+		await vi.advanceTimersByTimeAsync(2000);
+
+		await assertion;
+		// The abort short-circuited the wait: no upstream request was issued.
+		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
 
 	it.each([

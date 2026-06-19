@@ -59,6 +59,12 @@ export interface EntitlementError {
 export function createAbortError(signal?: AbortSignal | null): Error {
         const reason = signal?.reason;
         if (reason instanceof Error) {
+                // Preserve the original message/stack, but ensure the result is
+                // recognizable as an abort by isAbortError (lib/codex-usage.ts checks
+                // name === "AbortError"). A caller may abort with a generic Error.
+                if (reason.name !== "AbortError") {
+                        reason.name = "AbortError";
+                }
                 return reason;
         }
         const err = new Error(

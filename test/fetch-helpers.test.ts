@@ -1467,11 +1467,27 @@ describe('Fetch Helpers Module', () => {
 });
 
 describe("createAbortError (issue #176)", () => {
-	it("returns the signal reason as-is when it is an Error", () => {
+	it("returns the Error reason (same instance) but stamps name=AbortError", () => {
 		const reason = new Error("client closed connection");
 		const controller = new AbortController();
 		controller.abort(reason);
-		expect(createAbortError(controller.signal)).toBe(reason);
+		const err = createAbortError(controller.signal);
+		// Same instance (message/stack preserved)...
+		expect(err).toBe(reason);
+		expect(err.message).toBe("client closed connection");
+		// ...but recognizable as an abort downstream.
+		expect(err.name).toBe("AbortError");
+	});
+
+	it("leaves an existing AbortError-named reason untouched", () => {
+		const reason = new Error("already an abort");
+		reason.name = "AbortError";
+		const controller = new AbortController();
+		controller.abort(reason);
+		const err = createAbortError(controller.signal);
+		expect(err).toBe(reason);
+		expect(err.name).toBe("AbortError");
+		expect(err.message).toBe("already an abort");
 	});
 
 	it("wraps a string reason in a named AbortError", () => {
