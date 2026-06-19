@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `codex-doctor --fix` now clears stale account-health state on accounts whose token refresh succeeds during the repair: an `auth-failure`/`network-error` cooldown and any `rateLimitResetTimes` markers are removed once the refresh proves the credential is alive. Previously `--fix` refreshed the token and tried to switch to the healthiest account, but left the stale cooldown/rate-limit state in place, so no account was eligible and the dead routing persisted — the only recovery was hand-editing `oc-codex-multi-auth-accounts.json`. The stale TUI quota cache is also cleared so diagnostics no longer reference an account index/count that no longer matches the pool. (fixes #171)
 - `codex-doctor` now surfaces a finding when a disabled `accountIdSource: "token"` entry shadows an enabled, org-backed account that shares its email (a leftover a fresh re-login can mint instead of updating the org account). It is flagged with a `codex-remove` hint rather than auto-removed, because the only link between the two records is email and email-only merges must not collapse distinct multi-org accounts (#64). (#171)
 
+### Security
+- Bumped `hono` to 4.12.26, resolving a high-severity Windows `serve-static` path traversal via encoded backslash (`%5C`) and four moderate advisories (GHSA-88fw-hqm2-52qc, GHSA-j6c9-x7qj-28xf, GHSA-rv63-4mwf-qqc2, GHSA-wgpf-jwqj-8h8p, GHSA-wwfh-h76j-fc44). This also clears the transitive `@openauthjs/openauth` advisory inherited via hono.
+- Overrode `vite` to ^7.3.5, resolving a high-severity `server.fs.deny` bypass on Windows alternate paths and a moderate advisory (GHSA-fx2h-pf6j-xcff, GHSA-v6wh-96g9-6wx3) in the dev/test toolchain.
+- Overrode `@babel/core` to ^7.29.6 (transitive via `@opentui/solid`), resolving a low-severity arbitrary file read via `sourceMappingURL` (GHSA-4x5r-pxfx-6jf8) without a major version bump.
+- Added a `brace-expansion@>=5.0.0 <5.0.6` override to ^5.0.6, resolving a moderate ReDoS-class advisory in the 5.x line. `npm audit` now reports 0 vulnerabilities.
 
 ## [6.3.3] - 2026-06-17
 
