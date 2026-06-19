@@ -2233,6 +2233,35 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(Array.isArray(result.staleRecoverableSlots)).toBe(true);
 			expect(Array.isArray(result.disabledDuplicateSlots)).toBe(true);
 		});
+
+		it("reports populated stale/duplicate slots in JSON when present (issue #171)", async () => {
+			mockStorage.accounts = [
+				{
+					refreshToken: "r-org",
+					email: "user@example.com",
+					accountId: "org-AAA",
+					organizationId: "org-AAA",
+					accountIdSource: "org",
+					enabled: true,
+					coolingDownUntil: Date.now() + 600_000,
+					cooldownReason: "auth-failure",
+				},
+				{
+					refreshToken: "r-token",
+					email: "user@example.com",
+					accountId: "uuid-fresh",
+					accountIdSource: "token",
+					enabled: false,
+				},
+			];
+			const result = parseJsonOutput<{
+				staleRecoverableSlots: number[];
+				disabledDuplicateSlots: number[];
+			}>(await plugin.tool["codex-health"].execute({ format: "json" }));
+			// slot 1 is blocked by a stale cooldown; slot 2 is the disabled token dup.
+			expect(result.staleRecoverableSlots).toContain(1);
+			expect(result.disabledDuplicateSlots).toContain(2);
+		});
 	});
 
 	describe("codex-remove tool", () => {

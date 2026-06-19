@@ -130,6 +130,12 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 				for (let accountIndex = 0; accountIndex < storage.accounts.length; accountIndex++) {
 					const account = storage.accounts[accountIndex];
 					if (!account) continue;
+					// Skip intentionally-disabled accounts: refreshing them is wrong
+					// (e.g. the disabled token-source duplicate would get a spurious
+					// "re-login" directive when its dead token fails, when the correct
+					// remedy is `codex-remove`), and stale-state must never be cleared
+					// on an entry the user disabled on purpose.
+					if (account.enabled === false) continue;
 					try {
 						const refreshResult = await queuedRefresh(account.refreshToken);
 						if (refreshResult.type === "success") {
@@ -227,7 +233,9 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 				// refreshed: the credential is dead and only re-login fixes it. Without
 				// this the user sees no eligible account but no cause (issue #171).
 				if (reloginNeeded.length > 0) {
-					appliedFixes.push(
+					// Re-login is a MANUAL action, not an applied fix — keep it in fixErrors
+					// so JSON consumers reading autoFix.appliedFixes are not misled.
+					fixErrors.push(
 						`${reloginNeeded.length} account(s) need re-login (slots: ${reloginNeeded.join(", ")}). Run \`opencode auth login\`.`,
 					);
 				}
