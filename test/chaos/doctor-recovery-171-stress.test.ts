@@ -346,6 +346,9 @@ describe("chaos/doctor-recovery — single-account + disabled dup, real save/loa
 	let dir: string;
 
 	afterEach(async () => {
+		while (liveManagers.length > 0) {
+			liveManagers.pop()?.disposeShutdownHandler();
+		}
 		setStoragePathDirect(null);
 		if (dir) await fsp.rm(dir, { recursive: true, force: true });
 	});
@@ -391,13 +394,12 @@ describe("chaos/doctor-recovery — single-account + disabled dup, real save/loa
 		expect(loaded?.accounts).toHaveLength(1);
 		const acct = loaded!.accounts[0]!;
 		expect(acct.enabled).not.toBe(false);
-		const before = new AccountManager(undefined, loaded!);
+		const before = makeManager(loaded!);
 		expect(
 			before
 				.getSelectionExplainability(FAMILY, "gpt-5.4-mini", Date.now())
 				.filter((e) => e.eligible).length,
 		).toBe(0);
-		before.disposeShutdownHandler();
 
 		// codex-doctor --fix: refresh enabled accounts, clear stale state, persist.
 		const refreshable = loaded!.accounts.filter((a) => a.enabled !== false);
@@ -408,7 +410,7 @@ describe("chaos/doctor-recovery — single-account + disabled dup, real save/loa
 
 		// After restart: pool is eligible again.
 		const after = await loadAccounts();
-		const mgr = new AccountManager(undefined, after!);
+		const mgr = makeManager(after!);
 		const eligible = mgr
 			.getSelectionExplainability(FAMILY, "gpt-5.4-mini", Date.now())
 			.filter((e) => e.eligible).length;
@@ -416,6 +418,5 @@ describe("chaos/doctor-recovery — single-account + disabled dup, real save/loa
 		const selected = mgr.getCurrentOrNextForFamilyHybrid(FAMILY, "gpt-5.4-mini");
 		expect(selected?.organizationId).toBe("org-AAA");
 		expect(mgr.isAccountCoolingDown(selected as NonNullable<Active>)).toBe(false);
-		mgr.disposeShutdownHandler();
 	});
 });
