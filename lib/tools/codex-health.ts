@@ -7,6 +7,7 @@ import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
 import { loadAccounts } from "../storage.js";
 import { queuedRefresh } from "../refresh-queue.js";
 import {
+	findDisabledAccountsWithFreshCredential,
 	findDisabledTokenSourceDuplicates,
 	findStaleRecoverableAccounts,
 } from "../accounts/stale-state.js";
@@ -156,6 +157,14 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 					`Duplicates: ${dupSlots.length} disabled duplicate entry(ies) shadow a real account (slots: ${dupSlots.join(", ")}). Remove with \`codex-remove\`.`,
 				);
 			}
+			const absorbedSlots = findDisabledAccountsWithFreshCredential(
+				storage.accounts,
+			).map((index) => index + 1);
+			if (absorbedSlots.length > 0) {
+				results.push(
+					`Disabled w/ fresh login: ${absorbedSlots.length} disabled account(s) hold a fresh credential (slots: ${absorbedSlots.join(", ")}) - a recent re-login landed on a disabled slot. Re-enable in oc-codex-multi-auth-accounts.json if intended.`,
+				);
+			}
 			if (outputFormat === "json") {
 				return renderJsonOutput({
 					totalAccounts: storage.accounts.length,
@@ -163,6 +172,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 					unhealthyCount,
 					staleRecoverableSlots: staleSlots,
 					disabledDuplicateSlots: dupSlots,
+					disabledWithFreshCredentialSlots: absorbedSlots,
 					accounts: jsonAccounts,
 				});
 			}

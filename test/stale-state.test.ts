@@ -3,6 +3,7 @@ import {
 	clearRefreshedAccountStaleState,
 	clearRefreshedAccountsStaleState,
 	findDisabledTokenSourceDuplicates,
+	findDisabledAccountsWithFreshCredential,
 	findStaleRecoverableAccounts,
 	type StaleStateAccount,
 } from "../lib/accounts/stale-state.js";
@@ -168,3 +169,37 @@ describe("findStaleRecoverableAccounts", () => {
 	});
 });
 
+describe("findDisabledAccountsWithFreshCredential (issue #171)", () => {
+	const NOW = 1_700_000_000_000;
+	const FUTURE = NOW + 3_600_000;
+	const PAST = NOW - 3_600_000;
+
+	it("flags a disabled account that holds a fresh (unexpired) access token", () => {
+		const accounts = [{ enabled: false, accessToken: "tok", expiresAt: FUTURE }];
+		expect(findDisabledAccountsWithFreshCredential(accounts, NOW)).toEqual([0]);
+	});
+
+	it("ignores an enabled account (not the blind-spot case)", () => {
+		const accounts = [{ enabled: true, accessToken: "tok", expiresAt: FUTURE }];
+		expect(findDisabledAccountsWithFreshCredential(accounts, NOW)).toEqual([]);
+	});
+
+	it("ignores a disabled account whose credential is expired", () => {
+		const accounts = [{ enabled: false, accessToken: "tok", expiresAt: PAST }];
+		expect(findDisabledAccountsWithFreshCredential(accounts, NOW)).toEqual([]);
+	});
+
+	it("ignores a disabled account with no access token", () => {
+		const accounts = [{ enabled: false, expiresAt: FUTURE }];
+		expect(findDisabledAccountsWithFreshCredential(accounts, NOW)).toEqual([]);
+	});
+
+	it("returns multiple flagged slots in order", () => {
+		const accounts = [
+			{ enabled: false, accessToken: "a", expiresAt: FUTURE },
+			{ enabled: true, accessToken: "b", expiresAt: FUTURE },
+			{ enabled: false, accessToken: "c", expiresAt: FUTURE },
+		];
+		expect(findDisabledAccountsWithFreshCredential(accounts, NOW)).toEqual([0, 2]);
+	});
+});

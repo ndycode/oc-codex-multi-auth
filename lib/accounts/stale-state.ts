@@ -220,3 +220,48 @@ export function findStaleRecoverableAccounts(
 	return blocked;
 }
 
+/**
+ * Subset of a stored account used for the absorbed-credential diagnostic.
+ */
+export interface FreshCredentialScanAccount {
+	enabled?: boolean;
+	expiresAt?: number;
+	accessToken?: string;
+}
+
+/**
+ * Identify accounts that are DISABLED yet carry a fresh (unexpired) access
+ * token — the fingerprint of a user-disabled account that absorbed a newer
+ * enabled re-login during dedup (issue #171).
+ *
+ * The merge is intentionally fail-closed: a user-disabled record stays disabled
+ * even after it absorbs a fresh credential. That is correct, but it is silent —
+ * the absorbing record is org-source AND disabled, so it is skipped by every
+ * other #171 diagnostic and the user gets no hint that a fresh login they just
+ * performed landed on a deliberately-disabled slot. This read-only detector
+ * surfaces that case so tooling can suggest re-enabling the account if intended.
+ *
+ * Read-only: mutates nothing, and never re-enables (that stays a user decision).
+ *
+ * @returns the 0-based indexes of disabled accounts holding a fresh credential.
+ */
+export function findDisabledAccountsWithFreshCredential(
+	accounts: FreshCredentialScanAccount[],
+	now: number = nowMs(),
+): number[] {
+	const flagged: number[] = [];
+	for (let i = 0; i < accounts.length; i += 1) {
+		const account = accounts[i];
+		if (!account) continue;
+		if (account.enabled !== false) continue;
+		const hasToken =
+			typeof account.accessToken === "string" && account.accessToken.length > 0;
+		const fresh =
+			typeof account.expiresAt === "number" && account.expiresAt > now;
+		if (hasToken && fresh) {
+			flagged.push(i);
+		}
+	}
+	return flagged;
+}
+

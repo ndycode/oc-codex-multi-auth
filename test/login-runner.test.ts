@@ -49,6 +49,48 @@ describe("login-runner persistAccountPool", () => {
 		await fs.rm(testDir, { recursive: true, force: true });
 	});
 
+	// Build a minimal JWT (header.payload.sig) whose payload carries an email
+	// claim, so extractAccountEmail/decodeJWT resolve a real address.
+	const jwtWithEmail = (email: string): string => {
+		const b64 = (o: unknown) =>
+			Buffer.from(JSON.stringify(o)).toString("base64url");
+		return `${b64({ alg: "none" })}.${b64({ email })}.sig`;
+	};
+
+	it("treats a mixed-case re-login as the same identity end-to-end (#171 email case)", async () => {
+		// Seed a stored email-only (no org/accountId) account with MixedCase email.
+		await persistAccountPool(
+			[
+				{
+					type: "success",
+					access: jwtWithEmail("User@Example.com"),
+					refresh: "refresh-old",
+					expires: Date.now() + 60_000,
+				},
+			],
+			false,
+		);
+		const first = await loadAccounts();
+		expect(first?.accounts).toHaveLength(1);
+
+		// Re-login: same person, lowercase email, fresh refresh token.
+		await persistAccountPool(
+			[
+				{
+					type: "success",
+					access: jwtWithEmail("user@example.com"),
+					refresh: "refresh-new",
+					expires: Date.now() + 60_000,
+				},
+			],
+			false,
+		);
+		const second = await loadAccounts();
+		// Case-insensitive email index => merged into the existing entry, not appended.
+		expect(second?.accounts).toHaveLength(1);
+		expect(second?.accounts[0]?.refreshToken).toBe("refresh-new");
+	});
+
 	it("serializes overlapping login persists without losing accounts", async () => {
 		const originalRename = fs.rename.bind(fs);
 		let firstRenameReleased = false;

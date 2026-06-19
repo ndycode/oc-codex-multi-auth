@@ -189,6 +189,21 @@ function sameOptionalIdentity(left: string | undefined, right: string | undefine
   return !!normalizedLeft && !!normalizedRight && normalizedLeft === normalizedRight;
 }
 
+/**
+ * Email-specific identity comparison. Emails are case-insensitive, so this
+ * normalizes with `trim().toLowerCase()`. This MUST match the normalization in
+ * `lib/accounts/stale-state.ts` (findDisabledTokenSourceDuplicates) so the
+ * storage-merge layer and the codex-doctor/codex-health detectors agree on
+ * whether two records are the same account (issue #171): a divergence let
+ * `User@Example.com` (org) and `user@example.com` (disabled token re-login)
+ * escape dedup yet still get flagged as a removable duplicate.
+ */
+function sameEmailIdentity(left: string | undefined, right: string | undefined): boolean {
+  const normalizedLeft = normalizeWorkspaceIdentityPart(left)?.toLowerCase();
+  const normalizedRight = normalizeWorkspaceIdentityPart(right)?.toLowerCase();
+  return !!normalizedLeft && !!normalizedRight && normalizedLeft === normalizedRight;
+}
+
 function isLegacyRefreshTokenDuplicate<T extends AccountLike>(left: T, right: T): boolean {
   const refreshToken = normalizeWorkspaceIdentityPart(left.refreshToken);
   const leftOrganizationId = normalizeWorkspaceIdentityPart(left.organizationId);
@@ -202,7 +217,7 @@ function isLegacyRefreshTokenDuplicate<T extends AccountLike>(left: T, right: T)
   const rightTokenLike = !rightOrganizationId && right.accountIdSource === "token";
   if (
     ((leftOrgLike && rightTokenLike) || (rightOrgLike && leftTokenLike)) &&
-    (sameOptionalIdentity(left.email, right.email) ||
+    (sameEmailIdentity(left.email, right.email) ||
       (!!refreshToken && refreshToken === normalizeWorkspaceIdentityPart(right.refreshToken)))
   ) {
     return true;
@@ -337,7 +352,7 @@ export function deduplicateAccountsByEmail<T extends { organizationId?: string; 
       continue;
     }
 
-    const email = account.email?.trim();
+    const email = account.email?.trim().toLowerCase();
     if (!email) {
       indicesToKeep.add(i);
       continue;
