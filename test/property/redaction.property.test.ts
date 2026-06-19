@@ -24,25 +24,49 @@ const arbOpaqueSecret = fc
   .filter((s) => s.trim().length >= 8);
 
 describe("DEEP STRESS: email masking invariant (#163)", () => {
-  it("masked email never contains the full local part", () => {
+  it("masked email reveals at most the first 2 local chars", () => {
     fc.assert(
       fc.property(arbEmail, (email) => {
         const masked = maskEmailForDisplay(email);
         if (!masked) return true;
         const atIndex = email.indexOf("@");
         const local = email.slice(0, atIndex);
-        // The full local part must not appear verbatim unless it is <= 2 chars
-        // (the masker intentionally keeps up to the first 2 chars).
-        if (local.length > 2) {
-          expect(masked.includes(local)).toBe(false);
-        }
-        // Domain is preserved for distinguishability.
         const domain = email.slice(atIndex);
+        // The masker contract is: masked local = first min(2, len) chars + "***".
+        // We assert that EXACT shape rather than a substring check, because a
+        // substring check is fragile when the local part itself contains the
+        // mask characters (e.g. "a.*@a.aa" -> "a.***@a.aa", where the local
+        // "a.*" reappears as the kept "a." plus a "*" from the mask). The real
+        // security property is that no more than the first 2 local chars survive.
+        const maskedAtIndex = masked.indexOf("@");
+        const maskedLocal =
+          maskedAtIndex >= 0 ? masked.slice(0, maskedAtIndex) : masked;
+        const expectedRevealed = local.slice(0, Math.min(2, local.length));
+        expect(maskedLocal).toBe(`${expectedRevealed}***`);
+        // Domain is preserved verbatim for distinguishability.
         expect(masked.endsWith(domain)).toBe(true);
         return true;
       }),
       { numRuns: 500 },
     );
+  });
+
+  // Deterministic regression for the two classes that previously made the
+  // property test seed-flaky: (1) the local part also occurs in the domain
+  // (abc@abc.com), and (2) the local part contains the mask character itself
+  // (a.*@a.aa -> a.***). Both broke a naive substring check; the real contract
+  // is that the masked local reveals at most the first 2 chars. (#163)
+  it("reveals at most the first 2 local chars in tricky cases", () => {
+    const cases: Array<[string, string]> = [
+      ["abc@abc.com", "ab***@abc.com"],
+      ["tom@tom.io", "to***@tom.io"],
+      ["xyz@sub.xyz.org", "xy***@sub.xyz.org"],
+      ["a.*@a.aa", "a.***@a.aa"],
+      ["a@a.com", "a***@a.com"],
+    ];
+    for (const [email, expected] of cases) {
+      expect(maskEmailForDisplay(email)).toBe(expected);
+    }
   });
 
   it("resolveDisplayEmail with masking enabled never returns the raw email (len>3 local)", () => {
