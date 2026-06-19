@@ -13,6 +13,11 @@ import { AccountManager } from "../accounts.js";
 import { queuedRefresh } from "../refresh-queue.js";
 import { MODEL_FAMILIES } from "../prompts/codex.js";
 import {
+	clearRefreshedAccountsStaleState,
+	findDisabledTokenSourceDuplicates,
+} from "../accounts/stale-state.js";
+import { clearTuiQuotaSnapshot } from "../tui-quota-cache.js";
+import {
 	buildBeginnerDoctorFindings,
 	formatPromptCacheSnapshot,
 	recommendBeginnerNextAction,
@@ -92,6 +97,27 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 				now,
 				runtime,
 			});
+
+			// Surface disabled token-source duplicates that shadow an enabled,
+			// org-backed account by email (issue #171). These appear when a
+			// re-login mints a token-source entry instead of updating the org
+			// account; harmless for rotation but they pollute diagnostics. We flag
+			// rather than auto-remove because the only link between the two is
+			// email, and email-only merges must not blindly collapse multi-org
+			// accounts (#64).
+			const disabledTokenSourceDuplicates = storage
+				? findDisabledTokenSourceDuplicates(storage.accounts)
+				: [];
+			if (disabledTokenSourceDuplicates.length > 0) {
+				findings.push({
+					severity: "warning",
+					code: "disabled-token-source-duplicate",
+					summary: `${disabledTokenSourceDuplicates.length} disabled duplicate account entry(ies) shadow a real account.`,
+					action: `Remove the leftover entry(ies) with \`codex-remove\` (slots: ${disabledTokenSourceDuplicates
+						.map((index) => index + 1)
+						.join(", ")}).`,
+				});
+			}
 			let routingVisibility: RoutingVisibilitySnapshot | null = null;
 			const appliedFixes: string[] = [];
 			const fixErrors: string[] = [];
@@ -99,6 +125,7 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 			if (fix && storage && storage.accounts.length > 0) {
 				let changedByRefresh = false;
 				let refreshedCount = 0;
+				const refreshedAccounts: typeof storage.accounts = [];
 				for (const account of storage.accounts) {
 					try {
 						const refreshResult = await queuedRefresh(account.refreshToken);
@@ -108,6 +135,7 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 							account.expiresAt = refreshResult.expires;
 							changedByRefresh = true;
 							refreshedCount += 1;
+							refreshedAccounts.push(account);
 						}
 					} catch (error) {
 						fixErrors.push(
@@ -115,12 +143,36 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 						);
 					}
 				}
+
+				// A successful refresh proves the credential is alive, so clear any
+				// stale cooldown / rate-limit state that would otherwise keep the
+				// recovered account out of rotation (issue #171). Without this, the
+				// auto-switch below finds no eligible account and the dead routing
+				// persists across restarts.
+				if (refreshedAccounts.length > 0) {
+					const staleSummary = clearRefreshedAccountsStaleState(refreshedAccounts);
+					if (staleSummary.cooldownsCleared > 0) {
+						changedByRefresh = true;
+						appliedFixes.push(
+							`Cleared cooldown on ${staleSummary.cooldownsCleared} recovered account(s).`,
+						);
+					}
+					if (staleSummary.rateLimitKeysCleared > 0) {
+						changedByRefresh = true;
+						appliedFixes.push(
+							`Cleared ${staleSummary.rateLimitKeysCleared} stale rate-limit marker(s).`,
+						);
+					}
+				}
+
 				if (changedByRefresh) {
 					try {
 						await saveAccounts(storage);
-						appliedFixes.push(
-							`Refreshed ${refreshedCount} account token(s).`,
-						);
+						if (refreshedCount > 0) {
+							appliedFixes.push(
+								`Refreshed ${refreshedCount} account token(s).`,
+							);
+						}
 					} catch (error) {
 						fixErrors.push(
 							`Failed to persist refresh updates: ${
@@ -128,6 +180,20 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 							}`,
 						);
 					}
+				}
+
+				// Stale TUI quota cache can reference an account index/count that no
+				// longer matches the pool, making diagnostics misleading (#171).
+				// Clearing it forces a fresh snapshot on the next request.
+				try {
+					await clearTuiQuotaSnapshot();
+					appliedFixes.push("Cleared stale TUI quota cache.");
+				} catch (error) {
+					fixErrors.push(
+						`Failed to clear TUI quota cache: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+					);
 				}
 
 				try {

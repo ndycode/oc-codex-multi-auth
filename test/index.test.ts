@@ -1895,6 +1895,61 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(result).toContain("No eligible account available for auto-switch");
 		});
 
+		it("clears stale auth-failure cooldown and rate-limit markers on fix (issue #171)", async () => {
+			mockStorage.accounts = [
+				{
+					refreshToken: "r1",
+					email: "user@example.com",
+					accountId: "org-AAA",
+					organizationId: "org-AAA",
+					accountIdSource: "org",
+					coolingDownUntil: Date.now() + 600_000,
+					cooldownReason: "auth-failure",
+					rateLimitResetTimes: {
+						"gpt-5.4": Date.now() + 3_600_000,
+						"gpt-5.4-mini": Date.now() + 3_600_000,
+					},
+				},
+			];
+
+			const result = await plugin.tool["codex-doctor"].execute({ fix: true });
+
+			expect(result).toContain("Cleared cooldown on 1 recovered account(s).");
+			expect(result).toContain("Cleared 2 stale rate-limit marker(s).");
+			// The recovered account must no longer carry the stale block so rotation
+			// can select it again.
+			expect(mockStorage.accounts[0]?.coolingDownUntil).toBeUndefined();
+			expect(mockStorage.accounts[0]?.cooldownReason).toBeUndefined();
+			expect(mockStorage.accounts[0]?.rateLimitResetTimes).toEqual({});
+		});
+
+
+		it("flags a disabled token-source duplicate that shadows an org account (issue #171)", async () => {
+			mockStorage.accounts = [
+				{
+					refreshToken: "r-org",
+					email: "user@example.com",
+					accountId: "org-AAA",
+					organizationId: "org-AAA",
+					accountIdSource: "org",
+					enabled: true,
+				},
+				{
+					refreshToken: "r-token",
+					email: "user@example.com",
+					accountId: "uuid-fresh-123",
+					accountIdSource: "token",
+					enabled: false,
+				},
+			];
+
+			const result = await plugin.tool["codex-doctor"].execute({ deep: false });
+
+			expect(result).toContain("disabled duplicate account entry");
+			expect(result).toContain("codex-remove");
+		});
+
+
 		it("returns json output for deep diagnostics", async () => {
 			mockStorage.accounts = [{ refreshToken: "r1", email: "user@example.com" }];
 			const result = parseJsonOutput<{
