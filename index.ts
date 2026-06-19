@@ -145,6 +145,7 @@ import {
         handleSuccessResponse,
 	isDeactivatedWorkspaceError,
 	isInvalidatedAuthTokenError,
+	createAbortError,
 	getUnsupportedCodexModelInfo,
 	resolveUnsupportedCodexFallbackModel,
         refreshAndUpdateToken,
@@ -1846,10 +1847,15 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 							};
 
 					const abortSignal = requestInit?.signal ?? init?.signal ?? null;
+					// Surface caller-cancellation during retry/backoff waits as a proper
+					// AbortError (name set) carrying the caller abort reason, mirroring the
+					// fetch path (Aborted by user) and lib/codex-usage.ts isAbortError. A bare
+					// new Error("Aborted") was opaque and dropped abortSignal.reason (#176).
+					const abortError = (): Error => createAbortError(abortSignal);
 					const sleep = (ms: number): Promise<void> =>
 						new Promise((resolve, reject) => {
 							if (abortSignal?.aborted) {
-								reject(new Error("Aborted"));
+								reject(abortError());
 								return;
 							}
 
@@ -1860,7 +1866,7 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 
 							const onAbort = () => {
 								cleanup();
-								reject(new Error("Aborted"));
+								reject(abortError());
 							};
 
 							const cleanup = () => {
@@ -1881,7 +1887,7 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 						
 						while (Date.now() < endTime) {
 							if (abortSignal?.aborted) {
-								throw new Error("Aborted");
+								throw abortError();
 							}
 							
 							const remaining = Math.max(0, endTime - Date.now());

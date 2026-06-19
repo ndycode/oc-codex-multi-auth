@@ -46,6 +46,28 @@ export interface EntitlementError {
         message: string;
 }
 
+/**
+ * Build an AbortError for caller-cancellation during retry/backoff waits.
+ *
+ * The request retry loop (index.ts) awaits sleeps that watch the caller
+ * AbortSignal. A bare `new Error("Aborted")` surfaced as an opaque, unnamed
+ * error and dropped `signal.reason` (issue #176). This mirrors the fetch-path
+ * behavior and the `isAbortError` convention in lib/codex-usage.ts: when the
+ * signal carries an Error reason it is propagated as-is; otherwise a fresh
+ * Error named "AbortError" is returned (carrying a string reason if present).
+ */
+export function createAbortError(signal?: AbortSignal | null): Error {
+        const reason = signal?.reason;
+        if (reason instanceof Error) {
+                return reason;
+        }
+        const err = new Error(
+                typeof reason === "string" && reason.length > 0 ? reason : "Aborted",
+        );
+        err.name = "AbortError";
+        return err;
+}
+
 const CODEX_BASE_URL_OBJECT = new URL(CODEX_BASE_URL);
 const CODEX_BASE_PATH_PREFIX = CODEX_BASE_URL_OBJECT.pathname.endsWith("/")
 	? CODEX_BASE_URL_OBJECT.pathname.slice(0, -1)
