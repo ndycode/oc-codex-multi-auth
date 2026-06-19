@@ -23,6 +23,7 @@ export type AccountLike = {
   refreshToken: string;
   addedAt?: number;
   lastUsed?: number;
+  enabled?: boolean;
 };
 
 const normalizeWorkspaceIdentityPart = (value: unknown): string | undefined =>
@@ -136,6 +137,37 @@ function pickNewestAccountIndex<T extends AccountLike>(
   return newest === candidate ? candidateIndex : existingIndex;
 }
 
+function isOrgLikeAccount<T extends AccountLike>(account: T): boolean {
+  return (
+    !!normalizeWorkspaceIdentityPart(account.organizationId) ||
+    account.accountIdSource === "org"
+  );
+}
+
+/**
+ * Resolve the merged `enabled` flag.
+ *
+ * Default is fail-closed: if either side is explicitly disabled, the merge is
+ * disabled. The ONE exception (issue #171): when exactly one side is an
+ * org-backed real account and the other is a token-source duplicate (a plugin
+ * re-login artifact), the org account's own `enabled` state governs. A disabled
+ * token duplicate must never silently disable the real account it collapses
+ * into — otherwise the canonical account becomes unroutable and unrecoverable.
+ */
+function resolveMergedEnabled<T extends AccountLike>(target: T, source: T): boolean | undefined {
+  const targetOrgLike = isOrgLikeAccount(target);
+  const sourceOrgLike = isOrgLikeAccount(source);
+  const targetTokenDup = !targetOrgLike && target.accountIdSource === "token";
+  const sourceTokenDup = !sourceOrgLike && source.accountIdSource === "token";
+
+  if (targetOrgLike && sourceTokenDup) return target.enabled;
+  if (sourceOrgLike && targetTokenDup) return source.enabled;
+
+  // Fail-closed for every other shape (same-identity, two real accounts, etc.).
+  if (target.enabled === false || source.enabled === false) return false;
+  return target.enabled ?? source.enabled;
+}
+
 function mergeAccountRecords<T extends AccountLike>(target: T, source: T): T {
   const newest = selectNewestAccount(target, source);
   const older = newest === target ? source : target;
@@ -147,6 +179,7 @@ function mergeAccountRecords<T extends AccountLike>(target: T, source: T): T {
     accountIdSource: target.accountIdSource ?? source.accountIdSource,
     accountLabel: target.accountLabel ?? source.accountLabel,
     email: target.email ?? source.email,
+    enabled: resolveMergedEnabled(target, source),
   };
 }
 

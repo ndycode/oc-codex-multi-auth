@@ -316,6 +316,75 @@ describe("storage", () => {
       expect(loaded?.activeIndexByFamily?.codex).toBe(0);
     });
 
+    // Issue #171: a disabled token-source duplicate (a plugin re-login artifact)
+    // must NOT disable the real org account it collapses into during dedup.
+    it("keeps the org account enabled when a disabled token-source duplicate merges in (#171)", async () => {
+      const now = Date.now();
+      await saveAccounts({
+        version: 3,
+        activeIndex: 0,
+        accounts: [
+          {
+            accountId: "org-AAA",
+            organizationId: "org-AAA",
+            accountIdSource: "org",
+            email: "user@example.com",
+            refreshToken: "OLD-refresh",
+            addedAt: 100,
+            lastUsed: 200,
+            coolingDownUntil: now + 3_600_000,
+            cooldownReason: "auth-failure",
+          },
+          {
+            accountId: "uuid-fresh",
+            accountIdSource: "token",
+            email: "user@example.com",
+            refreshToken: "FRESH-refresh",
+            addedAt: 999,
+            lastUsed: 999,
+            enabled: false,
+          },
+        ],
+      });
+      const loaded = await loadAccounts();
+      expect(loaded?.accounts).toHaveLength(1);
+      const survivor = loaded!.accounts[0]!;
+      expect(survivor.organizationId).toBe("org-AAA");
+      // The real account must remain routable: NOT disabled by the dup.
+      expect(survivor.enabled).not.toBe(false);
+      // And it carries the fresh token from the newer (dup) record.
+      expect(survivor.refreshToken).toBe("FRESH-refresh");
+    });
+
+    it("preserves fail-closed when a same-identity record was user-disabled (#171 guard)", async () => {
+      await saveAccounts({
+        version: 3,
+        activeIndex: 0,
+        accounts: [
+          { accountId: "org-X", organizationId: "org-X", accountIdSource: "org", email: "u@e.com", refreshToken: "RT", addedAt: 100, lastUsed: 100, enabled: false },
+          { accountId: "org-X", organizationId: "org-X", accountIdSource: "org", email: "u@e.com", refreshToken: "RT", addedAt: 200, lastUsed: 200, enabled: true },
+        ],
+      });
+      const loaded = await loadAccounts();
+      expect(loaded?.accounts).toHaveLength(1);
+      // User intent wins: a genuinely disabled real account stays disabled.
+      expect(loaded!.accounts[0]!.enabled).toBe(false);
+    });
+
+    it("keeps two distinct real org accounts both enabled (no merge regression)", async () => {
+      await saveAccounts({
+        version: 3,
+        activeIndex: 0,
+        accounts: [
+          { accountId: "org-1", organizationId: "org-1", accountIdSource: "org", email: "a@e.com", refreshToken: "R1", addedAt: 100, lastUsed: 100, enabled: true },
+          { accountId: "org-2", organizationId: "org-2", accountIdSource: "org", email: "b@e.com", refreshToken: "R2", addedAt: 100, lastUsed: 100, enabled: true },
+        ],
+      });
+      const loaded = await loadAccounts();
+      expect(loaded?.accounts).toHaveLength(2);
+      expect(loaded!.accounts.every((a) => a.enabled !== false)).toBe(true);
+    });
+
     it("retains per-account rate-limit and cooldown metadata through save/load round-trip", async () => {
       await saveAccounts({
         version: 3,
