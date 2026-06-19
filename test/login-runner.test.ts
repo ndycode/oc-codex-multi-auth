@@ -91,6 +91,21 @@ describe("login-runner persistAccountPool", () => {
 		expect(second?.accounts[0]?.refreshToken).toBe("refresh-new");
 	});
 
+	it("keeps two genuinely distinct emails as separate accounts (control)", async () => {
+		await persistAccountPool(
+			[{ type: "success", access: jwtWithEmail("user@example.com"), refresh: "r-a", expires: Date.now() + 60_000 }],
+			false,
+		);
+		await persistAccountPool(
+			[{ type: "success", access: jwtWithEmail("other@example.com"), refresh: "r-b", expires: Date.now() + 60_000 }],
+			false,
+		);
+		const loaded = await loadAccounts();
+		// Distinct emails must NOT be merged — proves the merge test is non-vacuous.
+		expect(loaded?.accounts).toHaveLength(2);
+	});
+
+
 	it("serializes overlapping login persists without losing accounts", async () => {
 		const originalRename = fs.rename.bind(fs);
 		let firstRenameReleased = false;

@@ -184,6 +184,11 @@ describe("findDisabledAccountsWithFreshCredential (issue #171)", () => {
 		expect(findDisabledAccountsWithFreshCredential(accounts, NOW)).toEqual([]);
 	});
 
+	it("ignores an account with no enabled field (undefined is not disabled)", () => {
+		const accounts = [{ accessToken: "tok", expiresAt: FUTURE }];
+		expect(findDisabledAccountsWithFreshCredential(accounts, NOW)).toEqual([]);
+	});
+
 	it("ignores a disabled account whose credential is expired", () => {
 		const accounts = [{ enabled: false, accessToken: "tok", expiresAt: PAST }];
 		expect(findDisabledAccountsWithFreshCredential(accounts, NOW)).toEqual([]);
