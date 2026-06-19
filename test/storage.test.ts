@@ -318,6 +318,43 @@ describe("storage", () => {
 
     // Issue #171: a disabled token-source duplicate (a plugin re-login artifact)
     // must NOT disable the real org account it collapses into during dedup.
+    // Issue #171 (email case divergence): storage dedup must compare emails
+    // case-insensitively so it agrees with the codex-doctor/codex-health
+    // detectors (which lowercase). Otherwise User@Example.com (org) and
+    // user@example.com (token dup) escape dedup but get flagged as removable.
+    it("collapses an org + disabled token-dup that differ only by email case (#171)", async () => {
+      const now = Date.now();
+      await saveAccounts({
+        version: 3,
+        activeIndex: 0,
+        accounts: [
+          {
+            accountId: "org-AAA",
+            organizationId: "org-AAA",
+            accountIdSource: "org",
+            email: "User@Example.com",
+            refreshToken: "OLD-refresh",
+            addedAt: 100,
+            lastUsed: 200,
+          },
+          {
+            accountId: "uuid-fresh",
+            accountIdSource: "token",
+            email: "user@example.com",
+            refreshToken: "FRESH-refresh",
+            addedAt: 999,
+            lastUsed: 999,
+            enabled: false,
+          },
+        ],
+      });
+      const loaded = await loadAccounts();
+      // Case-insensitive email match => the two collapse into one org account.
+      expect(loaded?.accounts).toHaveLength(1);
+      expect(loaded!.accounts[0]!.organizationId).toBe("org-AAA");
+      expect(loaded!.accounts[0]!.enabled).not.toBe(false);
+    });
+
     it("keeps the org account enabled when a disabled token-source duplicate merges in (#171)", async () => {
       const now = Date.now();
       await saveAccounts({

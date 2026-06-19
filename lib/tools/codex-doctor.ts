@@ -14,6 +14,7 @@ import { queuedRefresh } from "../refresh-queue.js";
 import { MODEL_FAMILIES } from "../prompts/codex.js";
 import {
 	clearRefreshedAccountsStaleState,
+	findDisabledAccountsWithFreshCredential,
 	findDisabledTokenSourceDuplicates,
 } from "../accounts/stale-state.js";
 import { clearTuiQuotaSnapshot } from "../tui-quota-cache.js";
@@ -114,6 +115,21 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 					code: "disabled-token-source-duplicate",
 					summary: `${disabledTokenSourceDuplicates.length} disabled duplicate account entry(ies) shadow a real account.`,
 					action: `Remove the leftover entry(ies) with \`codex-remove\` (slots: ${disabledTokenSourceDuplicates
+						.map((index) => index + 1)
+						.join(", ")}).`,
+				});
+			}
+			// A user-disabled account that absorbed a fresh enabled re-login stays
+			// disabled (fail-closed) but is otherwise invisible to diagnostics (#171).
+			const disabledWithFreshCredential = storage
+				? findDisabledAccountsWithFreshCredential(storage.accounts)
+				: [];
+			if (disabledWithFreshCredential.length > 0) {
+				findings.push({
+					severity: "warning",
+					code: "disabled-account-fresh-credential",
+					summary: `${disabledWithFreshCredential.length} disabled account(s) hold a fresh login credential.`,
+					action: `A recent re-login landed on a disabled slot; re-enable it in oc-codex-multi-auth-accounts.json if intended (slots: ${disabledWithFreshCredential
 						.map((index) => index + 1)
 						.join(", ")}).`,
 				});

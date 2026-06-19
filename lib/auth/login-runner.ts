@@ -559,7 +559,11 @@ export async function persistAccountPool(
 				const organizationId = account.organizationId?.trim();
 				const accountId = account.accountId?.trim();
 				const refreshToken = account.refreshToken?.trim();
-				const email = account.email?.trim();
+				// Lowercase the email index key to match the lookup side
+				// (sanitizeEmail) and getExactIdentityKey; a trim-only key here let a
+				// mixed-case re-login miss its existing no-org entry and append a
+				// duplicate (#171 email-identity consistency).
+				const email = sanitizeEmail(account.email);
 
 				if (refreshToken) {
 					pushIndex(byRefreshTokenGlobal, refreshToken, i);
