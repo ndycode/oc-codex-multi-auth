@@ -167,3 +167,56 @@ export function findDisabledTokenSourceDuplicates(
 	return duplicates;
 }
 
+/**
+ * Subset of a stored account used for the read-only stale-state diagnostic.
+ */
+export interface StaleStateScanAccount {
+	enabled?: boolean;
+	coolingDownUntil?: number;
+	cooldownReason?: string;
+	rateLimitResetTimes?: Record<string, number | undefined>;
+}
+
+/**
+ * Identify enabled accounts that are currently blocked ONLY by a future-dated
+ * cooldown and/or future-dated rate-limit reset — i.e. the exact dark state from
+ * issue #171 that `codex-doctor --fix` can recover (a successful token refresh
+ * proves the credential is alive, so the block is stale).
+ *
+ * This is read-only (it mutates nothing) so both `codex-health` and the
+ * non-`--fix` `codex-doctor` path can surface the finding and point the user at
+ * the repair. Expired cooldowns / rate-limits are ignored because the normal
+ * request path already clears those.
+ *
+ * @returns the 0-based indexes of accounts blocked by recoverable stale state.
+ */
+export function findStaleRecoverableAccounts(
+	accounts: StaleStateScanAccount[],
+	now: number = nowMs(),
+): number[] {
+	const blocked: number[] = [];
+	for (let i = 0; i < accounts.length; i += 1) {
+		const account = accounts[i];
+		if (!account) continue;
+		if (account.enabled === false) continue;
+
+		const hasFutureCooldown =
+			typeof account.coolingDownUntil === "number" && account.coolingDownUntil > now;
+
+		let hasFutureRateLimit = false;
+		if (account.rateLimitResetTimes) {
+			for (const reset of Object.values(account.rateLimitResetTimes)) {
+				if (typeof reset === "number" && reset > now) {
+					hasFutureRateLimit = true;
+					break;
+				}
+			}
+		}
+
+		if (hasFutureCooldown || hasFutureRateLimit) {
+			blocked.push(i);
+		}
+	}
+	return blocked;
+}
+

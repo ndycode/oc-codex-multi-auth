@@ -126,7 +126,10 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 				let changedByRefresh = false;
 				let refreshedCount = 0;
 				const refreshedAccounts: typeof storage.accounts = [];
-				for (const account of storage.accounts) {
+				const reloginNeeded: number[] = [];
+				for (let accountIndex = 0; accountIndex < storage.accounts.length; accountIndex++) {
+					const account = storage.accounts[accountIndex];
+					if (!account) continue;
 					try {
 						const refreshResult = await queuedRefresh(account.refreshToken);
 						if (refreshResult.type === "success") {
@@ -136,6 +139,18 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 							changedByRefresh = true;
 							refreshedCount += 1;
 							refreshedAccounts.push(account);
+						} else {
+							// A failed refresh (vs. a thrown error) means the stored
+							// credential is genuinely dead — re-login is required. Surface
+							// it explicitly so an all-dark pool with expired tokens does not
+							// fail silently (issue #171: "surface this state"). We do NOT
+							// clear stale state for these accounts: they really are blocked.
+							const detail =
+								refreshResult.message ?? refreshResult.reason ?? "token refresh failed";
+							reloginNeeded.push(accountIndex + 1);
+							fixErrors.push(
+								`Account ${accountIndex + 1}: ${detail} — run \`opencode auth login\` to re-authenticate.`,
+							);
 						}
 					} catch (error) {
 						fixErrors.push(
@@ -206,6 +221,15 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 							}`,
 						);
 					}
+				}
+
+				// Surface a clear next step when one or more accounts could not be
+				// refreshed: the credential is dead and only re-login fixes it. Without
+				// this the user sees no eligible account but no cause (issue #171).
+				if (reloginNeeded.length > 0) {
+					appliedFixes.push(
+						`${reloginNeeded.length} account(s) need re-login (slots: ${reloginNeeded.join(", ")}). Run \`opencode auth login\`.`,
+					);
 				}
 
 				try {

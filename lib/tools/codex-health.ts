@@ -6,6 +6,10 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
 import { loadAccounts } from "../storage.js";
 import { queuedRefresh } from "../refresh-queue.js";
+import {
+	findDisabledTokenSourceDuplicates,
+	findStaleRecoverableAccounts,
+} from "../accounts/stale-state.js";
 import { formatUiHeader, formatUiItem, paintUiText } from "../ui/format.js";
 import { normalizeToolOutputFormat, renderJsonOutput } from "../runtime.js";
 import type { ToolContext } from "./index.js";
@@ -134,11 +138,31 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 			results.push(
 				`Summary: ${healthyCount} healthy, ${unhealthyCount} unhealthy`,
 			);
+
+			// Surface recoverable stale state and disabled token-source duplicates
+			// (issue #171). codex-health is read-only, so it points the user at the
+			// repair (`codex-doctor --fix` / `codex-remove`) rather than mutating.
+			const staleRecoverable = findStaleRecoverableAccounts(storage.accounts);
+			const duplicateSlots = findDisabledTokenSourceDuplicates(storage.accounts);
+			const staleSlots = staleRecoverable.map((index) => index + 1);
+			const dupSlots = duplicateSlots.map((index) => index + 1);
+			if (staleSlots.length > 0) {
+				results.push(
+					`Stale state: ${staleSlots.length} account(s) blocked by a stale cooldown/rate-limit (slots: ${staleSlots.join(", ")}). Run \`codex-doctor --fix\`.`,
+				);
+			}
+			if (dupSlots.length > 0) {
+				results.push(
+					`Duplicates: ${dupSlots.length} disabled duplicate entry(ies) shadow a real account (slots: ${dupSlots.join(", ")}). Remove with \`codex-remove\`.`,
+				);
+			}
 			if (outputFormat === "json") {
 				return renderJsonOutput({
 					totalAccounts: storage.accounts.length,
 					healthyCount,
 					unhealthyCount,
+					staleRecoverableSlots: staleSlots,
+					disabledDuplicateSlots: dupSlots,
 					accounts: jsonAccounts,
 				});
 			}

@@ -3,6 +3,7 @@ import {
 	clearRefreshedAccountStaleState,
 	clearRefreshedAccountsStaleState,
 	findDisabledTokenSourceDuplicates,
+	findStaleRecoverableAccounts,
 	type StaleStateAccount,
 } from "../lib/accounts/stale-state.js";
 
@@ -123,3 +124,47 @@ describe("findDisabledTokenSourceDuplicates", () => {
 		expect(findDisabledTokenSourceDuplicates(accounts)).toEqual([1]);
 	});
 });
+
+describe("findStaleRecoverableAccounts", () => {
+	const NOW = 1_700_000_000_000;
+	const FUTURE = NOW + 3_600_000;
+	const PAST = NOW - 3_600_000;
+
+	it("flags an account blocked by a future cooldown", () => {
+		const accounts = [{ enabled: true, coolingDownUntil: FUTURE, cooldownReason: "auth-failure" }];
+		expect(findStaleRecoverableAccounts(accounts, NOW)).toEqual([0]);
+	});
+
+	it("flags an account blocked by a future rate-limit reset", () => {
+		const accounts = [{ enabled: true, rateLimitResetTimes: { "gpt-5.4": FUTURE } }];
+		expect(findStaleRecoverableAccounts(accounts, NOW)).toEqual([0]);
+	});
+
+	it("ignores expired cooldown/rate-limit (the request path clears those)", () => {
+		const accounts = [
+			{ enabled: true, coolingDownUntil: PAST, cooldownReason: "auth-failure" },
+			{ enabled: true, rateLimitResetTimes: { "gpt-5.4": PAST } },
+		];
+		expect(findStaleRecoverableAccounts(accounts, NOW)).toEqual([]);
+	});
+
+	it("ignores a disabled account (not recoverable by --fix)", () => {
+		const accounts = [{ enabled: false, coolingDownUntil: FUTURE }];
+		expect(findStaleRecoverableAccounts(accounts, NOW)).toEqual([]);
+	});
+
+	it("ignores a clean enabled account", () => {
+		const accounts = [{ enabled: true, rateLimitResetTimes: {} }];
+		expect(findStaleRecoverableAccounts(accounts, NOW)).toEqual([]);
+	});
+
+	it("returns multiple blocked slots in order", () => {
+		const accounts = [
+			{ enabled: true, coolingDownUntil: FUTURE },
+			{ enabled: true, rateLimitResetTimes: { codex: PAST } },
+			{ enabled: true, rateLimitResetTimes: { "gpt-5.4": FUTURE, "gpt-5.4-mini": FUTURE } },
+		];
+		expect(findStaleRecoverableAccounts(accounts, NOW)).toEqual([0, 2]);
+	});
+});
+

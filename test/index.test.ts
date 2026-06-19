@@ -1977,6 +1977,72 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(result).toContain("Failed to persist refresh updates");
 		});
 
+		it("surfaces re-login-required when a refresh fails during fix (issue #171)", async () => {
+			mockStorage.accounts = [
+				{ refreshToken: "dead-token", email: "user@example.com", accountId: "org-AAA", organizationId: "org-AAA", accountIdSource: "org" },
+			];
+			const { queuedRefresh } = await import("../lib/refresh-queue.js");
+			vi.mocked(queuedRefresh).mockResolvedValueOnce({
+				type: "failed",
+				reason: "invalid_grant",
+				message: "refresh token expired",
+			});
+
+			const result = (await plugin.tool["codex-doctor"].execute({ fix: true })) as string;
+
+			// A failed refresh must not be silent: the user is told to re-login.
+			expect(result).toContain("opencode auth login");
+			expect(result).toMatch(/need re-login|re-authenticate/i);
+		});
+
+		it("recovers the reporter's exact composite 3-account pool on fix (issue #171)", async () => {
+			// Mirrors comment 4748562388: slot 0 org+auth-failure cooldown, slot 1 org
+			// with stale gpt-5.4 / gpt-5.4-mini rate-limits, slot 2 disabled token dup.
+			mockStorage.accounts = [
+				{
+					refreshToken: "r-a",
+					email: "user@example.com",
+					accountId: "org-AAA",
+					organizationId: "org-AAA",
+					accountIdSource: "org",
+					enabled: true,
+					coolingDownUntil: Date.now() + 600_000,
+					cooldownReason: "auth-failure",
+				},
+				{
+					refreshToken: "r-b",
+					email: "two@example.com",
+					accountId: "org-BBB",
+					organizationId: "org-BBB",
+					accountIdSource: "org",
+					enabled: true,
+					rateLimitResetTimes: {
+						"gpt-5.4": Date.now() + 3_600_000,
+						"gpt-5.4-mini": Date.now() + 3_600_000,
+					},
+				},
+				{
+					refreshToken: "r-dup",
+					email: "user@example.com",
+					accountId: "uuid-fresh",
+					accountIdSource: "token",
+					enabled: false,
+				},
+			];
+
+			const result = (await plugin.tool["codex-doctor"].execute({ fix: true })) as string;
+
+			// Stale cooldown + both rate-limit markers cleared on the two alive accounts.
+			expect(result).toContain("Cleared cooldown on 1 recovered account(s).");
+			expect(result).toContain("Cleared 2 stale rate-limit marker(s).");
+			expect(mockStorage.accounts[0]?.coolingDownUntil).toBeUndefined();
+			expect(mockStorage.accounts[1]?.rateLimitResetTimes).toEqual({});
+			// The disabled token-source duplicate (slot 3) is surfaced, not removed.
+			expect(result).toContain("disabled duplicate account entry");
+			expect(mockStorage.accounts).toHaveLength(3);
+			expect(mockStorage.accounts[2]?.enabled).toBe(false);
+		});
+
 		it("returns json output for deep diagnostics", async () => {
 			mockStorage.accounts = [{ refreshToken: "r1", email: "user@example.com" }];
 			const result = parseJsonOutput<{
@@ -2122,6 +2188,33 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(result).toContain("Healthy");
 		});
 
+		it("surfaces stale-state and duplicate findings (issue #171)", async () => {
+			mockStorage.accounts = [
+				{
+					refreshToken: "r-org",
+					email: "user@example.com",
+					accountId: "org-AAA",
+					organizationId: "org-AAA",
+					accountIdSource: "org",
+					enabled: true,
+					coolingDownUntil: Date.now() + 600_000,
+					cooldownReason: "auth-failure",
+				},
+				{
+					refreshToken: "r-token",
+					email: "user@example.com",
+					accountId: "uuid-fresh",
+					accountIdSource: "token",
+					enabled: false,
+				},
+			];
+			const result = (await plugin.tool["codex-health"].execute()) as string;
+			expect(result).toContain("Stale state:");
+			expect(result).toContain("codex-doctor --fix");
+			expect(result).toContain("disabled duplicate entry");
+			expect(result).toContain("codex-remove");
+		});
+
 		it("returns json output for health checks", async () => {
 			mockStorage.accounts = [{ refreshToken: "r1", email: "user@example.com" }];
 			const result = parseJsonOutput<{
@@ -2129,12 +2222,16 @@ describe("OpenAIOAuthPlugin", () => {
 				healthyCount: number;
 				unhealthyCount: number;
 				accounts: Array<{ status: string }>;
+				staleRecoverableSlots: number[];
+				disabledDuplicateSlots: number[];
 			}>(await plugin.tool["codex-health"].execute({ format: "json" }));
 
 			expect(result.totalAccounts).toBe(1);
 			expect(result.healthyCount).toBe(1);
 			expect(result.unhealthyCount).toBe(0);
 			expect(result.accounts[0]?.status).toBe("healthy");
+			expect(Array.isArray(result.staleRecoverableSlots)).toBe(true);
+			expect(Array.isArray(result.disabledDuplicateSlots)).toBe(true);
 		});
 	});
 
