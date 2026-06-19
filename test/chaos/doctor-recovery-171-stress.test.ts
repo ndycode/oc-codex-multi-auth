@@ -28,6 +28,14 @@ import {
 	clearRefreshedAccountsStaleState,
 	findDisabledTokenSourceDuplicates,
 } from "../../lib/accounts/stale-state.js";
+import {
+	loadAccounts,
+	saveAccounts,
+	setStoragePathDirect,
+} from "../../lib/storage.js";
+import { promises as fsp } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const FAMILY: ModelFamily = "codex";
 const NOW = 1_700_000_000_000;
@@ -334,3 +342,80 @@ describe("chaos/doctor-recovery — real manager + real recovery helpers (issue 
 	});
 });
 
+describe("chaos/doctor-recovery — single-account + disabled dup, real save/load (issue #171)", () => {
+	let dir: string;
+
+	afterEach(async () => {
+		setStoragePathDirect(null);
+		if (dir) await fsp.rm(dir, { recursive: true, force: true });
+	});
+
+	it("recovers a lone org account whose disabled token-dup merged in", async () => {
+		dir = await fsp.mkdtemp(join(tmpdir(), "ralph171-"));
+		setStoragePathDirect(join(dir, "oc-codex-multi-auth-accounts.json"));
+		const FUTURE = Date.now() + 3_600_000;
+
+		// Reporter shape reduced to a single real account: an org account in
+		// auth-failure cooldown, plus a disabled token-source duplicate (same
+		// email) minted by a fresh re-login. Before the merge fix this collapsed
+		// to ONE disabled account that neither doctor nor health could recover.
+		await saveAccounts({
+			version: 3,
+			activeIndex: 0,
+			accounts: [
+				{
+					accountId: "org-AAA",
+					organizationId: "org-AAA",
+					accountIdSource: "org",
+					email: "user@example.com",
+					refreshToken: "OLD-refresh",
+					addedAt: 100,
+					lastUsed: 200,
+					coolingDownUntil: FUTURE,
+					cooldownReason: "auth-failure",
+				},
+				{
+					accountId: "uuid-fresh",
+					accountIdSource: "token",
+					email: "user@example.com",
+					refreshToken: "FRESH-refresh",
+					addedAt: 999,
+					lastUsed: 999,
+					enabled: false,
+				},
+			],
+		});
+
+		// Merge on load: ONE enabled org account, dark (cooldown active).
+		const loaded = await loadAccounts();
+		expect(loaded?.accounts).toHaveLength(1);
+		const acct = loaded!.accounts[0]!;
+		expect(acct.enabled).not.toBe(false);
+		const before = new AccountManager(undefined, loaded!);
+		expect(
+			before
+				.getSelectionExplainability(FAMILY, "gpt-5.4-mini", Date.now())
+				.filter((e) => e.eligible).length,
+		).toBe(0);
+		before.disposeShutdownHandler();
+
+		// codex-doctor --fix: refresh enabled accounts, clear stale state, persist.
+		const refreshable = loaded!.accounts.filter((a) => a.enabled !== false);
+		expect(refreshable).toHaveLength(1);
+		for (const a of refreshable) a.refreshToken = "NEW-" + a.refreshToken;
+		clearRefreshedAccountsStaleState(refreshable);
+		await saveAccounts(loaded!);
+
+		// After restart: pool is eligible again.
+		const after = await loadAccounts();
+		const mgr = new AccountManager(undefined, after!);
+		const eligible = mgr
+			.getSelectionExplainability(FAMILY, "gpt-5.4-mini", Date.now())
+			.filter((e) => e.eligible).length;
+		expect(eligible).toBe(1);
+		const selected = mgr.getCurrentOrNextForFamilyHybrid(FAMILY, "gpt-5.4-mini");
+		expect(selected?.organizationId).toBe("org-AAA");
+		expect(mgr.isAccountCoolingDown(selected as NonNullable<Active>)).toBe(false);
+		mgr.disposeShutdownHandler();
+	});
+});
