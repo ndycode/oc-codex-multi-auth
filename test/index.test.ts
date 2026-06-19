@@ -1950,6 +1950,33 @@ describe("OpenAIOAuthPlugin", () => {
 		});
 
 
+		it("does not report cleared stale-state when saveAccounts fails during fix (issue #171)", async () => {
+			mockStorage.accounts = [
+				{
+					refreshToken: "r1",
+					email: "user@example.com",
+					accountId: "org-AAA",
+					organizationId: "org-AAA",
+					accountIdSource: "org",
+					coolingDownUntil: Date.now() + 600_000,
+					cooldownReason: "auth-failure",
+					rateLimitResetTimes: { "gpt-5.4": Date.now() + 3_600_000 },
+				},
+			];
+
+			const { saveAccounts } = await import("../lib/storage.js");
+			vi.mocked(saveAccounts).mockRejectedValueOnce(new Error("disk full"));
+
+			const result = await plugin.tool["codex-doctor"].execute({ fix: true });
+
+			// The persist failed, so no "Cleared ..." message may be emitted —
+			// otherwise the user would believe the repair landed when the on-disk
+			// state still carries the stale cooldown/rate-limit block.
+			expect(result).not.toContain("Cleared cooldown");
+			expect(result).not.toContain("stale rate-limit marker");
+			expect(result).toContain("Failed to persist refresh updates");
+		});
+
 		it("returns json output for deep diagnostics", async () => {
 			mockStorage.accounts = [{ refreshToken: "r1", email: "user@example.com" }];
 			const result = parseJsonOutput<{

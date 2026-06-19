@@ -148,29 +148,36 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 				// stale cooldown / rate-limit state that would otherwise keep the
 				// recovered account out of rotation (issue #171). Without this, the
 				// auto-switch below finds no eligible account and the dead routing
-				// persists across restarts.
+				// persists across restarts. The summary is computed here but only
+				// reported after saveAccounts succeeds, so we never tell the user a
+				// fix landed while the on-disk state still carries the stale block.
+				let staleSummary = { cooldownsCleared: 0, rateLimitKeysCleared: 0 };
 				if (refreshedAccounts.length > 0) {
-					const staleSummary = clearRefreshedAccountsStaleState(refreshedAccounts);
-					if (staleSummary.cooldownsCleared > 0) {
+					staleSummary = clearRefreshedAccountsStaleState(refreshedAccounts);
+					if (staleSummary.cooldownsCleared > 0 || staleSummary.rateLimitKeysCleared > 0) {
 						changedByRefresh = true;
-						appliedFixes.push(
-							`Cleared cooldown on ${staleSummary.cooldownsCleared} recovered account(s).`,
-						);
-					}
-					if (staleSummary.rateLimitKeysCleared > 0) {
-						changedByRefresh = true;
-						appliedFixes.push(
-							`Cleared ${staleSummary.rateLimitKeysCleared} stale rate-limit marker(s).`,
-						);
 					}
 				}
 
 				if (changedByRefresh) {
 					try {
 						await saveAccounts(storage);
+						// Only report applied fixes once the write to disk has actually
+						// succeeded, otherwise a failed persist would still print
+						// "Cleared ..." and mislead the user into thinking it landed.
 						if (refreshedCount > 0) {
 							appliedFixes.push(
 								`Refreshed ${refreshedCount} account token(s).`,
+							);
+						}
+						if (staleSummary.cooldownsCleared > 0) {
+							appliedFixes.push(
+								`Cleared cooldown on ${staleSummary.cooldownsCleared} recovered account(s).`,
+							);
+						}
+						if (staleSummary.rateLimitKeysCleared > 0) {
+							appliedFixes.push(
+								`Cleared ${staleSummary.rateLimitKeysCleared} stale rate-limit marker(s).`,
 							);
 						}
 					} catch (error) {
@@ -184,16 +191,21 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 
 				// Stale TUI quota cache can reference an account index/count that no
 				// longer matches the pool, making diagnostics misleading (#171).
-				// Clearing it forces a fresh snapshot on the next request.
-				try {
-					await clearTuiQuotaSnapshot();
-					appliedFixes.push("Cleared stale TUI quota cache.");
-				} catch (error) {
-					fixErrors.push(
-						`Failed to clear TUI quota cache: ${
-							error instanceof Error ? error.message : String(error)
-						}`,
-					);
+				// Only clear it when the repair actually changed account state, so a
+				// run where every refresh failed does not report a phantom fix.
+				if (changedByRefresh) {
+					try {
+						await clearTuiQuotaSnapshot();
+						appliedFixes.push("Cleared stale TUI quota cache.");
+					} catch (error) {
+						// On Windows this can fail with EBUSY (not ENOENT) if the TUI
+						// process holds the cache file open; surface it rather than throw.
+						fixErrors.push(
+							`Failed to clear TUI quota cache: ${
+								error instanceof Error ? error.message : String(error)
+							}`,
+						);
+					}
 				}
 
 				try {
