@@ -35,6 +35,17 @@ const FUTURE = NOW + 3_600_000;
 
 type Active = ReturnType<AccountManager["getCurrentOrNextForFamilyHybrid"]>;
 
+// Every manager built in a test is tracked here and disposed in afterEach, so a
+// shutdown listener can never leak even if an assertion throws before an
+// inline disposeShutdownHandler() call would run (Greptile review on #175).
+const liveManagers: AccountManager[] = [];
+
+function makeManager(storage: AccountStorageV3): AccountManager {
+	const manager = new AccountManager(undefined, storage);
+	liveManagers.push(manager);
+	return manager;
+}
+
 function countEligible(manager: AccountManager): number {
 	return manager
 		.getSelectionExplainability(FAMILY, "gpt-5.1", Date.now())
@@ -43,17 +54,23 @@ function countEligible(manager: AccountManager): number {
 
 /**
  * Apply the doctor's recovery to a storage snapshot exactly as
- * codex-doctor --fix does for accounts whose refresh succeeded, then rebuild a
- * fresh manager from the repaired storage (a faithful "restart" — the doctor
- * persists with saveAccounts and the plugin reloads).
+ * codex-doctor --fix does, then rebuild a fresh manager from the repaired
+ * storage (a faithful "restart" — the doctor persists with saveAccounts and the
+ * plugin reloads). Crucially this mirrors the real doctor by clearing stale
+ * state only on accounts whose refresh would succeed (enabled accounts), not
+ * the whole pool, so the helper faithfully replays the code path it documents.
  */
 function recoverAndReload(storage: AccountStorageV3): AccountManager {
-	clearRefreshedAccountsStaleState(storage.accounts);
-	return new AccountManager(undefined, storage);
+	const refreshed = storage.accounts.filter((account) => account.enabled !== false);
+	clearRefreshedAccountsStaleState(refreshed);
+	return makeManager(storage);
 }
 
 describe("chaos/doctor-recovery — real manager + real recovery helpers (issue #171)", () => {
 	afterEach(() => {
+		while (liveManagers.length > 0) {
+			liveManagers.pop()?.disposeShutdownHandler();
+		}
 		vi.restoreAllMocks();
 		vi.useRealTimers();
 	});
@@ -90,11 +107,10 @@ describe("chaos/doctor-recovery — real manager + real recovery helpers (issue 
 				},
 			],
 		};
-		const manager = new AccountManager(undefined, storage);
+		const manager = makeManager(storage);
 		expect(countEligible(manager)).toBe(0);
 		expect(manager.getCurrentOrNextForFamilyHybrid(FAMILY, "gpt-5.1")).not.toBeNull(); // selector falls back, but...
 		// ...the explainability (what the doctor's auto-switch consults) sees nothing eligible.
-		manager.disposeShutdownHandler();
 	});
 
 	it("B: recovery clears the stale state and at least one account becomes eligible (self-heals across restart)", () => {
@@ -118,9 +134,8 @@ describe("chaos/doctor-recovery — real manager + real recovery helpers (issue 
 				},
 			],
 		};
-		const before = new AccountManager(undefined, storage);
+		const before = makeManager(storage);
 		expect(countEligible(before)).toBe(0);
-		before.disposeShutdownHandler();
 
 		// Doctor --fix: refresh succeeds -> clear stale state -> persist -> reload.
 		const after = recoverAndReload(storage);
@@ -132,10 +147,8 @@ describe("chaos/doctor-recovery — real manager + real recovery helpers (issue 
 
 		// The repaired storage record carries no stale block, so a second restart
 		// stays healthy (no hand-editing, no re-darkening).
-		const restarted = new AccountManager(undefined, storage);
+		const restarted = makeManager(storage);
 		expect(countEligible(restarted)).toBe(1);
-		after.disposeShutdownHandler();
-		restarted.disposeShutdownHandler();
 	});
 
 	it("C: recovery does not resurrect an account the user explicitly disabled", () => {
@@ -162,7 +175,6 @@ describe("chaos/doctor-recovery — real manager + real recovery helpers (issue 
 		const after = recoverAndReload(storage);
 		expect(storage.accounts[0]?.enabled).toBe(false);
 		expect(countEligible(after)).toBe(0);
-		after.disposeShutdownHandler();
 	});
 
 	it("D: DEEP STRESS — randomized pools always recover every alive account after refresh+clear", () => {
@@ -218,7 +230,7 @@ describe("chaos/doctor-recovery — real manager + real recovery helpers (issue 
 			// state on exactly those, as codex-doctor does with refreshedAccounts.
 			const refreshed = accounts.filter((a) => a.enabled !== false);
 			clearRefreshedAccountsStaleState(refreshed);
-			const manager = new AccountManager(undefined, storage);
+			const manager = makeManager(storage);
 
 			const eligibleTokens = new Set(
 				manager
@@ -241,7 +253,6 @@ describe("chaos/doctor-recovery — real manager + real recovery helpers (issue 
 			if (aliveRefreshTokens.length > 0) {
 				expect(eligibleTokens.size).toBeGreaterThan(0);
 			}
-			manager.disposeShutdownHandler();
 		}
 	});
 
