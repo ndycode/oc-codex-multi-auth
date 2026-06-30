@@ -97,6 +97,10 @@ vi.mock("../lib/accounts.js", () => {
 			return this.getCurrentOrNextForFamily();
 		}
 
+		getAccountForStrategy() {
+			return this.getCurrentOrNextForFamilyHybrid();
+		}
+
 		getSelectionExplainability() {
 			return [];
 		}

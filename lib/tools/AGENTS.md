@@ -1,6 +1,6 @@
 # lib/tools/
 
-Per-tool modules for the 21 `codex-*` tools registered by the plugin.
+Per-tool modules for the 22 `codex-*` tools registered by the plugin.
 
 ## Status
 

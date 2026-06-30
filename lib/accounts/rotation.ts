@@ -154,6 +154,64 @@ export class AccountRotation {
 		return account;
 	}
 
+	/**
+	 * Drain-first ("sticky") selection for issue #183.
+	 *
+	 * Stays on the current account for the family while it remains healthy
+	 * (not disabled, not rate-limited for this family/model, not cooling down).
+	 * When the current account is unavailable, it picks the *lowest-indexed*
+	 * available account rather than spreading load. This concentrates traffic
+	 * on as few accounts as possible so the remaining accounts keep their
+	 * quota in reserve — staggering weekly-quota cooldowns instead of
+	 * exhausting every account simultaneously (the round-robin failure mode the
+	 * issue describes).
+	 *
+	 * Returns null when no account is available (every account disabled,
+	 * rate-limited, or cooling down), matching the other selectors' contract so
+	 * the request loop's wait/retry logic is unchanged.
+	 */
+	getCurrentOrNextForFamilySticky(
+		family: ModelFamily,
+		model?: string | null,
+	): ManagedAccount | null {
+		const count = this.state.accounts.length;
+		if (count === 0) return null;
+
+		const isAvailable = (account: ManagedAccount): boolean => {
+			if (account.enabled === false) return false;
+			clearExpiredRateLimits(account);
+			return (
+				!isRateLimitedForFamily(account, family, model) &&
+				!this.state.isAccountCoolingDown(account)
+			);
+		};
+
+		// Prefer the account we are already pinned to while it still has quota.
+		const currentIndex = this.state.currentAccountIndexByFamily[family];
+		if (currentIndex >= 0 && currentIndex < count) {
+			const currentAccount = this.state.accounts[currentIndex];
+			if (currentAccount && isAvailable(currentAccount)) {
+				currentAccount.lastUsed = nowMs();
+				return currentAccount;
+			}
+		}
+
+		// Current account exhausted: pick the lowest-indexed available account so
+		// load concentrates rather than spreads.
+		for (let idx = 0; idx < count; idx++) {
+			const account = this.state.accounts[idx];
+			if (!account) continue;
+			if (!isAvailable(account)) continue;
+
+			this.state.currentAccountIndexByFamily[family] = idx;
+			this.state.cursorByFamily[family] = (idx + 1) % count;
+			account.lastUsed = nowMs();
+			return account;
+		}
+
+		return null;
+	}
+
 	recordSuccess(
 		account: ManagedAccount,
 		family: ModelFamily,

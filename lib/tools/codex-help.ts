@@ -47,6 +47,7 @@ export function createCodexHelpTool(ctx: ToolContext): ToolDefinition {
 					lines: [
 						"List accounts: codex-list",
 						"Switch active account: codex-switch index=2",
+						"Warm up all accounts: codex-warm",
 						"Show detailed status: codex-status",
 						"Set account label: codex-label index=2 label=\"Work\"",
 						"Set account tags: codex-tag index=2 tags=\"work,team-a\"",

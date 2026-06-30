@@ -40,6 +40,7 @@ const DEFAULT_CONFIG: PluginConfig = {
 	beginnerSafeMode: false,
 	fastSession: false,
 	fastSessionStrategy: "hybrid",
+	rotationStrategy: "hybrid",
 	fastSessionMaxInputItems: 30,
 	retryProfile: "balanced",
 	retryBudgetOverrides: {},
@@ -331,6 +332,40 @@ export function getFastSessionStrategy(pluginConfig: PluginConfig): "hybrid" | "
 	);
 	if (envValue !== undefined) return envValue;
 	return pluginConfig.fastSessionStrategy === "always" ? "always" : "hybrid";
+}
+
+export type RotationStrategy = "hybrid" | "sticky" | "round-robin";
+
+const ROTATION_STRATEGIES = new Set([
+	"hybrid",
+	"sticky",
+	"round-robin",
+] as const);
+
+/**
+ * Account load-balancing strategy (issue #183).
+ *
+ * - `hybrid` (default): unchanged historical behavior — stick to the current
+ *   account while it is healthy, otherwise score-select the next one
+ *   (health + tokens + freshness, which *spreads* load across accounts).
+ * - `sticky`: drain-first. Stay on the current account while it has quota,
+ *   and when it is exhausted pick the lowest-indexed available account so load
+ *   *concentrates* on as few accounts as possible. This staggers weekly-quota
+ *   cooldowns instead of exhausting every account at once.
+ * - `round-robin`: advance through accounts in order on every selection.
+ *
+ * Env override `CODEX_AUTH_ROTATION_STRATEGY` wins over config; bogus values
+ * fall back to the config / default via the shared Zod enum helper.
+ */
+export function getRotationStrategy(pluginConfig: PluginConfig): RotationStrategy {
+	const envValue = parseEnumEnv(
+		process.env.CODEX_AUTH_ROTATION_STRATEGY,
+		ROTATION_STRATEGIES as ReadonlySet<RotationStrategy>,
+	);
+	if (envValue !== undefined) return envValue;
+	const configured = pluginConfig.rotationStrategy;
+	if (configured === "sticky" || configured === "round-robin") return configured;
+	return "hybrid";
 }
 
 export function getFastSessionMaxInputItems(pluginConfig: PluginConfig): number {

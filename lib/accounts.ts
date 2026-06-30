@@ -15,6 +15,7 @@
 import type { Auth } from "@opencode-ai/sdk";
 import { loadAccounts, type AccountStorageV3, type CooldownReason } from "./storage.js";
 import type { HybridSelectionOptions } from "./rotation.js";
+import type { RotationStrategy } from "./config.js";
 import type { OAuthAuthDetails } from "./types.js";
 import type { ModelFamily } from "./prompts/codex.js";
 import {
@@ -204,6 +205,35 @@ export class AccountManager {
 		options?: HybridSelectionOptions,
 	): ManagedAccount | null {
 		return this.rotation.getCurrentOrNextForFamilyHybrid(family, model, options);
+	}
+
+	getCurrentOrNextForFamilySticky(
+		family: ModelFamily,
+		model?: string | null,
+	): ManagedAccount | null {
+		return this.rotation.getCurrentOrNextForFamilySticky(family, model);
+	}
+
+	/**
+	 * Strategy-aware account selection (issue #183). Routes to the configured
+	 * load-balancing algorithm. `hybrid` is the historical default and is
+	 * behavior-identical to calling {@link getCurrentOrNextForFamilyHybrid}
+	 * directly, so existing callers/tests are unaffected.
+	 */
+	getAccountForStrategy(
+		strategy: RotationStrategy,
+		family: ModelFamily,
+		model?: string | null,
+		options?: HybridSelectionOptions,
+	): ManagedAccount | null {
+		switch (strategy) {
+			case "sticky":
+				return this.rotation.getCurrentOrNextForFamilySticky(family, model);
+			case "round-robin":
+				return this.rotation.getCurrentOrNextForFamily(family, model);
+			default:
+				return this.rotation.getCurrentOrNextForFamilyHybrid(family, model, options);
+		}
 	}
 
 	recordSuccess(

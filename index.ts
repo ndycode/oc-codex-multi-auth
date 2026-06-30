@@ -76,6 +76,7 @@ import {
 	getEmptyResponseMaxRetries,
 	getEmptyResponseRetryDelayMs,
 	getPidOffsetEnabled,
+	getRotationStrategy,
 	getFetchTimeoutMs,
 	getStreamStallTimeoutMs,
 	getCodexTuiV2,
@@ -1630,6 +1631,7 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				const emptyResponseMaxRetries = getEmptyResponseMaxRetries(pluginConfig);
 				const emptyResponseRetryDelayMs = getEmptyResponseRetryDelayMs(pluginConfig);
 				const pidOffsetEnabled = getPidOffsetEnabled(pluginConfig);
+				const rotationStrategy = getRotationStrategy(pluginConfig);
 				const effectiveUserConfig = fastSessionEnabled
 					? applyFastSessionDefaults(userConfig)
 					: userConfig;
@@ -1940,7 +1942,7 @@ while (attempted.size < Math.max(1, accountCount)) {
 					fallbackTo,
 					fallbackReason,
 				};
-				const account = accountManager.getCurrentOrNextForFamilyHybrid(modelFamily, model, { pidOffsetEnabled });
+				const account = accountManager.getAccountForStrategy(rotationStrategy, modelFamily, model, { pidOffsetEnabled });
 				if (!account || attempted.has(account.index)) {
 					break;
 				}
@@ -2138,6 +2140,21 @@ while (attempted.size < Math.max(1, accountCount)) {
 								const tokenConsumed = accountManager.consumeToken(account, modelFamily, model);
 								if (!tokenConsumed) {
 									accountManager.recordRateLimit(account, modelFamily, model);
+									// Mark a short, auto-expiring rate-limit window for this
+									// (family, model) so the depleted account becomes ineligible in
+									// `isRateLimitedForFamily`. Without this, drain-first `sticky`
+									// (and the `hybrid` fast-path) re-select the SAME depleted account
+									// on the next traversal iteration — `attempted` then trips the
+									// guard and the loop 503s while other accounts still have quota.
+									// The window also feeds `getMinWaitTimeForFamily`, so an all-
+									// depleted pool waits for refill instead of failing fast.
+									accountManager.markRateLimitedWithReason(
+										account,
+										ACCOUNT_LIMITS.LOCAL_TOKEN_DEPLETION_COOLDOWN_MS,
+										modelFamily,
+										"tokens",
+										model,
+									);
 									runtimeMetrics.accountRotations++;
 									runtimeMetrics.lastError =
 										`Local token bucket depleted for account ${account.index + 1} (${modelFamily}${model ? `:${model}` : ""})`;

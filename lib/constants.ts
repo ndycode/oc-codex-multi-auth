@@ -105,4 +105,15 @@ export const ACCOUNT_LIMITS = {
 	AUTH_FAILURE_COOLDOWN_MS: 30_000,
 	/** Number of consecutive auth failures before auto-removing account */
 	MAX_AUTH_FAILURES_BEFORE_REMOVAL: 3,
+	/**
+	 * Transient rate-limit window (ms) applied to an account when its local
+	 * client-side token bucket is depleted (proactive limiter, not a server
+	 * 429). Sized to ~one token refill at the default 6 tokens/min so the
+	 * account becomes selectable again as soon as a token regenerates. This
+	 * window makes the depleted account ineligible in `isRateLimitedForFamily`,
+	 * so every rotation strategy (including drain-first `sticky`, which would
+	 * otherwise re-pin the same depleted account and stall the request) advances
+	 * to the next account with quota instead of returning a spurious 503.
+	 */
+	LOCAL_TOKEN_DEPLETION_COOLDOWN_MS: 10_000,
 } as const;

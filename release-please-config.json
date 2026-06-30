@@ -11,6 +11,9 @@
       "bootstrap-sha": "6ba5df19741f057b722d755271e4c9a22b6709bc",
       "initial-version": "6.0.0",
       "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
+      ],
       "changelog-sections": [
         { "type": "feat", "section": "Added" },
         { "type": "fix", "section": "Fixed" },

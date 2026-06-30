@@ -37,6 +37,7 @@ import { createCodexNextTool } from "./codex-next.js";
 import { createCodexSetupTool } from "./codex-setup.js";
 import { createCodexListTool } from "./codex-list.js";
 import { createCodexSwitchTool } from "./codex-switch.js";
+import { createCodexWarmTool } from "./codex-warm.js";
 import { createCodexStatusTool } from "./codex-status.js";
 import { createCodexLimitsTool } from "./codex-limits.js";
 import { createCodexMetricsTool } from "./codex-metrics.js";
@@ -225,6 +226,7 @@ export function createToolRegistry(ctx: ToolContext): CodexToolRegistry {
 	return {
 		"codex-list": createCodexListTool(ctx),
 		"codex-switch": createCodexSwitchTool(ctx),
+		"codex-warm": createCodexWarmTool(ctx),
 		"codex-status": createCodexStatusTool(ctx),
 		"codex-limits": createCodexLimitsTool(ctx),
 		"codex-metrics": createCodexMetricsTool(ctx),
