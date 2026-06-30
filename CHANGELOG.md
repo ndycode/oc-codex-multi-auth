@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-06-30
+
+### Added
+- `oc-codex-multi-auth warm` standalone CLI command runs the account warm-up directly — in plain Node via the package `bin`, with no agent/model in the loop and therefore no token cost. It opens every enabled account's rolling usage window (one minimal `POST /codex/responses` each), skips disabled accounts, classifies a quota/usage-limit `429` as a distinct failure rather than "warmed", supports `--json`, and exits non-zero if any account failed. This addresses the request to run the warm-up as a direct command instead of an agent-invoked tool; the in-conversation `codex-warm` tool remains for users who want it mid-session. (#182)
+
 ## [6.4.1] - 2026-06-30
 
 ### Fixed

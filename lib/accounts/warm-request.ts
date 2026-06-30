@@ -42,9 +42,23 @@ export interface WarmRequestParams {
 /**
  * Build the minimal warm-ping request body. Exported for tests so the exact
  * shape (stream/store/reasoning) stays pinned.
+ *
+ * Instruction resolution is best-effort: a warm ping only needs a valid request
+ * that opens the usage window, not the full Codex system prompt. If
+ * `getCodexInstructions` cannot resolve the prompt (offline, cache miss, or the
+ * bundled file is unavailable in a standalone CLI run), we fall back to a
+ * minimal instruction so warming never fails on prompt-file resolution.
  */
 export async function buildWarmRequestBody(model = WARM_MODEL): Promise<RequestBody> {
-	const instructions = await getCodexInstructions(model);
+	let instructions: string;
+	try {
+		instructions = await getCodexInstructions(model);
+	} catch (error) {
+		log.debug("getCodexInstructions failed for warm ping; using minimal fallback", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		instructions = "You are a helpful assistant.";
+	}
 	return {
 		model,
 		stream: true,

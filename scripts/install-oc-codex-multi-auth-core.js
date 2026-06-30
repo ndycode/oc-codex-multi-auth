@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PACKAGE_NAME = "oc-codex-multi-auth";
 const LEGACY_PACKAGE_NAMES = ["oc-chatgpt-multi-auth"];
@@ -13,7 +13,7 @@ const STALE_MANAGED_MODEL_KEYS = new Set([
 	"gpt-5.3-codex",
 	"gpt-5.4",
 ]);
-const STANDALONE_COMMANDS = new Set(["doctor", "status", "list", "limits", "dashboard", "health", "diag"]);
+const STANDALONE_COMMANDS = new Set(["doctor", "status", "list", "limits", "dashboard", "health", "diag", "warm"]);
 const INSTALLER_COMMANDS = new Set(["install"]);
 
 function splitCommandArgv(argv) {
@@ -83,7 +83,8 @@ function printHelp() {
 		"  limits              Show stored rate-limit state\n" +
 		"  dashboard           Print dashboard guidance\n" +
 		"  health              Check local token/account health\n" +
-		"  diag                Alias for doctor --deep\n\n" +
+		"  diag                Alias for doctor --deep\n" +
+		"  warm                Open every enabled account's usage window now (one request each)\n\n" +
 		`Installer usage: ${PACKAGE_NAME} [--modern|--full|--legacy] [--dry-run] [--no-cache-clear]\n\n` +
 		"Default behavior:\n" +
 		"  - Installs/updates global config at ~/.config/opencode/opencode.json\n" +
@@ -352,6 +353,125 @@ function printStandaloneResult(command, payload, json) {
 	if (payload.nextAction) console.log(`Next: ${payload.nextAction}`);
 }
 
+async function loadWarmRuntime(env) {
+	// Reuse the COMPILED warm logic from dist/ so the standalone CLI behaves
+	// identically to the in-conversation codex-warm tool. dist/ ships in the
+	// npm package (files allowlist) and none of these modules import the
+	// OpenCode plugin runtime, so they load cleanly in plain Node.
+	const distRoot = join(repoRoot, "dist", "lib");
+	const toUrl = (rel) => pathToFileURL(join(distRoot, rel)).href;
+	try {
+		const [storageMod, usageMod, warmReqMod, warmMod] = await Promise.all([
+			import(toUrl("storage.js")),
+			import(toUrl("codex-usage.js")),
+			import(toUrl("accounts/warm-request.js")),
+			import(toUrl("accounts/warm.js")),
+		]);
+		return { storageMod, usageMod, warmReqMod, warmMod };
+	} catch (error) {
+		throw new Error(
+			`Could not load warm runtime from dist/. Build the package first (npm run build). Cause: ${formatErrorForLog(error)}`,
+		);
+	}
+}
+
+export async function runWarmCommand(parsed, options = {}) {
+	const { env = process.env } = options;
+	const storagePath = getStandaloneStoragePath(parsed, env);
+
+	let runtime;
+	try {
+		runtime = await loadWarmRuntime(env);
+	} catch (error) {
+		const payload = { command: "warm", storagePath, error: formatErrorForLog(error) };
+		printWarmResult(payload, parsed.json);
+		return { exitCode: 1, action: "warm", storagePath };
+	}
+
+	const { storageMod, usageMod, warmReqMod, warmMod } = runtime;
+	// Point dist storage at the resolved accounts file so a refreshed token is
+	// persisted to the SAME file the rest of the toolchain reads.
+	storageMod.setStoragePathDirect(storagePath);
+
+	const storage = await storageMod.loadAccounts();
+	const accounts = Array.isArray(storage?.accounts) ? storage.accounts : [];
+	if (accounts.length === 0) {
+		const payload = {
+			command: "warm",
+			storagePath,
+			totalAccounts: 0,
+			warmed: 0,
+			failed: 0,
+			skipped: 0,
+			results: [],
+			message: "No accounts configured.",
+			nextAction: "Run opencode auth login.",
+		};
+		printWarmResult(payload, parsed.json);
+		return { exitCode: 0, action: "warm", storagePath };
+	}
+
+	// Same adapter as lib/tools/codex-warm.ts createWarmOne: refresh → resolve
+	// account id → open the usage window; map an exhausted (quota-429) account
+	// to a failure so it is not reported as warmed.
+	const warmOne = async (account) => {
+		const { accessToken } = await usageMod.ensureCodexUsageAccessToken({ storage, account });
+		const accountId = usageMod.resolveCodexUsageAccountId({ account, accessToken });
+		if (!accountId) {
+			return { status: "failed", detail: "could not resolve account id (re-login may be required)" };
+		}
+		const result = await warmReqMod.warmAccountWindow({
+			accountId,
+			accessToken,
+			organizationId: account.organizationId,
+		});
+		if (result.status === "exhausted") {
+			return { status: "failed", detail: result.detail ?? "quota/usage limit reached" };
+		}
+		return { status: "warmed" };
+	};
+
+	const summary = await warmMod.warmAccounts(accounts, warmOne);
+	const payload = {
+		command: "warm",
+		storagePath,
+		totalAccounts: summary.total,
+		warmed: summary.warmedCount,
+		failed: summary.failedCount,
+		skipped: summary.skippedCount,
+		results: summary.results.map((r) => ({
+			index: r.index,
+			email: maskValue(accounts[r.index]?.email, parsed.includeSensitive),
+			status: r.status,
+			detail: r.detail,
+		})),
+	};
+	printWarmResult(payload, parsed.json);
+	return { exitCode: summary.failedCount > 0 ? 1 : 0, action: "warm", storagePath };
+}
+
+function printWarmResult(payload, json) {
+	if (json) {
+		console.log(JSON.stringify(payload, null, 2));
+		return;
+	}
+	console.log(`oc-codex-multi-auth warm`);
+	if (payload.message) console.log(payload.message);
+	console.log(`Storage: ${payload.storagePath}`);
+	if (payload.error) {
+		console.log(`Error: ${payload.error}`);
+		return;
+	}
+	console.log(`Accounts: ${payload.totalAccounts}`);
+	for (const r of payload.results ?? []) {
+		const label = r.email ? `[${r.index}] ${r.email}` : `[${r.index}]`;
+		const detail = r.detail ? ` — ${r.detail}` : "";
+		console.log(`- ${label}: ${r.status}${detail}`);
+	}
+	console.log(`Summary: ${payload.warmed} warmed, ${payload.failed} failed, ${payload.skipped} skipped`);
+	if (payload.nextAction) console.log(`Next: ${payload.nextAction}`);
+}
+
 export async function runStandaloneCommand(command, argv = [], options = {}) {
 	const parsed = parseStandaloneArgs(argv);
 	if (command === "diag") {
@@ -361,6 +481,9 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 	if (parsed.help) {
 		printHelp();
 		return { exitCode: 0, action: "help" };
+	}
+	if (command === "warm") {
+		return runWarmCommand(parsed, options);
 	}
 	const { env = process.env } = options;
 	const storagePath = getStandaloneStoragePath(parsed, env);

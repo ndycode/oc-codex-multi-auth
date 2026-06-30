@@ -180,6 +180,8 @@ If browser launch is blocked, use the alternate login paths in [docs/getting-sta
 | `codex-limits` | What quota or rate-limit state is visible now? |
 | `codex-dashboard` | Can I manage accounts from one interactive surface? |
 
+Most of these also run as a **direct CLI** with no agent/model involvement (no token cost) — e.g. `oc-codex-multi-auth warm`, `oc-codex-multi-auth status`, or `npx -y oc-codex-multi-auth@latest warm`. Use `oc-codex-multi-auth warm` to open every enabled account's usage window at the start of a session and stagger the rolling quota cooldowns. Add `--json` for scriptable output.
+
 ### Account management
 
 | Tool | What it answers |
