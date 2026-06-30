@@ -131,6 +131,7 @@ vi.mock("../lib/config.js", () => ({
 	getEmptyResponseMaxRetries: () => 2,
 	getEmptyResponseRetryDelayMs: () => 1000,
 	getPidOffsetEnabled: () => false,
+	getRotationStrategy: () => "hybrid",
 	getFetchTimeoutMs: () => 60000,
 	getStreamStallTimeoutMs: () => 45000,
 	getCodexTuiV2: () => false,
@@ -409,6 +410,10 @@ vi.mock("../lib/accounts.js", () => {
 			return this.accounts[0] ?? null;
 		}
 
+		getAccountForStrategy() {
+			return this.getCurrentOrNextForFamilyHybrid();
+		}
+
 		getSelectionExplainability() {
 			return this.accounts.map((account, index) => ({
 				index,
@@ -516,6 +521,7 @@ type PluginType = {
 	tool: {
 		"codex-list": OptionalToolExecute<{ tag?: string; format?: string; includeSensitive?: boolean }>;
 		"codex-switch": OptionalToolExecute<{ index?: number }>;
+		"codex-warm": ToolExecute;
 		"codex-status": OptionalToolExecute<{ format?: string; includeSensitive?: boolean }>;
 		"codex-limits": OptionalToolExecute<{ format?: string; includeSensitive?: boolean }>;
 		"codex-metrics": OptionalToolExecute<{ format?: string }>;
@@ -577,6 +583,7 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(plugin.tool).toBeDefined();
 			expect(plugin.tool["codex-list"]).toBeDefined();
 			expect(plugin.tool["codex-switch"]).toBeDefined();
+			expect(plugin.tool["codex-warm"]).toBeDefined();
 			expect(plugin.tool["codex-status"]).toBeDefined();
 			expect(plugin.tool["codex-limits"]).toBeDefined();
 			expect(plugin.tool["codex-metrics"]).toBeDefined();
@@ -707,6 +714,7 @@ describe("OpenAIOAuthPlugin", () => {
 				getAccountCount: () => 0,
 				getSelectionExplainability: () => null,
 				getCurrentOrNextForFamilyHybrid: () => null,
+				getAccountForStrategy: () => null,
 				getMinWaitTimeForFamily: () => 0,
 				hasRefreshToken: () => false,
 				saveToDisk: async () => {},
@@ -3029,6 +3037,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		const customManager = {
 			getAccountCount: () => 2,
 			getCurrentOrNextForFamilyHybrid: () => selectedAccount,
+			getAccountForStrategy: () => selectedAccount,
 			getSelectionExplainability: () => [
 				{
 					index: 0,
@@ -3164,6 +3173,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			const customManager = {
 				getAccountCount: () => 1,
 				getCurrentOrNextForFamilyHybrid: () => overloadedAccount,
+				getAccountForStrategy: () => overloadedAccount,
 				getSelectionExplainability: () => [
 					{
 						index: 0,
@@ -3838,30 +3848,36 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 
 			let legacySelection = 0;
 			let fallbackSelection = 0;
-			const customManager = {
-				getAccountCount: () => 2,
-				getCurrentOrNextForFamilyHybrid: (_family: string, currentModel?: string) => {
-					if (currentModel === "gpt-5-codex") {
-						if (fallbackSelection === 0) {
-							fallbackSelection++;
-							return accountOne;
-						}
-						if (fallbackSelection === 1) {
-							fallbackSelection++;
-							return accountTwo;
-						}
-						return null;
-					}
-					if (legacySelection === 0) {
-						legacySelection++;
+			const selectHybrid = (_family: string, currentModel?: string) => {
+				if (currentModel === "gpt-5-codex") {
+					if (fallbackSelection === 0) {
+						fallbackSelection++;
 						return accountOne;
 					}
-					if (legacySelection === 1) {
-						legacySelection++;
+					if (fallbackSelection === 1) {
+						fallbackSelection++;
 						return accountTwo;
 					}
 					return null;
-				},
+				}
+				if (legacySelection === 0) {
+					legacySelection++;
+					return accountOne;
+				}
+				if (legacySelection === 1) {
+					legacySelection++;
+					return accountTwo;
+				}
+				return null;
+			};
+			const customManager = {
+				getAccountCount: () => 2,
+				getCurrentOrNextForFamilyHybrid: selectHybrid,
+				getAccountForStrategy: (
+					_strategy: string,
+					family: string,
+					model?: string,
+				) => selectHybrid(family, model),
 				getSelectionExplainability: () => [
 					{
 						index: 0,
@@ -4084,6 +4100,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			const customManager = {
 				getAccountCount: () => accounts.length,
 				getCurrentOrNextForFamilyHybrid: () => accounts[0] ?? null,
+				getAccountForStrategy: () => accounts[0] ?? null,
 				getSelectionExplainability: () =>
 					accounts.map((account, index) => ({
 						index,
@@ -4209,6 +4226,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			const customManager = {
 				getAccountCount: () => 1,
 				getCurrentOrNextForFamilyHybrid: () => deadWorkspace,
+				getAccountForStrategy: () => deadWorkspace,
 				getSelectionExplainability: () => [
 					{
 						index: 0,
