@@ -80,92 +80,214 @@ describe("Graceful shutdown", () => {
 		expect(getCleanupCount()).toBe(0);
 	});
 
+	describe("runCleanup re-entrancy", () => {
+		it("dedupes concurrent drains into a single pass", async () => {
+			let release!: () => void;
+			const slow = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+			registerCleanup(slow);
+
+			const first = runCleanup();
+			const second = runCleanup();
+			expect(second).toBe(first);
+
+			release();
+			await Promise.all([first, second]);
+			expect(slow).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not drop a cleanup registered while a drain is in flight", async () => {
+			let release!: () => void;
+			const slow = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+			registerCleanup(slow);
+
+			const drain = runCleanup();
+			const late = vi.fn();
+			registerCleanup(late);
+
+			release();
+			await drain;
+			expect(late).not.toHaveBeenCalled();
+			expect(getCleanupCount()).toBe(1);
+
+			await runCleanup();
+			expect(late).toHaveBeenCalledTimes(1);
+		});
+
+		it("re-drains on each sequential call once the previous one settles", async () => {
+			const first = vi.fn();
+			registerCleanup(first);
+			await runCleanup();
+
+			const second = vi.fn();
+			registerCleanup(second);
+			await runCleanup();
+
+			expect(first).toHaveBeenCalledTimes(1);
+			expect(second).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	describe("process signal integration", () => {
-		it("SIGINT handler runs cleanup and exits with code 0", async () => {
-			const capturedHandlers = new Map<string, (...args: unknown[]) => void>();
-			
-			const processOnceSpy = vi.spyOn(process, "once").mockImplementation((event: string | symbol, handler: (...args: unknown[]) => void) => {
-				capturedHandlers.set(String(event), handler);
-				return process;
-			});
-			const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+		type ProcEvent = "SIGINT" | "SIGTERM" | "beforeExit";
+		type ProcListener = (...args: unknown[]) => void;
+		const SIGNAL_EVENTS: readonly ProcEvent[] = ["SIGINT", "SIGTERM", "beforeExit"];
 
+		/**
+		 * Park the runner's own signal listeners for the duration of a test, so a
+		 * synthetic `process.emit("SIGINT")` drives only the listeners we care
+		 * about and never asks vitest to tear itself down. Restoring also strips
+		 * whatever the freshly imported shutdown module attached.
+		 */
+		function detachProcessListeners(events: readonly ProcEvent[]): () => void {
+			const saved = new Map<ProcEvent, ProcListener[]>();
+			for (const event of events) {
+				saved.set(event, process.listeners(event) as unknown as ProcListener[]);
+				process.removeAllListeners(event);
+			}
+			return () => {
+				for (const event of events) {
+					process.removeAllListeners(event);
+					for (const listener of saved.get(event) ?? []) {
+						process.on(event, listener);
+					}
+				}
+			};
+		}
+
+		/** Fresh module instance: resets the `shutdownRegistered` / `ownsProcess` latches. */
+		async function freshShutdown() {
 			vi.resetModules();
-			const { registerCleanup: freshRegister, runCleanup: freshRunCleanup } = await import("../lib/shutdown.js");
-			await freshRunCleanup();
+			const mod = await import("../lib/shutdown.js");
+			await mod.runCleanup();
+			return mod;
+		}
 
-			const cleanupFn = vi.fn();
-			freshRegister(cleanupFn);
+		const settle = () => new Promise((r) => setTimeout(r, 10));
 
-			const sigintHandler = capturedHandlers.get("SIGINT");
-			expect(sigintHandler).toBeDefined();
+		let restoreListeners: () => void;
+		let processExitSpy: ReturnType<typeof vi.spyOn>;
 
-			sigintHandler!();
-			await new Promise((r) => setTimeout(r, 10));
-
-			expect(cleanupFn).toHaveBeenCalled();
-			expect(processExitSpy).toHaveBeenCalledWith(0);
-
-			processOnceSpy.mockRestore();
-			processExitSpy.mockRestore();
+		beforeEach(() => {
+			restoreListeners = detachProcessListeners(SIGNAL_EVENTS);
+			processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 		});
 
-		it("SIGTERM handler runs cleanup and exits with code 0", async () => {
-			const capturedHandlers = new Map<string, (...args: unknown[]) => void>();
-			
-			const processOnceSpy = vi.spyOn(process, "once").mockImplementation((event: string | symbol, handler: (...args: unknown[]) => void) => {
-				capturedHandlers.set(String(event), handler);
-				return process;
-			});
-			const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-
-			vi.resetModules();
-			const { registerCleanup: freshRegister, runCleanup: freshRunCleanup } = await import("../lib/shutdown.js");
-			await freshRunCleanup();
-
-			const cleanupFn = vi.fn();
-			freshRegister(cleanupFn);
-
-			const sigtermHandler = capturedHandlers.get("SIGTERM");
-			expect(sigtermHandler).toBeDefined();
-
-			sigtermHandler!();
-			await new Promise((r) => setTimeout(r, 10));
-
-			expect(cleanupFn).toHaveBeenCalled();
-			expect(processExitSpy).toHaveBeenCalledWith(0);
-
-			processOnceSpy.mockRestore();
+		afterEach(() => {
 			processExitSpy.mockRestore();
+			restoreListeners();
 		});
 
-		it("beforeExit handler runs cleanup without calling exit", async () => {
-			const capturedHandlers = new Map<string, (...args: unknown[]) => void>();
-			
-			const processOnceSpy = vi.spyOn(process, "once").mockImplementation((event: string | symbol, handler: (...args: unknown[]) => void) => {
-				capturedHandlers.set(String(event), handler);
-				return process;
-			});
-			const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-
-			vi.resetModules();
-			const { registerCleanup: freshRegister, runCleanup: freshRunCleanup } = await import("../lib/shutdown.js");
-			await freshRunCleanup();
-
+		// Regression lock for #187: as a guest in the opencode host process we run
+		// cleanup but must leave termination — and the session-id print — to the host.
+		it("does not exit on SIGINT when it does not own the process", async () => {
+			const { registerCleanup: freshRegister } = await freshShutdown();
 			const cleanupFn = vi.fn();
 			freshRegister(cleanupFn);
 
-			const beforeExitHandler = capturedHandlers.get("beforeExit");
-			expect(beforeExitHandler).toBeDefined();
-
-			beforeExitHandler!();
-			await new Promise((r) => setTimeout(r, 10));
+			process.emit("SIGINT", "SIGINT");
+			await settle();
 
 			expect(cleanupFn).toHaveBeenCalled();
 			expect(processExitSpy).not.toHaveBeenCalled();
+		});
 
-			processOnceSpy.mockRestore();
-			processExitSpy.mockRestore();
+		it("does not exit on SIGTERM when it does not own the process", async () => {
+			const { registerCleanup: freshRegister } = await freshShutdown();
+			const cleanupFn = vi.fn();
+			freshRegister(cleanupFn);
+
+			process.emit("SIGTERM", "SIGTERM");
+			await settle();
+
+			expect(cleanupFn).toHaveBeenCalled();
+			expect(processExitSpy).not.toHaveBeenCalled();
+		});
+
+		it("lets a host SIGINT listener registered earlier still run", async () => {
+			const hostHandler = vi.fn();
+			process.on("SIGINT", hostHandler);
+
+			const { registerCleanup: freshRegister } = await freshShutdown();
+			const cleanupFn = vi.fn();
+			freshRegister(cleanupFn);
+
+			process.emit("SIGINT", "SIGINT");
+			await settle();
+
+			expect(hostHandler).toHaveBeenCalledTimes(1);
+			expect(cleanupFn).toHaveBeenCalledTimes(1);
+			expect(processExitSpy).not.toHaveBeenCalled();
+		});
+
+		it("SIGINT runs cleanup then exits 130 when it owns the process", async () => {
+			const { registerCleanup: freshRegister, setShutdownOwnsProcess } = await freshShutdown();
+			setShutdownOwnsProcess(true);
+
+			const cleanupFn = vi.fn();
+			freshRegister(cleanupFn);
+
+			process.emit("SIGINT", "SIGINT");
+			await settle();
+
+			expect(cleanupFn).toHaveBeenCalled();
+			expect(processExitSpy).toHaveBeenCalledWith(130);
+		});
+
+		it("SIGTERM runs cleanup then exits 143 when it owns the process", async () => {
+			const { registerCleanup: freshRegister, setShutdownOwnsProcess } = await freshShutdown();
+			setShutdownOwnsProcess(true);
+
+			const cleanupFn = vi.fn();
+			freshRegister(cleanupFn);
+
+			process.emit("SIGTERM", "SIGTERM");
+			await settle();
+
+			expect(cleanupFn).toHaveBeenCalled();
+			expect(processExitSpy).toHaveBeenCalledWith(143);
+		});
+
+		it("awaits cleanup before exiting on the owning path", async () => {
+			const { registerCleanup: freshRegister, setShutdownOwnsProcess } = await freshShutdown();
+			setShutdownOwnsProcess(true);
+
+			let release!: () => void;
+			const slow = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+			freshRegister(slow);
+
+			process.emit("SIGINT", "SIGINT");
+			await settle();
+			expect(slow).toHaveBeenCalled();
+			expect(processExitSpy).not.toHaveBeenCalled();
+
+			release();
+			await settle();
+			expect(processExitSpy).toHaveBeenCalledWith(130);
+		});
+
+		it("ownership does not leak across module instances", async () => {
+			const owning = await freshShutdown();
+			owning.setShutdownOwnsProcess(true);
+
+			const { registerCleanup: freshRegister } = await freshShutdown();
+			freshRegister(vi.fn());
+
+			process.emit("SIGINT", "SIGINT");
+			await settle();
+
+			expect(processExitSpy).not.toHaveBeenCalled();
+		});
+
+		it("beforeExit handler runs cleanup without calling exit", async () => {
+			const { registerCleanup: freshRegister } = await freshShutdown();
+			const cleanupFn = vi.fn();
+			freshRegister(cleanupFn);
+
+			process.emit("beforeExit", 0);
+			await settle();
+
+			expect(cleanupFn).toHaveBeenCalled();
+			expect(processExitSpy).not.toHaveBeenCalled();
 		});
 
 		it("signal handlers are only registered once", async () => {
