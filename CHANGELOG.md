@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.6.0] - 2026-07-09
+
+### Fixed
+- The plugin no longer calls `process.exit()` from its `SIGINT`/`SIGTERM` handler while running inside the opencode host process. Because the handler hard-exited after cleanup, it won the race against opencode's own asynchronous shutdown, so pressing Ctrl+C exited without opencode printing the session id. Process termination is now owned explicitly rather than inferred from the signal: it defaults to off, so the plugin runs its cleanup and leaves termination to the host, and only an entrypoint that *is* the process opts in. The standalone `warm` CLI — the one `bin` path that installs the handler, because refreshing a token persists credentials under the storage lock — opts in via `setShutdownOwnsProcess(true)` and now exits `130`/`143` (`128 + signo`) on a signal instead of reporting `0`, which masked an interrupt as success. The debounced-save flush is still awaited on shutdown in both modes, so the no-lost-rotations guarantee from #110 holds. (#187)
+- `runCleanup()` no longer drops work when a drain overlaps. It emptied the cleanup queue *before* awaiting it, so a `beforeExit` firing during an in-flight signal drain returned immediately against an already-empty queue rather than awaiting the real cleanup. Concurrent callers now share the in-flight promise, which is cleared once settled so sequential calls still re-drain — `AccountManager` re-registers its flush handler after an external `runCleanup()`, and that contract is preserved. (#187)
+
+### Added
+- `setShutdownOwnsProcess(boolean)` is exported from `lib/shutdown.ts` (and the `lib/index.ts` barrel) so a standalone entrypoint can claim ownership of process termination. The flag is read at signal time, not captured when the handlers are installed, so an entrypoint may opt in after the first `registerCleanup()`. (#187)
+
 ## [6.5.0] - 2026-06-30
 
 ### Added

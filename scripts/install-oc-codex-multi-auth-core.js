@@ -361,13 +361,19 @@ async function loadWarmRuntime(env) {
 	const distRoot = join(repoRoot, "dist", "lib");
 	const toUrl = (rel) => pathToFileURL(join(distRoot, rel)).href;
 	try {
-		const [storageMod, usageMod, warmReqMod, warmMod] = await Promise.all([
+		const [storageMod, usageMod, warmReqMod, warmMod, shutdownMod] = await Promise.all([
 			import(toUrl("storage.js")),
 			import(toUrl("codex-usage.js")),
 			import(toUrl("accounts/warm-request.js")),
 			import(toUrl("accounts/warm.js")),
+			import(toUrl("shutdown.js")),
 		]);
-		return { storageMod, usageMod, warmReqMod, warmMod };
+		// Unlike the plugin, this CLI *is* the process, so it owns termination:
+		// Ctrl+C must abort the warm run rather than wait for it to drain.
+		// Refreshing a token here persists credentials, which registers the
+		// shutdown handler via the storage lock.
+		shutdownMod.setShutdownOwnsProcess(true);
+		return { storageMod, usageMod, warmReqMod, warmMod, shutdownMod };
 	} catch (error) {
 		throw new Error(
 			`Could not load warm runtime from dist/. Build the package first (npm run build). Cause: ${formatErrorForLog(error)}`,
