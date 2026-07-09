@@ -111,6 +111,39 @@ describe("GPT-5.6 Model Support", () => {
 			}
 		});
 
+		// `minimal` is only clamped for the Codex families, whose names contain
+		// "codex". 5.6 names do not, so without an explicit rule it reached the wire.
+		it("upgrades minimal to low, since no 5.6 tier accepts minimal", () => {
+			for (const tier of TIERS) {
+				expect(
+					getReasoningConfig(tier, { reasoningEffort: "minimal" }).effort,
+				).toBe("low");
+			}
+		});
+
+		it("never emits none or minimal for any 5.6 tier at any requested effort", () => {
+			const requested = [
+				"none",
+				"minimal",
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max",
+				"ultra",
+			] as const;
+			for (const tier of TIERS) {
+				for (const effort of requested) {
+					const resolved = getReasoningConfig(tier, {
+						reasoningEffort: effort,
+					}).effort;
+					expect(resolved).not.toBe("none");
+					expect(resolved).not.toBe("minimal");
+					expect(resolved).not.toBe("ultra");
+				}
+			}
+		});
+
 		it("supports xhigh directly", () => {
 			for (const tier of TIERS) {
 				expect(
@@ -211,6 +244,10 @@ describe("GPT-5.6 Model Support", () => {
 		it("degrades down the 5.6 tiers and out to 5.5", () => {
 			expect(DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN["gpt-5.6-sol"]).toEqual([
 				"gpt-5.6-terra",
+				"gpt-5.6-luna",
+				"gpt-5.5",
+			]);
+			expect(DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN["gpt-5.6-terra"]).toEqual([
 				"gpt-5.6-luna",
 				"gpt-5.5",
 			]);

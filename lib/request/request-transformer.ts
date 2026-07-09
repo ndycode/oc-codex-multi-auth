@@ -702,6 +702,13 @@ export function getReasoningConfig(
 		effort = "low";
 	}
 
+	// GPT-5.6 accepts neither "none" nor "minimal". `none` is floored above via
+	// supportsNone, but `minimal` is otherwise only clamped for the Codex
+	// families (see the isCodex branch below), so 5.6 would leak it to the wire.
+	if (isGpt56 && effort === "minimal") {
+		effort = "low";
+	}
+
 	// GPT-5.4 Pro only supports medium/high/xhigh reasoning.
 	// originalRequestedEffort is a non-sensitive model setting string, not a token.
 	// Logging this coercion does not introduce new redaction or filesystem-race risk.

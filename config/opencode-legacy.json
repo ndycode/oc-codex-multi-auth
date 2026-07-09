@@ -33,7 +33,11 @@
           "options": {
             "reasoningEffort": "low",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-sol-medium": {
@@ -54,7 +58,11 @@
           "options": {
             "reasoningEffort": "medium",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-sol-high": {
@@ -75,7 +83,11 @@
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-sol-xhigh": {
@@ -96,7 +108,11 @@
           "options": {
             "reasoningEffort": "xhigh",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-sol-max": {
@@ -117,7 +133,11 @@
           "options": {
             "reasoningEffort": "max",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-sol-ultra": {
@@ -138,7 +158,11 @@
           "options": {
             "reasoningEffort": "ultra",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-terra-low": {
@@ -159,7 +183,11 @@
           "options": {
             "reasoningEffort": "low",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-terra-medium": {
@@ -180,7 +208,11 @@
           "options": {
             "reasoningEffort": "medium",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-terra-high": {
@@ -201,7 +233,11 @@
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-terra-xhigh": {
@@ -222,7 +258,11 @@
           "options": {
             "reasoningEffort": "xhigh",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-terra-max": {
@@ -243,7 +283,11 @@
           "options": {
             "reasoningEffort": "max",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-terra-ultra": {
@@ -264,7 +308,11 @@
           "options": {
             "reasoningEffort": "ultra",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-luna-low": {
@@ -285,7 +333,11 @@
           "options": {
             "reasoningEffort": "low",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-luna-medium": {
@@ -306,7 +358,11 @@
           "options": {
             "reasoningEffort": "medium",
             "reasoningSummary": "auto",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-luna-high": {
@@ -327,7 +383,11 @@
           "options": {
             "reasoningEffort": "high",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-luna-xhigh": {
@@ -348,7 +408,11 @@
           "options": {
             "reasoningEffort": "xhigh",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.6-luna-max": {
@@ -369,7 +433,11 @@
           "options": {
             "reasoningEffort": "max",
             "reasoningSummary": "detailed",
-            "textVerbosity": "medium"
+            "textVerbosity": "medium",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "store": false
           }
         },
         "gpt-5.5-none": {
