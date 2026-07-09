@@ -578,7 +578,158 @@ describe("Codex Prompts Module", () => {
 					expect(rawGitHubCall?.[0]).toContain("gpt_5_codex_prompt.md");
 				});
 
-				it("should map gpt-5.4 prompts to the gpt_5_2 prompt file", async () => {
+				// Modern Codex sends per-model `base_instructions` from the model
+				// catalog. gpt_5_2_prompt.md would open "You are GPT-5.2 running in
+				// the Codex CLI", which is not what the backend expects for 5.4/5.5.
+				const catalogPayload = JSON.stringify({
+					models: [
+						{ slug: "gpt-5.4", base_instructions: "GPT54 CATALOG PROMPT" },
+						{ slug: "gpt-5.4-mini", base_instructions: "GPT54MINI CATALOG PROMPT" },
+						{ slug: "gpt-5.5", base_instructions: "GPT55 CATALOG PROMPT" },
+					],
+				});
+
+				it("should source gpt-5.4 instructions from the model catalog", async () => {
+					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
+					mockFetch.mockResolvedValue({
+						ok: true,
+						json: () => Promise.resolve({ tag_name: "rust-v0.111.0" }),
+						text: () => Promise.resolve(catalogPayload),
+						headers: { get: () => "etag" },
+					});
+					mockedMkdir.mockResolvedValue(undefined);
+					mockedWriteFile.mockResolvedValue(undefined);
+
+					const result = await getCodexInstructions("gpt-5.4");
+					const fetchCalls = mockFetch.mock.calls;
+					const rawGitHubCall = fetchCalls.find(
+						(call) =>
+							typeof call[0] === "string" &&
+							call[0].includes("raw.githubusercontent.com"),
+					);
+					expect(rawGitHubCall?.[0]).toContain("models-manager/models.json");
+					expect(result).toContain("GPT54 CATALOG PROMPT");
+					// No prompt-file fetch when the catalog has the slug.
+					expect(
+						fetchCalls.some(
+							(call) =>
+								typeof call[0] === "string" && call[0].includes("gpt_5_2_prompt.md"),
+						),
+					).toBe(false);
+				});
+
+				it("should give gpt-5.5 its own catalog text and cache file, not gpt-5.4's", async () => {
+					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
+					mockFetch.mockResolvedValue({
+						ok: true,
+						json: () => Promise.resolve({ tag_name: "rust-v0.111.0" }),
+						text: () => Promise.resolve(catalogPayload),
+						headers: { get: () => "etag" },
+					});
+					mockedMkdir.mockResolvedValue(undefined);
+					mockedWriteFile.mockResolvedValue(undefined);
+
+					// gpt-5.5 and gpt-5.4 share the `gpt-5.4` model family, so a
+					// family-keyed cache would let one serve the other's prompt.
+					const result = await getCodexInstructions("gpt-5.5");
+					expect(result).toContain("GPT55 CATALOG PROMPT");
+					expect(result).not.toContain("GPT54 CATALOG PROMPT");
+
+					const writeTargets = mockedWriteFile.mock.calls.map(([target]) =>
+						String(target),
+					);
+					expect(
+						writeTargets.some((target) =>
+							target.includes("catalog-gpt-5.5-instructions.md"),
+						),
+					).toBe(true);
+					expect(
+						writeTargets.some((target) =>
+							target.includes("catalog-gpt-5.4-instructions.md"),
+						),
+					).toBe(false);
+				});
+
+				// Regression: slug-space and family-space overlap. gpt-5.4-nano has no
+				// catalog entry and lives in the `gpt-5.4` family, which IS a catalog
+				// slug. An un-namespaced cache key let them serve each other's
+				// instructions in-process within the TTL window.
+				it("should not serve gpt-5.4 catalog text to gpt-5.4-nano within one TTL", async () => {
+					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
+					mockFetch.mockImplementation((url: unknown) => {
+						const href = String(url);
+						const body = href.includes("models.json")
+							? catalogPayload
+							: "PROMPT FILE CONTENT";
+						return Promise.resolve({
+							ok: true,
+							json: () => Promise.resolve({ tag_name: "rust-v0.111.0" }),
+							text: () => Promise.resolve(body),
+							headers: { get: () => "etag" },
+						});
+					});
+					mockedMkdir.mockResolvedValue(undefined);
+					mockedWriteFile.mockResolvedValue(undefined);
+
+					// Warm the catalog entry first, exactly as prewarmCodexInstructions does.
+					const catalogResult = await getCodexInstructions("gpt-5.4");
+					expect(catalogResult).toContain("GPT54 CATALOG PROMPT");
+
+					// nano must NOT pick up the memory-cached catalog text.
+					const nanoResult = await getCodexInstructions("gpt-5.4-nano");
+					expect(nanoResult).toContain("PROMPT FILE CONTENT");
+					expect(nanoResult).not.toContain("GPT54 CATALOG PROMPT");
+				});
+
+				it("should not let a prompt-file model poison a catalog model's cache", async () => {
+					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
+					mockFetch.mockImplementation((url: unknown) => {
+						const href = String(url);
+						const body = href.includes("models.json")
+							? catalogPayload
+							: "PROMPT FILE CONTENT";
+						return Promise.resolve({
+							ok: true,
+							json: () => Promise.resolve({ tag_name: "rust-v0.111.0" }),
+							text: () => Promise.resolve(body),
+							headers: { get: () => "etag" },
+						});
+					});
+					mockedMkdir.mockResolvedValue(undefined);
+					mockedWriteFile.mockResolvedValue(undefined);
+
+					// Reverse order: nano first, then gpt-5.4.
+					const nanoResult = await getCodexInstructions("gpt-5.4-nano");
+					expect(nanoResult).toContain("PROMPT FILE CONTENT");
+
+					const catalogResult = await getCodexInstructions("gpt-5.4");
+					expect(catalogResult).toContain("GPT54 CATALOG PROMPT");
+					expect(catalogResult).not.toContain("PROMPT FILE CONTENT");
+				});
+
+				it("should fall back to the prompt file when the tag has no catalog entry", async () => {
+					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
+					// Catalog without gpt-5.4 — simulates a release predating the slug.
+					mockFetch.mockResolvedValue({
+						ok: true,
+						json: () => Promise.resolve({ tag_name: "rust-v0.111.0" }),
+						text: () => Promise.resolve(JSON.stringify({ models: [] })),
+						headers: { get: () => "etag" },
+					});
+					mockedMkdir.mockResolvedValue(undefined);
+					mockedWriteFile.mockResolvedValue(undefined);
+
+					await getCodexInstructions("gpt-5.4");
+					const fetchCalls = mockFetch.mock.calls;
+					expect(
+						fetchCalls.some(
+							(call) =>
+								typeof call[0] === "string" && call[0].includes("gpt_5_2_prompt.md"),
+						),
+					).toBe(true);
+				});
+
+				it("should still use the prompt file for models absent from the catalog", async () => {
 					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
 					mockFetch.mockResolvedValue({
 						ok: true,
@@ -589,14 +740,21 @@ describe("Codex Prompts Module", () => {
 					mockedMkdir.mockResolvedValue(undefined);
 					mockedWriteFile.mockResolvedValue(undefined);
 
-					await getCodexInstructions("gpt-5.4");
+					// gpt-5.1 has no catalog entry; it must not fetch models.json at all.
+					await getCodexInstructions("gpt-5.1");
 					const fetchCalls = mockFetch.mock.calls;
-					const rawGitHubCall = fetchCalls.find(
-						(call) =>
-							typeof call[0] === "string" &&
-							call[0].includes("raw.githubusercontent.com"),
-					);
-					expect(rawGitHubCall?.[0]).toContain("gpt_5_2_prompt.md");
+					expect(
+						fetchCalls.some(
+							(call) =>
+								typeof call[0] === "string" && call[0].includes("models.json"),
+						),
+					).toBe(false);
+					expect(
+						fetchCalls.some(
+							(call) =>
+								typeof call[0] === "string" && call[0].includes("gpt_5_1_prompt.md"),
+						),
+					).toBe(true);
 				});
 
 				it("should map gpt-5.4-pro prompts to gpt_5_2 prompt file with isolated cache key", async () => {
@@ -625,18 +783,18 @@ describe("Codex Prompts Module", () => {
 					).toBe(false);
 				});
 
-				it("should map gpt-5.4-mini prompts to gpt_5_2 prompt file with isolated cache key", async () => {
+				it("should source gpt-5.4-mini from the catalog with an isolated cache key", async () => {
 					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
 					mockFetch.mockResolvedValue({
 						ok: true,
 						json: () => Promise.resolve({ tag_name: "rust-v0.111.0" }),
-						text: () => Promise.resolve("content"),
+						text: () => Promise.resolve(catalogPayload),
 						headers: { get: () => "etag" },
 					});
 					mockedMkdir.mockResolvedValue(undefined);
 					mockedWriteFile.mockResolvedValue(undefined);
 
-					await getCodexInstructions("gpt-5.4-mini");
+					const result = await getCodexInstructions("gpt-5.4-mini");
 					const fetchCalls = mockFetch.mock.calls;
 					const rawGitHubCall = fetchCalls.find(
 						(call) =>
@@ -644,10 +802,15 @@ describe("Codex Prompts Module", () => {
 							call[0].includes("raw.githubusercontent.com"),
 					);
 					const writeTargets = mockedWriteFile.mock.calls.map(([target]) => String(target));
-					expect(rawGitHubCall?.[0]).toContain("gpt_5_2_prompt.md");
-					expect(writeTargets.some((target) => target.includes("gpt-5.4-mini-instructions.md"))).toBe(true);
+					expect(rawGitHubCall?.[0]).toContain("models-manager/models.json");
+					expect(result).toContain("GPT54MINI CATALOG PROMPT");
 					expect(
-						writeTargets.some((target) => /gpt-5\.4-instructions\.md$/.test(target)),
+						writeTargets.some((target) =>
+							target.includes("catalog-gpt-5.4-mini-instructions.md"),
+						),
+					).toBe(true);
+					expect(
+						writeTargets.some((target) => /catalog-gpt-5\.4-instructions\.md$/.test(target)),
 					).toBe(false);
 					expect(
 						writeTargets.some((target) => /gpt-5\.4-pro-instructions\.md$/.test(target)),
