@@ -707,6 +707,57 @@ describe("Codex Prompts Module", () => {
 					expect(catalogResult).not.toContain("PROMPT FILE CONTENT");
 				});
 
+				// prewarmCodexInstructions fires every catalog model concurrently, so a
+				// memo that is only populated after the await lets each caller start
+				// its own ~300KB models.json download.
+				it("should fetch models.json once when catalog models are requested concurrently", async () => {
+					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
+					let resolveCatalog: ((value: unknown) => void) | undefined;
+					const catalogGate = new Promise((resolve) => {
+						resolveCatalog = resolve;
+					});
+
+					mockFetch.mockImplementation((url: unknown) => {
+						const href = String(url);
+						if (href.includes("models.json")) {
+							// Hold the fetch open so every caller arrives before it resolves.
+							return catalogGate.then(() => ({
+								ok: true,
+								json: () => Promise.resolve({ tag_name: "rust-v0.111.0" }),
+								text: () => Promise.resolve(catalogPayload),
+								headers: { get: () => "etag" },
+							}));
+						}
+						return Promise.resolve({
+							ok: true,
+							json: () => Promise.resolve({ tag_name: "rust-v0.111.0" }),
+							text: () => Promise.resolve("PROMPT FILE CONTENT"),
+							headers: { get: () => "etag" },
+						});
+					});
+					mockedMkdir.mockResolvedValue(undefined);
+					mockedWriteFile.mockResolvedValue(undefined);
+
+					const pending = Promise.all([
+						getCodexInstructions("gpt-5.4"),
+						getCodexInstructions("gpt-5.5"),
+						getCodexInstructions("gpt-5.4-mini"),
+					]);
+					// Let all three reach fetchCatalogText before the fetch resolves.
+					await new Promise((resolve) => setTimeout(resolve, 0));
+					resolveCatalog?.(undefined);
+
+					const [a, b, c] = await pending;
+					expect(a).toContain("GPT54 CATALOG PROMPT");
+					expect(b).toContain("GPT55 CATALOG PROMPT");
+					expect(c).toContain("GPT54MINI CATALOG PROMPT");
+
+					const catalogFetches = mockFetch.mock.calls.filter(
+						(call) => typeof call[0] === "string" && call[0].includes("models.json"),
+					);
+					expect(catalogFetches).toHaveLength(1);
+				});
+
 				it("should fall back to the prompt file when the tag has no catalog entry", async () => {
 					mockedReadFile.mockRejectedValue(new Error("ENOENT"));
 					// Catalog without gpt-5.4 — simulates a release predating the slug.

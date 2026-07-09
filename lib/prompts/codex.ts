@@ -30,6 +30,7 @@ export function __clearCacheForTesting(): void {
 	memoryCache.clear();
 	refreshPromises.clear();
 	catalogMemo = null;
+	catalogInflight = null;
 	latestReleaseTagCache = null;
 }
 
@@ -196,22 +197,49 @@ function resolveInstructionSource(normalizedModel: string): InstructionSource {
  */
 let catalogMemo: { tag: string; text: string; timestamp: number } | null = null;
 
+/**
+ * In-flight fetch, shared by callers that arrive before the first one resolves.
+ *
+ * Without this, `prewarmCodexInstructions` — which fires every catalog model
+ * concurrently via `void getCodexInstructions(...)` — would have each of them
+ * miss the (not yet populated) memo and download models.json independently.
+ */
+let catalogInflight: { tag: string; promise: Promise<string> } | null = null;
+
 async function fetchCatalogText(tag: string): Promise<string> {
 	const now = Date.now();
 	if (catalogMemo && catalogMemo.tag === tag && now - catalogMemo.timestamp < CACHE_TTL_MS) {
 		return catalogMemo.text;
 	}
-	const url = `https://raw.githubusercontent.com/openai/codex/${tag}/${CATALOG_PATH}`;
-	const response = await fetch(url);
-	if (!response.ok) {
-		throw new PromptError(`HTTP ${response.status}`, {
-			code: "HTTP_ERROR",
-			context: { status: response.status },
-		});
+	if (catalogInflight && catalogInflight.tag === tag) {
+		return catalogInflight.promise;
 	}
-	const text = await response.text();
-	catalogMemo = { tag, text, timestamp: now };
-	return text;
+
+	const url = `https://raw.githubusercontent.com/openai/codex/${tag}/${CATALOG_PATH}`;
+	const promise = (async () => {
+		const response = await fetch(url);
+		if (!response.ok) {
+			throw new PromptError(`HTTP ${response.status}`, {
+				code: "HTTP_ERROR",
+				context: { status: response.status },
+			});
+		}
+		const text = await response.text();
+		// Only a successful fetch populates the memo; a failure leaves any prior
+		// value untouched and lets the next caller retry.
+		catalogMemo = { tag, text, timestamp: Date.now() };
+		return text;
+	})();
+
+	const entry = { tag, promise };
+	catalogInflight = entry;
+	try {
+		return await promise;
+	} finally {
+		if (catalogInflight === entry) {
+			catalogInflight = null;
+		}
+	}
 }
 
 interface CatalogModelEntry {
