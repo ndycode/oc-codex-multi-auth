@@ -34,6 +34,9 @@ controls how much thinking the model does.
 
 | model | supported values |
 |-------|------------------|
+| `gpt-5.6-sol` | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra` | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-luna` | low, medium, high, xhigh, max |
 | `gpt-5.5` | none, low, medium, high, xhigh |
 | `gpt-5.5-fast` | none, low, medium, high, xhigh |
 | `gpt-5.4` | none, low, medium, high, xhigh |
@@ -48,13 +51,22 @@ controls how much thinking the model does.
 | `gpt-5.1-codex-mini` | medium, high |
 | `gpt-5.1` | none, low, medium, high |
 
-The shipped config templates include 9 base model families and 36 shipped presets overall (36 modern variants or 36 legacy explicit entries). The default installer uses the compact modern template so the TUI model picker shows base OAuth model families and the separate variant picker selects the reasoning preset. Use `--full` to install explicit selector IDs too. `gpt-5.5-pro` is ChatGPT-only (not routed by this plugin), while `gpt-5.3-codex-spark` remains a manual add-on for entitled workspaces only.
+The shipped config templates include 12 base model families and 53 shipped presets overall (53 modern variants or 53 legacy explicit entries). The default installer uses the compact modern template so the TUI model picker shows base OAuth model families and the separate variant picker selects the reasoning preset. Use `--full` to install explicit selector IDs too. `gpt-5.5-pro` is ChatGPT-only (not routed by this plugin), while `gpt-5.3-codex-spark` remains a manual add-on for entitled workspaces only.
+
+GPT-5.6 notes:
+- No 5.6 tier accepts `none` or `minimal`; both are raised to `low`.
+- `max` and `ultra` are new in 5.6. Requesting them on an older family steps down to `xhigh` (then `high` where xhigh is unsupported).
+- `ultra` is a client-side tier. Codex rewrites it to `max` before the request leaves the client, and the subagent orchestration that distinguishes ultra lives in the Codex client rather than the request body. This plugin is a proxy, so `-ultra` is accepted as an alias and sent on the wire as `max` — it does **not** spawn subagents.
+- 5.6 is opt-in: the legacy `gpt-5` alias and the plugin default still resolve to `gpt-5.5` / `gpt-5.4`. Because 5.6 shipped as a limited preview, an account without access falls back down the 5.6 tiers and then to `gpt-5.5`.
+
 For context sizing, shipped templates use:
+- `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`: `context=1050000`, `output=128000`
 - `gpt-5.5` and `gpt-5.5-fast`: `context=1050000`, `output=128000`
 - `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, and `gpt-5.1-codex-mini`: `context=400000`, `output=128000`
 - `gpt-5.1`: `context=272000`, `output=128000`
 
 model normalization aliases:
+- bare `gpt-5.6` maps to the flagship tier `gpt-5.6-sol`; `gpt-5.6-terra*` and `gpt-5.6-luna*` map to their own ids
 - `gpt-5.5*`, `gpt-5.5-fast*`, and user-typed `gpt-5.5-pro*` normalize to the public Codex model id `gpt-5.5`
 - legacy `gpt-5` maps to `gpt-5.5`; legacy `gpt-5-mini` / `gpt-5-nano` map to `gpt-5.4-mini` / `gpt-5.4-nano`
 - snapshot ids `gpt-5.4-2026-03-05*`, `gpt-5.4-mini-2026-03-05*`, and `gpt-5.4-pro-2026-03-05*` map to stable `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.4-pro`

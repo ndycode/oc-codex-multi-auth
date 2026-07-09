@@ -21,14 +21,29 @@ export interface UserConfig {
 }
 
 export interface ConfigOptions {
-	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoningEffort?:
+		| "none"
+		| "minimal"
+		| "low"
+		| "medium"
+		| "high"
+		| "xhigh"
+		| "max"
+		| "ultra";
 	reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on";
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
 }
 
+/**
+ * Resolved reasoning settings as they go on the wire.
+ *
+ * `ultra` is deliberately absent: it is a client-side tier that Codex collapses
+ * to `max` before sending (codex-rs/core/src/client.rs
+ * `reasoning_effort_for_request`), so it must never reach the backend.
+ */
 export interface ReasoningConfig {
-	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	summary: "auto" | "concise" | "detailed";
 }
 

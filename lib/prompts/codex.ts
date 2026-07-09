@@ -49,6 +49,9 @@ export type ModelFamily =
 	| "gpt-5-codex"
 	| "codex-max"
 	| "codex"
+	| "gpt-5.6-sol"
+	| "gpt-5.6-terra"
+	| "gpt-5.6-luna"
 	| "gpt-5.4"
 	| "gpt-5.4-mini"
 	| "gpt-5.4-pro"
@@ -63,6 +66,9 @@ export const MODEL_FAMILIES: readonly ModelFamily[] = [
 	"gpt-5-codex",
 	"codex-max",
 	"codex",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
 	"gpt-5.4",
 	"gpt-5.4-mini",
 	"gpt-5.4-pro",
@@ -78,6 +84,11 @@ const PROMPT_FILES: Record<ModelFamily, string> = {
 	"gpt-5-codex": "gpt_5_codex_prompt.md",
 	"codex-max": "gpt-5.1-codex-max_prompt.md",
 	codex: "gpt_5_codex_prompt.md",
+	// openai/codex ships no 5.6-specific prompt file, so the 5.6 tiers reuse the
+	// GPT-5.2 prompt like GPT-5.4/5.5 do, while keeping isolated cache/family state.
+	"gpt-5.6-sol": "gpt_5_2_prompt.md",
+	"gpt-5.6-terra": "gpt_5_2_prompt.md",
+	"gpt-5.6-luna": "gpt_5_2_prompt.md",
 	// As of Codex rust-v0.111.0, GPT-5.4 uses the same prompt file family as GPT-5.2.
 	"gpt-5.4": "gpt_5_2_prompt.md",
 	// GPT-5.4-mini uses the same core prompt file as GPT-5.4, but keeps isolated cache/family state.
@@ -95,6 +106,9 @@ const CACHE_FILES: Record<ModelFamily, string> = {
 	"gpt-5-codex": "gpt-5-codex-instructions.md",
 	"codex-max": "codex-max-instructions.md",
 	codex: "codex-instructions.md",
+	"gpt-5.6-sol": "gpt-5.6-sol-instructions.md",
+	"gpt-5.6-terra": "gpt-5.6-terra-instructions.md",
+	"gpt-5.6-luna": "gpt-5.6-luna-instructions.md",
 	"gpt-5.4": "gpt-5.4-instructions.md",
 	"gpt-5.4-mini": "gpt-5.4-mini-instructions.md",
 	"gpt-5.4-pro": "gpt-5.4-pro-instructions.md",
@@ -160,6 +174,17 @@ export function getModelFamily(normalizedModel: string): ModelFamily {
 		normalizedModel.startsWith("codex-")
 	) {
 		return "codex";
+	}
+	// GPT-5.6 tiers each get an isolated family so per-family rotation and
+	// rate-limit state stay separate. Bare `gpt-5.6` follows the Sol alias.
+	if (/\bgpt(?:-| )5\.6(?:-| )terra(?:\b|[- ])/i.test(normalizedModel)) {
+		return "gpt-5.6-terra";
+	}
+	if (/\bgpt(?:-| )5\.6(?:-| )luna(?:\b|[- ])/i.test(normalizedModel)) {
+		return "gpt-5.6-luna";
+	}
+	if (/\bgpt(?:-| )5\.6(?:\b|[- ])/i.test(normalizedModel)) {
+		return "gpt-5.6-sol";
 	}
 	// GPT-5.5 Pro is ChatGPT-only per the 2026-04-23 launch and is not
 	// routed through Codex. Any `gpt-5.5-pro*` that still reaches this path
@@ -480,7 +505,7 @@ function refreshInstructionsInBackground(
  * Prewarm instruction caches for the provided models/families.
  */
 export function prewarmCodexInstructions(models: string[] = []): void {
-	const candidates = models.length > 0 ? models : ["gpt-5-codex", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-pro", "gpt-5.2", "gpt-5.1"];
+	const candidates = models.length > 0 ? models : ["gpt-5-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-pro", "gpt-5.2", "gpt-5.1"];
 	for (const model of candidates) {
 		void getCodexInstructions(model).catch((error) => {
 			logDebug("Codex instruction prewarm failed", {

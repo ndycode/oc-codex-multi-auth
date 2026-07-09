@@ -23,13 +23,71 @@ const GPT_54_SNAPSHOT_DATE = "2026-03-05" as const;
 const GPT_55_REJECTED_DATED_RELEASE_ID = "gpt-5.5-20260423" as const;
 export const GPT_55_MODEL_ID = "gpt-5.5" as const;
 
+export const GPT_56_SOL_MODEL_ID = "gpt-5.6-sol" as const;
+export const GPT_56_TERRA_MODEL_ID = "gpt-5.6-terra" as const;
+export const GPT_56_LUNA_MODEL_ID = "gpt-5.6-luna" as const;
+
+/**
+ * Effort suffixes each GPT-5.6 tier accepts, per the Codex model catalog
+ * (openai/codex `codex-rs/models-manager/models.json`).
+ *
+ * Sol and Terra both expose `max` and `ultra`; Luna stops at `max`. None of the
+ * three accept `none` or `minimal`. Press coverage claiming `max`/`ultra` are
+ * Sol-exclusive contradicts the catalog — the catalog wins.
+ */
+const GPT_56_SOL_TERRA_EFFORT_SUFFIXES = [
+	"",
+	"-low",
+	"-medium",
+	"-high",
+	"-xhigh",
+	"-max",
+	"-ultra",
+] as const;
+const GPT_56_LUNA_EFFORT_SUFFIXES = [
+	"",
+	"-low",
+	"-medium",
+	"-high",
+	"-xhigh",
+	"-max",
+] as const;
+
 function expandDatedAliases(prefix: string, target: string): Record<string, string> {
 	return Object.fromEntries(
 		DATED_ALIAS_EFFORT_SUFFIXES.map((suffix) => [`${prefix}${suffix}`, target]),
 	);
 }
 
+function expandEffortAliases(
+	target: string,
+	suffixes: readonly string[],
+): Record<string, string> {
+	return Object.fromEntries(
+		suffixes.map((suffix) => [`${target}${suffix}`, target]),
+	);
+}
+
 export const MODEL_MAP: Record<string, string> = {
+	// ============================================================================
+	// GPT-5.6 Models (Sol / Terra / Luna)
+	//
+	// Opt-in only: the legacy `gpt-5` alias and normalizeModel's default both
+	// still resolve to the 5.5/5.4 families. GPT-5.6 shipped as a limited
+	// preview, so accounts outside it would fail on every request if these
+	// became the default. Users select `gpt-5.6-*` explicitly; the unsupported
+	// -model fallback chain then degrades to 5.5 if the account lacks access.
+	//
+	// `-none` and `-minimal` are intentionally absent: no 5.6 tier accepts them.
+	// `-ultra` is absent for Luna: the catalog stops that tier at `max`.
+	// ============================================================================
+	...expandEffortAliases(GPT_56_SOL_MODEL_ID, GPT_56_SOL_TERRA_EFFORT_SUFFIXES),
+	...expandEffortAliases(GPT_56_TERRA_MODEL_ID, GPT_56_SOL_TERRA_EFFORT_SUFFIXES),
+	...expandEffortAliases(GPT_56_LUNA_MODEL_ID, GPT_56_LUNA_EFFORT_SUFFIXES),
+	// Bare `gpt-5.6` is the flagship alias, mirroring how OpenAI's API docs
+	// reference `gpt-5.6` on the Sol model page.
+	"gpt-5.6": GPT_56_SOL_MODEL_ID,
+
 	// ============================================================================
 	// GPT-5 Codex Models (canonical stable family)
 	// ============================================================================

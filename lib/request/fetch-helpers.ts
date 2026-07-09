@@ -16,7 +16,13 @@ import {
 	normalizeModel,
 	upsertBackendModelIdentityMessage,
 } from "./request-transformer.js";
-import { GPT_55_MODEL_ID } from "./helpers/model-map.js";
+import {
+	GPT_55_MODEL_ID,
+	GPT_56_LUNA_MODEL_ID,
+	GPT_56_SOL_MODEL_ID,
+	GPT_56_TERRA_MODEL_ID,
+} from "./helpers/model-map.js";
+import { stripEffortSuffix } from "./helpers/effort-suffix.js";
 import { convertSseToJson, ensureContentType } from "./response-handler.js";
 import type { OAuthAuthDetails, UserConfig, RequestBody } from "../types.js";
 import { CodexAuthError } from "../errors.js";
@@ -85,6 +91,16 @@ const CHATGPT_CODEX_UNSUPPORTED_MODEL_PATTERN =
 const NORMALIZED_UNSUPPORTED_MODEL_PATTERN =
 	/the model ['"]([^'"]+)['"] is not currently available for this chatgpt account/i;
 export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> = {
+	// GPT-5.6 shipped as a limited preview. Accounts outside it get
+	// `model_not_supported_with_chatgpt_account`, so degrade down the 5.6 tiers
+	// and then out to the generally-available 5.5 family.
+	[GPT_56_SOL_MODEL_ID]: [
+		GPT_56_TERRA_MODEL_ID,
+		GPT_56_LUNA_MODEL_ID,
+		GPT_55_MODEL_ID,
+	],
+	[GPT_56_TERRA_MODEL_ID]: [GPT_56_LUNA_MODEL_ID, GPT_55_MODEL_ID],
+	[GPT_56_LUNA_MODEL_ID]: [GPT_55_MODEL_ID],
 	[GPT_55_MODEL_ID]: ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
 	"gpt-5.4": ["gpt-5.4-mini", "gpt-5.4-nano"],
 	"gpt-5.4-mini": ["gpt-5.4-nano"],
@@ -151,7 +167,7 @@ function canonicalizeModelName(model: string | undefined): string | undefined {
 	const stripped = trimmed.includes("/")
 		? (trimmed.split("/").pop() ?? trimmed)
 		: trimmed;
-	const withoutEffort = stripped.replace(/-(none|minimal|low|medium|high|xhigh)$/i, "");
+	const withoutEffort = stripEffortSuffix(stripped);
 
 	// Keep legacy alias distinctions (for example gpt-5.3-codex-spark vs gpt-5.3-codex)
 	// while collapsing rejected dated GPT-5.5 release aliases onto the public Codex ids.
