@@ -59,7 +59,21 @@ GPT-5.6 notes:
 - `max` and `ultra` are new in 5.6. Requesting them on an older family steps down to `xhigh` (then `high` where xhigh is unsupported).
 - `ultra` is a client-side tier. Codex rewrites it to `max` before the request leaves the client, and the subagent orchestration that distinguishes ultra lives in the Codex client rather than the request body. This plugin is a proxy, so `-ultra` is accepted as an alias and sent on the wire as `max` — it does **not** spawn subagents.
 - 5.6 is opt-in: the legacy `gpt-5` alias and the plugin default still resolve to `gpt-5.5` / `gpt-5.4`. Because 5.6 shipped as a limited preview, an account without access falls back down the 5.6 tiers and then to `gpt-5.5`. The lite shape is applied per request attempt, so a request that falls back from `gpt-5.6-sol` to `gpt-5.5` is re-serialized into the classic shape and keeps its tools.
-- Instructions for the 5.6 tiers come from the Codex model catalog (`base_instructions` in `codex-rs/models-manager/models.json`), not from a `*_prompt.md` file — upstream ships none for 5.6, and Sol, Terra, and Luna each carry distinct text. If the pinned Codex release predates a tier, the plugin falls back to that family's prompt file.
+- Instructions for the 5.6 tiers come from the Codex model catalog — see "System instructions" below.
+
+### System instructions
+
+Modern Codex carries a full `base_instructions` string **per model** in its catalog (`base_instructions` in `codex-rs/models-manager/models.json`) and sends that, rather than the legacy `*_prompt.md` files. The plugin sources instructions from the catalog for every model the catalog covers:
+
+| Model | Instruction source |
+|-------|--------------------|
+| `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` | catalog (each tier has distinct text) |
+| `gpt-5.5` | catalog |
+| `gpt-5.4`, `gpt-5.4-mini` | catalog |
+| `gpt-5.2` | catalog |
+| `gpt-5-codex`, `gpt-5.1*`, `gpt-5.2-codex`, `gpt-5.4-nano`, `gpt-5.4-pro` | `*_prompt.md` file (absent from the catalog) |
+
+Catalog-sourced instructions cache per model id (`catalog-<slug>-instructions.md`); file-sourced instructions keep the historical per-family cache. This matters because `gpt-5.5` and `gpt-5.4` share the `gpt-5.4` family but have different catalog text — a family-keyed cache would let one serve the other's prompt. `models.json` is fetched once per release tag and shared across models. If the pinned Codex release has no catalog entry for a model, the plugin falls back to that family's prompt file.
 
 For context sizing, shipped templates use:
 - `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`: `context=1050000`, `output=128000`

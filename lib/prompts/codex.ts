@@ -18,7 +18,7 @@ const __dirname = dirname(__filename);
 
 const MAX_CACHE_SIZE = 50;
 const memoryCache = new Map<string, { content: string; timestamp: number }>();
-const refreshPromises = new Map<ModelFamily, Promise<void>>();
+const refreshPromises = new Map<string, Promise<void>>();
 const RELEASE_TAG_TTL_MS = 5 * 60 * 1000;
 let latestReleaseTagCache: { tag: string; checkedAt: number } | null = null;
 
@@ -29,6 +29,8 @@ let latestReleaseTagCache: { tag: string; checkedAt: number } | null = null;
 export function __clearCacheForTesting(): void {
 	memoryCache.clear();
 	refreshPromises.clear();
+	catalogMemo = null;
+	catalogInflight = null;
 	latestReleaseTagCache = null;
 }
 
@@ -118,22 +120,127 @@ const CACHE_FILES: Record<ModelFamily, string> = {
 };
 
 /**
- * Model families whose base instructions live in the Codex model catalog
+ * Canonical model ids whose base instructions live in the Codex model catalog
  * (`codex-rs/models-manager/models.json`) rather than in a `*_prompt.md` file.
  *
- * openai/codex ships no 5.6 prompt file. Each 5.6 tier instead carries a full
- * `base_instructions` string in the catalog, and the three tiers do NOT share
- * it — Sol, Terra, and Luna each have distinct text. Falling back to
- * `gpt_5_2_prompt.md` would tell a 5.6 model it is "GPT-5.2 running in the
- * Codex CLI", so the catalog is the only correct source here.
+ * Modern Codex carries a full `base_instructions` string per model in the
+ * catalog and sends that, not the legacy prompt files. The two differ
+ * substantially: `gpt_5_2_prompt.md` opens "You are GPT-5.2 running in the
+ * Codex CLI", while every catalog entry opens "You are Codex, ... based on
+ * GPT-5". Models absent from the catalog (gpt-5-codex, gpt-5.1*, gpt-5.4-nano,
+ * gpt-5.4-pro, gpt-5.2-codex) still use their prompt file.
+ *
+ * Keyed by model id, not by family: `gpt-5.5` and `gpt-5.4` share the
+ * `gpt-5.4` family but have different catalog text, so a family-keyed cache
+ * would let one poison the other.
  */
-const CATALOG_MODEL_SLUGS: Partial<Record<ModelFamily, string>> = {
-	"gpt-5.6-sol": "gpt-5.6-sol",
-	"gpt-5.6-terra": "gpt-5.6-terra",
-	"gpt-5.6-luna": "gpt-5.6-luna",
-};
+const CATALOG_SLUGS: ReadonlySet<string> = new Set([
+	"gpt-5.2",
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.5",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
+]);
 
 const CATALOG_PATH = "codex-rs/models-manager/models.json";
+
+/**
+ * Where one model's instructions come from, and where they are cached.
+ *
+ * Catalog-sourced instructions cache per model id; file-sourced instructions
+ * cache per family, preserving the historical layout.
+ */
+interface InstructionSource {
+	/** Memory-cache and in-flight-refresh key. */
+	key: string;
+	cacheFile: string;
+	cacheMetaFile: string;
+	/** Prompt file: the source for non-catalog models, and the catalog fallback. */
+	promptFile: string;
+	/** Set when the model has catalog `base_instructions`. */
+	catalogSlug?: string;
+}
+
+function resolveInstructionSource(normalizedModel: string): InstructionSource {
+	const modelFamily = getModelFamily(normalizedModel);
+	const promptFile = PROMPT_FILES[modelFamily];
+	const slug = normalizedModel.toLowerCase();
+	const catalogSlug = CATALOG_SLUGS.has(slug) ? slug : undefined;
+
+	// Distinct filenames keep catalog content from being served out of a disk
+	// cache written by the older prompt-file source, and vice versa.
+	const baseName = catalogSlug
+		? `catalog-${catalogSlug}-instructions.md`
+		: CACHE_FILES[modelFamily];
+
+	// Namespace the key: slug-space and family-space overlap. `gpt-5.4-nano` has
+	// no catalog entry and belongs to the `gpt-5.4` family, which is also a
+	// catalog slug — an un-namespaced key would let nano and gpt-5.4 serve each
+	// other's instructions out of memoryCache/refreshPromises. Same for bare
+	// `gpt-5.6` (family `gpt-5.6-sol`) against the `gpt-5.6-sol` slug.
+	const key = catalogSlug ? `catalog:${catalogSlug}` : `family:${modelFamily}`;
+
+	return {
+		key,
+		cacheFile: join(CACHE_DIR, baseName),
+		cacheMetaFile: join(CACHE_DIR, baseName.replace(".md", "-meta.json")),
+		promptFile,
+		catalogSlug,
+	};
+}
+
+/**
+ * models.json is ~300KB and shared by every catalog-sourced model, so fetch it
+ * once per release tag instead of once per model.
+ */
+let catalogMemo: { tag: string; text: string; timestamp: number } | null = null;
+
+/**
+ * In-flight fetch, shared by callers that arrive before the first one resolves.
+ *
+ * Without this, `prewarmCodexInstructions` — which fires every catalog model
+ * concurrently via `void getCodexInstructions(...)` — would have each of them
+ * miss the (not yet populated) memo and download models.json independently.
+ */
+let catalogInflight: { tag: string; promise: Promise<string> } | null = null;
+
+async function fetchCatalogText(tag: string): Promise<string> {
+	const now = Date.now();
+	if (catalogMemo && catalogMemo.tag === tag && now - catalogMemo.timestamp < CACHE_TTL_MS) {
+		return catalogMemo.text;
+	}
+	if (catalogInflight && catalogInflight.tag === tag) {
+		return catalogInflight.promise;
+	}
+
+	const url = `https://raw.githubusercontent.com/openai/codex/${tag}/${CATALOG_PATH}`;
+	const promise = (async () => {
+		const response = await fetch(url);
+		if (!response.ok) {
+			throw new PromptError(`HTTP ${response.status}`, {
+				code: "HTTP_ERROR",
+				context: { status: response.status },
+			});
+		}
+		const text = await response.text();
+		// Only a successful fetch populates the memo; a failure leaves any prior
+		// value untouched and lets the next caller retry.
+		catalogMemo = { tag, text, timestamp: Date.now() };
+		return text;
+	})();
+
+	const entry = { tag, promise };
+	catalogInflight = entry;
+	try {
+		return await promise;
+	} finally {
+		if (catalogInflight === entry) {
+			catalogInflight = null;
+		}
+	}
+}
 
 interface CatalogModelEntry {
 	slug?: string;
@@ -356,19 +463,13 @@ async function getLatestReleaseTag(): Promise<string> {
 export async function getCodexInstructions(
 	normalizedModel = "gpt-5-codex",
 ): Promise<string> {
-	const modelFamily = getModelFamily(normalizedModel);
+	const source = resolveInstructionSource(normalizedModel);
+	const { key, cacheFile, cacheMetaFile } = source;
 	const now = Date.now();
-	const cached = memoryCache.get(modelFamily);
+	const cached = memoryCache.get(key);
 	if (cached && now - cached.timestamp < CACHE_TTL_MS) {
 		return rewriteInstructionIdentity(cached.content, normalizedModel);
 	}
-
-	const promptFile = PROMPT_FILES[modelFamily];
-	const cacheFile = join(CACHE_DIR, CACHE_FILES[modelFamily]);
-	const cacheMetaFile = join(
-		CACHE_DIR,
-		`${CACHE_FILES[modelFamily].replace(".md", "-meta.json")}`,
-	);
 
 	let cachedMetadata: CacheMetadata | null = null;
 	const [metaContent, diskContent] = await Promise.all([
@@ -386,79 +487,89 @@ export async function getCodexInstructions(
 
 	if (diskContent && cachedMetadata?.lastChecked) {
 		if (now - cachedMetadata.lastChecked < CACHE_TTL_MS) {
-			setCacheEntry(modelFamily, { content: diskContent, timestamp: now });
+			setCacheEntry(key, { content: diskContent, timestamp: now });
 			return rewriteInstructionIdentity(diskContent, normalizedModel);
 		}
 		// Stale-while-revalidate: return stale cache immediately and refresh in background.
-		setCacheEntry(modelFamily, { content: diskContent, timestamp: now });
-		void refreshInstructionsInBackground(
-			modelFamily,
-			promptFile,
-			cacheFile,
-			cacheMetaFile,
-			cachedMetadata,
-		);
+		setCacheEntry(key, { content: diskContent, timestamp: now });
+		void refreshInstructionsInBackground(source, cachedMetadata);
 		return rewriteInstructionIdentity(diskContent, normalizedModel);
 	}
 
 	if (cached && now - cached.timestamp >= CACHE_TTL_MS) {
 		// Keep session latency stable by serving stale memory cache while refreshing.
-		setCacheEntry(modelFamily, { content: cached.content, timestamp: now });
-		void refreshInstructionsInBackground(
-			modelFamily,
-			promptFile,
-			cacheFile,
-			cacheMetaFile,
-			cachedMetadata,
-		);
+		setCacheEntry(key, { content: cached.content, timestamp: now });
+		void refreshInstructionsInBackground(source, cachedMetadata);
 		return rewriteInstructionIdentity(cached.content, normalizedModel);
 	}
 
 	try {
-		const instructions = await fetchAndPersistInstructions(
-			modelFamily,
-			promptFile,
-			cacheFile,
-			cacheMetaFile,
-			cachedMetadata,
-		);
+		const instructions = await fetchAndPersistInstructions(source, cachedMetadata);
 		return rewriteInstructionIdentity(instructions, normalizedModel);
 	} catch (error) {
 		const err = error as Error;
-		logError(
-			`Failed to fetch ${modelFamily} instructions from GitHub: ${err.message}`,
-		);
+		logError(`Failed to fetch ${key} instructions from GitHub: ${err.message}`);
 
 		if (diskContent) {
-			logWarn(`Using cached ${modelFamily} instructions`);
-			setCacheEntry(modelFamily, { content: diskContent, timestamp: now });
+			logWarn(`Using cached ${key} instructions`);
+			setCacheEntry(key, { content: diskContent, timestamp: now });
 			return rewriteInstructionIdentity(diskContent, normalizedModel);
 		}
 
-		logWarn(`Falling back to bundled instructions for ${modelFamily}`);
+		logWarn(`Falling back to bundled instructions for ${key}`);
 		const bundled = await fs.readFile(
 			join(__dirname, "codex-instructions.md"),
 			"utf8",
 		);
-		setCacheEntry(modelFamily, { content: bundled, timestamp: now });
+		setCacheEntry(key, { content: bundled, timestamp: now });
 		return rewriteInstructionIdentity(bundled, normalizedModel);
 	}
 }
 
+async function persistInstructions(
+	source: InstructionSource,
+	instructions: string,
+	meta: CacheMetadata,
+): Promise<string> {
+	await fs.mkdir(CACHE_DIR, { recursive: true });
+	await Promise.all([
+		fs.writeFile(source.cacheFile, instructions, "utf8"),
+		fs.writeFile(source.cacheMetaFile, JSON.stringify(meta), "utf8"),
+	]);
+	setCacheEntry(source.key, { content: instructions, timestamp: Date.now() });
+	return instructions;
+}
+
 async function fetchAndPersistInstructions(
-	modelFamily: ModelFamily,
-	promptFile: string,
-	cacheFile: string,
-	cacheMetaFile: string,
+	source: InstructionSource,
 	cachedMetadata: CacheMetadata | null,
 ): Promise<string> {
+	const { key, cacheFile, promptFile, catalogSlug } = source;
+	const latestTag = await getLatestReleaseTag();
+
+	if (catalogSlug) {
+		const catalogUrl = `https://raw.githubusercontent.com/openai/codex/${latestTag}/${CATALOG_PATH}`;
+		const fromCatalog = extractCatalogInstructions(
+			await fetchCatalogText(latestTag),
+			catalogSlug,
+		);
+		if (fromCatalog) {
+			return persistInstructions(source, fromCatalog, {
+				etag: null,
+				tag: latestTag,
+				lastChecked: Date.now(),
+				url: catalogUrl,
+			});
+		}
+		// The pinned release predates this model; fall through to the prompt file.
+		logWarn(
+			`No catalog entry for ${catalogSlug} at ${latestTag}; falling back to ${promptFile}`,
+		);
+	}
+
 	let cachedETag = cachedMetadata?.etag ?? null;
 	const cachedTag = cachedMetadata?.tag ?? null;
-	const latestTag = await getLatestReleaseTag();
-	const catalogSlug = CATALOG_MODEL_SLUGS[modelFamily];
-	const instructionsUrl = catalogSlug
-		? `https://raw.githubusercontent.com/openai/codex/${latestTag}/${CATALOG_PATH}`
-		: `https://raw.githubusercontent.com/openai/codex/${latestTag}/codex-rs/core/${promptFile}`;
+	const instructionsUrl = `https://raw.githubusercontent.com/openai/codex/${latestTag}/codex-rs/core/${promptFile}`;
 
 	if (cachedTag !== latestTag) {
 		cachedETag = null;
@@ -473,10 +584,10 @@ async function fetchAndPersistInstructions(
 	if (response.status === 304) {
 		const diskContent = await readFileOrNull(cacheFile);
 		if (diskContent) {
-			setCacheEntry(modelFamily, { content: diskContent, timestamp: Date.now() });
+			setCacheEntry(key, { content: diskContent, timestamp: Date.now() });
 			await fs.mkdir(CACHE_DIR, { recursive: true });
 			await fs.writeFile(
-				cacheMetaFile,
+				source.cacheMetaFile,
 				JSON.stringify(
 					{
 						etag: cachedETag,
@@ -498,78 +609,33 @@ async function fetchAndPersistInstructions(
 		});
 	}
 
-	const payload = await response.text();
-	let instructions = payload;
-	if (catalogSlug) {
-		const fromCatalog = extractCatalogInstructions(payload, catalogSlug);
-		if (fromCatalog) {
-			instructions = fromCatalog;
-		} else {
-			// The pinned release predates this model. Fall back to the family's
-			// prompt file rather than persisting a whole models.json as a prompt.
-			logWarn(
-				`No catalog entry for ${catalogSlug} at ${latestTag}; falling back to ${promptFile}`,
-			);
-			const fallbackUrl = `https://raw.githubusercontent.com/openai/codex/${latestTag}/codex-rs/core/${promptFile}`;
-			const fallbackResponse = await fetch(fallbackUrl);
-			if (!fallbackResponse.ok) {
-				throw new PromptError(`HTTP ${fallbackResponse.status}`, {
-					code: "HTTP_ERROR",
-					context: { status: fallbackResponse.status },
-				});
-			}
-			instructions = await fallbackResponse.text();
-		}
-	}
-	const newETag = response.headers.get("etag");
-	await fs.mkdir(CACHE_DIR, { recursive: true });
-	await Promise.all([
-		fs.writeFile(cacheFile, instructions, "utf8"),
-		fs.writeFile(
-			cacheMetaFile,
-			JSON.stringify(
-				{
-					etag: newETag,
-					tag: latestTag,
-					lastChecked: Date.now(),
-					url: instructionsUrl,
-				} satisfies CacheMetadata,
-			),
-			"utf8",
-		),
-	]);
-	setCacheEntry(modelFamily, { content: instructions, timestamp: Date.now() });
-	return instructions;
+	return persistInstructions(source, await response.text(), {
+		etag: response.headers.get("etag"),
+		tag: latestTag,
+		lastChecked: Date.now(),
+		url: instructionsUrl,
+	});
 }
 
 function refreshInstructionsInBackground(
-	modelFamily: ModelFamily,
-	promptFile: string,
-	cacheFile: string,
-	cacheMetaFile: string,
+	source: InstructionSource,
 	cachedMetadata: CacheMetadata | null,
 ): Promise<void> {
-	const existing = refreshPromises.get(modelFamily);
+	const existing = refreshPromises.get(source.key);
 	if (existing) return existing;
 
-	const refreshPromise = fetchAndPersistInstructions(
-		modelFamily,
-		promptFile,
-		cacheFile,
-		cacheMetaFile,
-		cachedMetadata,
-	)
+	const refreshPromise = fetchAndPersistInstructions(source, cachedMetadata)
 		.then(() => undefined)
 		.catch((error) => {
-			logDebug(`Background prompt refresh failed for ${modelFamily}`, {
+			logDebug(`Background prompt refresh failed for ${source.key}`, {
 				error: String(error),
 			});
 		})
 		.finally(() => {
-			refreshPromises.delete(modelFamily);
+			refreshPromises.delete(source.key);
 		});
 
-	refreshPromises.set(modelFamily, refreshPromise);
+	refreshPromises.set(source.key, refreshPromise);
 	return refreshPromise;
 }
 
