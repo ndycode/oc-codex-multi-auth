@@ -1281,6 +1281,158 @@ describe('Fetch Helpers Module', () => {
 				expect(getInstructionsSpy).not.toHaveBeenCalled();
 			});
 
+			it('emits the responses-lite shape end-to-end for GPT-5.6 in native mode', async () => {
+				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
+				const requestBody = {
+					model: 'gpt-5.6-sol-xhigh',
+					instructions: 'BASE',
+					input: [{ type: 'message', role: 'user', content: 'Hello' }],
+					tools: [{ name: 'apply_patch' }],
+					parallel_tool_calls: true,
+				};
+
+				const result = await transformRequestForCodex(
+					{ body: JSON.stringify(requestBody) },
+					'https://example.com',
+					{ global: {}, models: {} },
+					true,
+					undefined,
+					{ requestTransformMode: 'native' } as any,
+				);
+
+				expect(result?.body.model).toBe('gpt-5.6-sol');
+
+				// The canonical body stays classic so the fallback path can re-serialize
+				// it for a non-lite model; only the wire body is lite-shaped.
+				expect(result?.body.tools).toEqual([{ name: 'apply_patch' }]);
+
+				const serialized = JSON.parse(result!.updatedInit.body as string);
+				expect(serialized).not.toHaveProperty('tools');
+				expect(serialized.instructions).toBe('');
+				expect(serialized.parallel_tool_calls).toBe(false);
+				expect(serialized.input[0].type).toBe('additional_tools');
+				expect(serialized.input[0].role).toBe('developer');
+				expect(serialized.input[0].tools).toEqual([{ name: 'apply_patch' }]);
+			});
+
+			it('emits the responses-lite shape in legacy mode, the default path', async () => {
+				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
+				vi.spyOn(codexPrompts, 'getCodexInstructions').mockResolvedValue(
+					'CODEX INSTRUCTIONS',
+				);
+				const requestBody = {
+					model: 'gpt-5.6-terra',
+					input: [{ type: 'message', role: 'user', content: 'Hello' }],
+					tools: [{ type: 'function', name: 'apply_patch' }],
+				};
+
+				const result = await transformRequestForCodex(
+					{ body: JSON.stringify(requestBody) },
+					'https://example.com',
+					{ global: {}, models: {} },
+					true,
+					undefined,
+					// no requestTransformMode -> legacy
+				);
+
+				const serialized = JSON.parse(result!.updatedInit.body as string);
+				expect(serialized.model).toBe('gpt-5.6-terra');
+				expect(serialized).not.toHaveProperty('tools');
+				expect(serialized.instructions).toBe('');
+				expect(serialized.parallel_tool_calls).toBe(false);
+				expect(serialized.input[0].type).toBe('additional_tools');
+				// The assembled Codex instructions land in the developer message,
+				// not the top-level field.
+				expect(JSON.stringify(serialized.input[1])).toContain('CODEX INSTRUCTIONS');
+				vi.restoreAllMocks();
+			});
+
+			// Regression: a lite-shaped body must never reach a non-lite model.
+			// GPT-5.6 is preview-gated, so sol -> gpt-5.5 is a common runtime path.
+			it('re-serializes a 5.6 body into the classic shape when falling back to 5.5', async () => {
+				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
+				const { shapeBodyForModel } = await import(
+					'../lib/request/helpers/responses-lite.js'
+				);
+				const requestBody = {
+					model: 'gpt-5.6-sol',
+					instructions: 'BASE',
+					input: [{ type: 'message', role: 'user', content: 'Hello' }],
+					tools: [{ name: 'apply_patch' }],
+				};
+
+				const result = await transformRequestForCodex(
+					{ body: JSON.stringify(requestBody) },
+					'https://example.com',
+					{ global: {}, models: {} },
+					true,
+					undefined,
+					{ requestTransformMode: 'native' } as any,
+				);
+
+				// Simulate the unsupported-model fallback: swap the model on the
+				// canonical body, exactly as index.ts does, then re-serialize.
+				const fallbackBody = {
+					...result!.body,
+					model: 'gpt-5.5',
+					instructions: 'GPT55 INSTRUCTIONS',
+				};
+				const wire = JSON.parse(JSON.stringify(shapeBodyForModel(fallbackBody)));
+
+				// gpt-5.5 is non-lite: it must get its tools back at the top level.
+				expect(wire.tools).toEqual([{ name: 'apply_patch' }]);
+				expect(wire.instructions).toBe('GPT55 INSTRUCTIONS');
+				expect(wire.parallel_tool_calls).toBeUndefined();
+				expect(wire.input[0].type).not.toBe('additional_tools');
+				expect(JSON.stringify(wire.input)).not.toContain('additional_tools');
+			});
+
+			it('re-folds instructions into input on a 5.6 -> 5.6 fallback hop', async () => {
+				const { shapeBodyForModel } = await import(
+					'../lib/request/helpers/responses-lite.js'
+				);
+				const canonical = {
+					model: 'gpt-5.6-terra',
+					instructions: 'TERRA INSTRUCTIONS',
+					input: [{ type: 'message', role: 'user', content: 'Hello' }],
+					tools: [{ name: 'apply_patch' }],
+				} as any;
+
+				const wire = JSON.parse(JSON.stringify(shapeBodyForModel(canonical)));
+				expect(wire.instructions).toBe('');
+				expect(wire.input[0].type).toBe('additional_tools');
+				expect(JSON.stringify(wire.input[1])).toContain('TERRA INSTRUCTIONS');
+				// The canonical body is untouched, so a later hop can reshape again.
+				expect(canonical.instructions).toBe('TERRA INSTRUCTIONS');
+				expect(canonical.tools).toEqual([{ name: 'apply_patch' }]);
+			});
+
+			it('leaves the classic shape intact for pre-5.6 models', async () => {
+				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
+				const requestBody = {
+					model: 'gpt-5.5',
+					instructions: 'BASE',
+					input: [{ type: 'message', role: 'user', content: 'Hello' }],
+					tools: [{ name: 'apply_patch' }],
+				};
+
+				const result = await transformRequestForCodex(
+					{ body: JSON.stringify(requestBody) },
+					'https://example.com',
+					{ global: {}, models: {} },
+					true,
+					undefined,
+					{ requestTransformMode: 'native' } as any,
+				);
+
+				expect(result?.body.tools).toEqual([{ name: 'apply_patch' }]);
+				expect(result?.body.instructions).toContain('BASE');
+				expect(result?.body.parallel_tool_calls).toBeUndefined();
+				expect(
+					(result?.body.input?.[0] as Record<string, unknown>).type,
+				).not.toBe('additional_tools');
+			});
+
 			it('normalizes GPT-5.5 preset ids to the canonical model id in native mode', async () => {
 				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
 				const getInstructionsSpy = vi.spyOn(codexPrompts, 'getCodexInstructions');

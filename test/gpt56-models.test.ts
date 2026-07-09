@@ -4,7 +4,10 @@ import {
 	getEffortSuffix,
 	stripEffortSuffix,
 } from "../lib/request/helpers/effort-suffix.js";
-import { getModelFamily } from "../lib/prompts/codex.js";
+import {
+	extractCatalogInstructions,
+	getModelFamily,
+} from "../lib/prompts/codex.js";
 import { normalizeModel, getReasoningConfig } from "../lib/request/request-transformer.js";
 import { DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN } from "../lib/request/fetch-helpers.js";
 
@@ -161,6 +164,44 @@ describe("GPT-5.6 Model Support", () => {
 			expect(stripEffortSuffix("gpt-5.1-codex-max-xhigh")).toBe(
 				"gpt-5.1-codex-max",
 			);
+		});
+	});
+
+	describe("catalog-sourced instructions", () => {
+		// openai/codex ships no 5.6 prompt file. Each tier's base_instructions
+		// lives in codex-rs/models-manager/models.json, and the tiers do not share
+		// it. gpt_5_2_prompt.md would tell a 5.6 model it is "GPT-5.2".
+		const catalog = JSON.stringify({
+			models: [
+				{ slug: "gpt-5.6-sol", base_instructions: "SOL PROMPT" },
+				{ slug: "gpt-5.6-terra", base_instructions: "TERRA PROMPT" },
+				{ slug: "gpt-5.6-luna", base_instructions: "" },
+				{ slug: "gpt-5.5" },
+			],
+		});
+
+		it("extracts base_instructions per slug", () => {
+			expect(extractCatalogInstructions(catalog, "gpt-5.6-sol")).toBe("SOL PROMPT");
+			expect(extractCatalogInstructions(catalog, "gpt-5.6-terra")).toBe(
+				"TERRA PROMPT",
+			);
+		});
+
+		it("returns null for a slug missing from the catalog", () => {
+			expect(extractCatalogInstructions(catalog, "gpt-5.6-nope")).toBeNull();
+		});
+
+		it("returns null when the entry has no base_instructions", () => {
+			expect(extractCatalogInstructions(catalog, "gpt-5.5")).toBeNull();
+		});
+
+		it("returns null for an empty base_instructions string", () => {
+			expect(extractCatalogInstructions(catalog, "gpt-5.6-luna")).toBeNull();
+		});
+
+		it("returns null on malformed JSON rather than throwing", () => {
+			expect(extractCatalogInstructions("{{{not json", "gpt-5.6-sol")).toBeNull();
+			expect(extractCatalogInstructions("[]", "gpt-5.6-sol")).toBeNull();
 		});
 	});
 

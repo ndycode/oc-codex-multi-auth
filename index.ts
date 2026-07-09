@@ -154,6 +154,7 @@ import {
 	shouldRefreshToken,
 	transformRequestForCodex,
 } from "./lib/request/fetch-helpers.js";
+import { shapeBodyForModel } from "./lib/request/helpers/responses-lite.js";
 import {
 	createDeactivatedWorkspaceError,
 	DEACTIVATED_WORKSPACE_ERROR_CODE,
@@ -2451,9 +2452,13 @@ while (attempted.size < Math.max(1, accountCount)) {
 					transformedBody = fallbackBody as RequestBody;
 				}
 
+				// Shape for whichever model this attempt targets. A 5.6 -> 5.5 fallback
+				// must go out in the classic shape, and a 5.6 -> 5.6 hop must re-fold
+				// the new model's instructions into `input` rather than leaving them
+				// at the top level.
 				requestInit = {
 					...(requestInit ?? {}),
-					body: JSON.stringify(transformedBody),
+					body: JSON.stringify(shapeBodyForModel(transformedBody)),
 				};
 				if (runtimeMetrics.lastSelectionSnapshot) {
 					runtimeMetrics.lastSelectionSnapshot = {

@@ -23,6 +23,12 @@ import {
 	GPT_56_TERRA_MODEL_ID,
 } from "./helpers/model-map.js";
 import { stripEffortSuffix } from "./helpers/effort-suffix.js";
+import {
+	RESPONSES_LITE_HEADER,
+	RESPONSES_LITE_HEADER_VALUE,
+	shapeBodyForModel,
+	usesResponsesLite,
+} from "./helpers/responses-lite.js";
 import { convertSseToJson, ensureContentType } from "./response-handler.js";
 import type { OAuthAuthDetails, UserConfig, RequestBody } from "../types.js";
 import { CodexAuthError } from "../errors.js";
@@ -715,9 +721,13 @@ export async function transformRequestForCodex(
 				body: body as unknown as Record<string, unknown>,
 			});
 
+			// `body` stays classic; lite is a serialize-time view (see shapeBodyForModel).
 			return {
 				body,
-				updatedInit: { ...(init ?? {}), body: JSON.stringify(body) },
+				updatedInit: {
+					...(init ?? {}),
+					body: JSON.stringify(shapeBodyForModel(body)),
+				},
 			};
 		}
 
@@ -769,9 +779,15 @@ export async function transformRequestForCodex(
 			body: transformedBody as unknown as Record<string, unknown>,
 		});
 
+			// `transformedBody` stays classic so the unsupported-model fallback can
+			// re-serialize it for a non-lite model. Lite shaping happens here, per
+			// attempt, against the model actually being sent.
 			return {
 				body: transformedBody,
-				updatedInit: { ...(init ?? {}), body: JSON.stringify(transformedBody) },
+				updatedInit: {
+					...(init ?? {}),
+					body: JSON.stringify(shapeBodyForModel(transformedBody)),
+				},
 			};
 	} catch (e) {
 		logError(`${ERROR_MESSAGES.REQUEST_PARSE_ERROR}`, e);
@@ -799,6 +815,13 @@ export function createCodexHeaders(
 	headers.set(OPENAI_HEADERS.ACCOUNT_ID, accountId);
 	headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
 	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
+
+	// GPT-5.6 models are served over the responses-lite path.
+	if (usesResponsesLite(opts?.model)) {
+		headers.set(RESPONSES_LITE_HEADER, RESPONSES_LITE_HEADER_VALUE);
+	} else {
+		headers.delete(RESPONSES_LITE_HEADER);
+	}
 
     const cacheKey = opts?.promptCacheKey;
     if (cacheKey) {
