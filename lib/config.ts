@@ -8,6 +8,7 @@ import {
 	type RetryProfile,
 } from "./request/retry-budget.js";
 import { logWarn } from "./logger.js";
+import { stripEffortSuffix } from "./request/helpers/effort-suffix.js";
 import {
 	PluginConfigSchema,
 	getValidationErrors,
@@ -500,7 +501,7 @@ export function getUnsupportedCodexFallbackChain(
 		const stripped = trimmed.includes("/")
 			? (trimmed.split("/").pop() ?? trimmed)
 			: trimmed;
-		return stripped.replace(/-(none|minimal|low|medium|high|xhigh)$/i, "");
+		return stripEffortSuffix(stripped);
 	};
 
 	const normalized: Record<string, string[]> = {};

@@ -49,6 +49,9 @@ export type ModelFamily =
 	| "gpt-5-codex"
 	| "codex-max"
 	| "codex"
+	| "gpt-5.6-sol"
+	| "gpt-5.6-terra"
+	| "gpt-5.6-luna"
 	| "gpt-5.4"
 	| "gpt-5.4-mini"
 	| "gpt-5.4-pro"
@@ -63,6 +66,9 @@ export const MODEL_FAMILIES: readonly ModelFamily[] = [
 	"gpt-5-codex",
 	"codex-max",
 	"codex",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
 	"gpt-5.4",
 	"gpt-5.4-mini",
 	"gpt-5.4-pro",
@@ -78,6 +84,12 @@ const PROMPT_FILES: Record<ModelFamily, string> = {
 	"gpt-5-codex": "gpt_5_codex_prompt.md",
 	"codex-max": "gpt-5.1-codex-max_prompt.md",
 	codex: "gpt_5_codex_prompt.md",
+	// Fallback only. The 5.6 tiers source their real instructions from the model
+	// catalog (see CATALOG_MODEL_SLUGS); this file is used only when the pinned
+	// release tag has no catalog entry for the slug.
+	"gpt-5.6-sol": "gpt_5_2_prompt.md",
+	"gpt-5.6-terra": "gpt_5_2_prompt.md",
+	"gpt-5.6-luna": "gpt_5_2_prompt.md",
 	// As of Codex rust-v0.111.0, GPT-5.4 uses the same prompt file family as GPT-5.2.
 	"gpt-5.4": "gpt_5_2_prompt.md",
 	// GPT-5.4-mini uses the same core prompt file as GPT-5.4, but keeps isolated cache/family state.
@@ -95,12 +107,61 @@ const CACHE_FILES: Record<ModelFamily, string> = {
 	"gpt-5-codex": "gpt-5-codex-instructions.md",
 	"codex-max": "codex-max-instructions.md",
 	codex: "codex-instructions.md",
+	"gpt-5.6-sol": "gpt-5.6-sol-instructions.md",
+	"gpt-5.6-terra": "gpt-5.6-terra-instructions.md",
+	"gpt-5.6-luna": "gpt-5.6-luna-instructions.md",
 	"gpt-5.4": "gpt-5.4-instructions.md",
 	"gpt-5.4-mini": "gpt-5.4-mini-instructions.md",
 	"gpt-5.4-pro": "gpt-5.4-pro-instructions.md",
 	"gpt-5.2": "gpt-5.2-instructions.md",
 	"gpt-5.1": "gpt-5.1-instructions.md",
 };
+
+/**
+ * Model families whose base instructions live in the Codex model catalog
+ * (`codex-rs/models-manager/models.json`) rather than in a `*_prompt.md` file.
+ *
+ * openai/codex ships no 5.6 prompt file. Each 5.6 tier instead carries a full
+ * `base_instructions` string in the catalog, and the three tiers do NOT share
+ * it — Sol, Terra, and Luna each have distinct text. Falling back to
+ * `gpt_5_2_prompt.md` would tell a 5.6 model it is "GPT-5.2 running in the
+ * Codex CLI", so the catalog is the only correct source here.
+ */
+const CATALOG_MODEL_SLUGS: Partial<Record<ModelFamily, string>> = {
+	"gpt-5.6-sol": "gpt-5.6-sol",
+	"gpt-5.6-terra": "gpt-5.6-terra",
+	"gpt-5.6-luna": "gpt-5.6-luna",
+};
+
+const CATALOG_PATH = "codex-rs/models-manager/models.json";
+
+interface CatalogModelEntry {
+	slug?: string;
+	base_instructions?: string;
+}
+
+/**
+ * Pull one model's `base_instructions` out of a raw models.json payload.
+ *
+ * @returns The instructions, or null when the tag predates the slug.
+ */
+export function extractCatalogInstructions(
+	rawCatalog: string,
+	slug: string,
+): string | null {
+	let parsed: { models?: CatalogModelEntry[] };
+	try {
+		parsed = JSON.parse(rawCatalog) as { models?: CatalogModelEntry[] };
+	} catch {
+		return null;
+	}
+	const models = Array.isArray(parsed.models) ? parsed.models : [];
+	const entry = models.find((model) => model?.slug === slug);
+	const instructions = entry?.base_instructions;
+	return typeof instructions === "string" && instructions.length > 0
+		? instructions
+		: null;
+}
 
 const CODEX_IDENTITY_LINE_PATTERNS = [
 	/^You are .*? running in the Codex CLI, a terminal-based coding assistant\./,
@@ -160,6 +221,17 @@ export function getModelFamily(normalizedModel: string): ModelFamily {
 		normalizedModel.startsWith("codex-")
 	) {
 		return "codex";
+	}
+	// GPT-5.6 tiers each get an isolated family so per-family rotation and
+	// rate-limit state stay separate. Bare `gpt-5.6` follows the Sol alias.
+	if (/\bgpt(?:-| )5\.6(?:-| )terra(?:\b|[- ])/i.test(normalizedModel)) {
+		return "gpt-5.6-terra";
+	}
+	if (/\bgpt(?:-| )5\.6(?:-| )luna(?:\b|[- ])/i.test(normalizedModel)) {
+		return "gpt-5.6-luna";
+	}
+	if (/\bgpt(?:-| )5\.6(?:\b|[- ])/i.test(normalizedModel)) {
+		return "gpt-5.6-sol";
 	}
 	// GPT-5.5 Pro is ChatGPT-only per the 2026-04-23 launch and is not
 	// routed through Codex. Any `gpt-5.5-pro*` that still reaches this path
@@ -383,7 +455,10 @@ async function fetchAndPersistInstructions(
 	let cachedETag = cachedMetadata?.etag ?? null;
 	const cachedTag = cachedMetadata?.tag ?? null;
 	const latestTag = await getLatestReleaseTag();
-	const instructionsUrl = `https://raw.githubusercontent.com/openai/codex/${latestTag}/codex-rs/core/${promptFile}`;
+	const catalogSlug = CATALOG_MODEL_SLUGS[modelFamily];
+	const instructionsUrl = catalogSlug
+		? `https://raw.githubusercontent.com/openai/codex/${latestTag}/${CATALOG_PATH}`
+		: `https://raw.githubusercontent.com/openai/codex/${latestTag}/codex-rs/core/${promptFile}`;
 
 	if (cachedTag !== latestTag) {
 		cachedETag = null;
@@ -423,7 +498,29 @@ async function fetchAndPersistInstructions(
 		});
 	}
 
-	const instructions = await response.text();
+	const payload = await response.text();
+	let instructions = payload;
+	if (catalogSlug) {
+		const fromCatalog = extractCatalogInstructions(payload, catalogSlug);
+		if (fromCatalog) {
+			instructions = fromCatalog;
+		} else {
+			// The pinned release predates this model. Fall back to the family's
+			// prompt file rather than persisting a whole models.json as a prompt.
+			logWarn(
+				`No catalog entry for ${catalogSlug} at ${latestTag}; falling back to ${promptFile}`,
+			);
+			const fallbackUrl = `https://raw.githubusercontent.com/openai/codex/${latestTag}/codex-rs/core/${promptFile}`;
+			const fallbackResponse = await fetch(fallbackUrl);
+			if (!fallbackResponse.ok) {
+				throw new PromptError(`HTTP ${fallbackResponse.status}`, {
+					code: "HTTP_ERROR",
+					context: { status: fallbackResponse.status },
+				});
+			}
+			instructions = await fallbackResponse.text();
+		}
+	}
 	const newETag = response.headers.get("etag");
 	await fs.mkdir(CACHE_DIR, { recursive: true });
 	await Promise.all([
@@ -480,7 +577,7 @@ function refreshInstructionsInBackground(
  * Prewarm instruction caches for the provided models/families.
  */
 export function prewarmCodexInstructions(models: string[] = []): void {
-	const candidates = models.length > 0 ? models : ["gpt-5-codex", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-pro", "gpt-5.2", "gpt-5.1"];
+	const candidates = models.length > 0 ? models : ["gpt-5-codex", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-pro", "gpt-5.2", "gpt-5.1"];
 	for (const model of candidates) {
 		void getCodexInstructions(model).catch((error) => {
 			logDebug("Codex instruction prewarm failed", {

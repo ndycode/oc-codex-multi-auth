@@ -7,8 +7,12 @@ import { renderCodexOpenCodeBridge } from "../prompts/codex-opencode-bridge.js";
 import { getOpenCodeCodexPrompt } from "../prompts/opencode-codex.js";
 import {
 	GPT_55_MODEL_ID,
+	GPT_56_LUNA_MODEL_ID,
+	GPT_56_SOL_MODEL_ID,
+	GPT_56_TERRA_MODEL_ID,
 	getNormalizedModel,
 } from "./helpers/model-map.js";
+import { getEffortSuffix, stripEffortSuffix } from "./helpers/effort-suffix.js";
 import {
 	filterOpenCodeSystemPromptsWithCachedPrompt,
 	normalizeOrphanedToolOutputs,
@@ -83,6 +87,18 @@ export function normalizeModel(model: string | undefined): string {
 		normalized.includes("gpt 5.2 codex")
 	) {
 		return "gpt-5.2-codex";
+	}
+
+	// 3b. GPT-5.6 tiers (Sol / Terra / Luna). Bare `gpt-5.6` resolves to Sol,
+	// the flagship tier, matching OpenAI's `gpt-5.6` alias.
+	if (/\bgpt(?:-| )5\.6(?:-| )terra(?:\b|[- ])/.test(normalized)) {
+		return GPT_56_TERRA_MODEL_ID;
+	}
+	if (/\bgpt(?:-| )5\.6(?:-| )luna(?:\b|[- ])/.test(normalized)) {
+		return GPT_56_LUNA_MODEL_ID;
+	}
+	if (/\bgpt(?:-| )5\.6(?:\b|[- ])/.test(normalized)) {
+		return GPT_56_SOL_MODEL_ID;
 	}
 
 	// 4. GPT-5.5 (general purpose release)
@@ -196,26 +212,11 @@ export function getModelConfig(
 
 	const getVariantFromModelName = (
 		name: string,
-	): ConfigOptions["reasoningEffort"] | undefined => {
-		const stripped = stripProviderPrefix(name).toLowerCase();
-		const match = stripped.match(/-(none|minimal|low|medium|high|xhigh)$/);
-		if (!match) return undefined;
-		const variant = match[1];
-		if (
-			variant === "none" ||
-			variant === "minimal" ||
-			variant === "low" ||
-			variant === "medium" ||
-			variant === "high" ||
-			variant === "xhigh"
-		) {
-			return variant;
-		}
-		return undefined;
-	};
+	): ConfigOptions["reasoningEffort"] | undefined =>
+		getEffortSuffix(stripProviderPrefix(name).toLowerCase());
 
 	const removeVariantSuffix = (name: string): string =>
-		stripProviderPrefix(name).replace(/-(none|minimal|low|medium|high|xhigh)$/i, "");
+		stripEffortSuffix(stripProviderPrefix(name));
 
 	const findModelEntry = (
 		candidates: string[],
@@ -538,6 +539,15 @@ export function getReasoningConfig(
 		normalizedName.includes("gpt-5.4-pro") ||
 		normalizedName.includes("gpt 5.4 pro");
 
+	// GPT-5.6 tiers. Sol and Terra accept max + ultra; Luna stops at max.
+	// None of the three accept "none" or "minimal".
+	const isGpt56Sol = canonicalModelName === GPT_56_SOL_MODEL_ID;
+	const isGpt56Terra = canonicalModelName === GPT_56_TERRA_MODEL_ID;
+	const isGpt56Luna = canonicalModelName === GPT_56_LUNA_MODEL_ID;
+	const isGpt56 = isGpt56Sol || isGpt56Terra || isGpt56Luna;
+	const supportsMax = isGpt56;
+	const supportsUltra = isGpt56Sol || isGpt56Terra;
+
 	// GPT-5.4 Mini is a first-class explicit model.
 	const isGpt54Mini = canonicalModelName === "gpt-5.4-mini";
 
@@ -557,6 +567,7 @@ export function getReasoningConfig(
 		(normalizedName.includes("gpt-5.2") || normalizedName.includes("gpt 5.2")) &&
 		!isGpt52Codex;
 	const canonicalSupportsXhigh =
+		isGpt56 ||
 		canonicalModelName === GPT_55_MODEL_ID ||
 		canonicalModelName === "gpt-5.4" ||
 		canonicalModelName === "gpt-5.4-mini" ||
@@ -593,6 +604,7 @@ export function getReasoningConfig(
 	// GPT-5.5/5.4/5.2 general, GPT-5.4 Mini, GPT-5.4 Pro,
 	// legacy GPT-5.2/5.3 Codex aliases, and Codex Max support xhigh reasoning
 	const supportsXhigh =
+		isGpt56 ||
 		isGpt55General ||
 		isGpt54General ||
 		isGpt54Mini ||
@@ -656,6 +668,26 @@ export function getReasoningConfig(
 		}
 	}
 
+	// `ultra` never goes on the wire. Codex treats it as a client-side tier and
+	// rewrites it to `max` before sending (codex-rs/core/src/client.rs
+	// `reasoning_effort_for_request`); the subagent orchestration that makes
+	// ultra distinct lives in the Codex client, not in the request body. This
+	// plugin is a proxy, so `-ultra` is accepted as an alias and sent as `max`.
+	if (effort === "ultra") {
+		if (!supportsUltra) {
+			logWarn(
+				`${canonicalModelName} does not offer ultra; sending '${originalRequestedEffort}' as max`,
+			);
+		}
+		effort = "max";
+	}
+
+	// `max` arrived with GPT-5.6. Older families fall through to the xhigh
+	// downgrade below rather than having the backend reject an unknown effort.
+	if (effort === "max" && !supportsMax) {
+		effort = "xhigh";
+	}
+
 	// For models that don't support xhigh, downgrade to high
 	// Legacy gpt-5-mini/gpt-5-nano aliases now normalize to GPT-5.4 Mini / Nano,
 	// both of which support xhigh directly.
@@ -667,6 +699,13 @@ export function getReasoningConfig(
 	// For models that don't support "none", upgrade to "low"
 	// (Codex/Pro models don't support "none" - only GPT-5.1/5.2/5.4 general purpose do)
 	if (!supportsNone && effort === "none") {
+		effort = "low";
+	}
+
+	// GPT-5.6 accepts neither "none" nor "minimal". `none` is floored above via
+	// supportsNone, but `minimal` is otherwise only clamped for the Codex
+	// families (see the isCodex branch below), so 5.6 would leak it to the wire.
+	if (isGpt56 && effort === "minimal") {
 		effort = "low";
 	}
 

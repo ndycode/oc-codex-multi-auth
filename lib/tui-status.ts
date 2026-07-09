@@ -1,6 +1,14 @@
 import type { Config } from "@opencode-ai/sdk/v2";
+import { getEffortSuffix } from "./request/helpers/effort-suffix.js";
 
-export type ReasoningVariant = "none" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningVariant =
+	| "none"
+	| "low"
+	| "medium"
+	| "high"
+	| "xhigh"
+	| "max"
+	| "ultra";
 
 export type CompactQuotaLimit = {
 	label: string;
@@ -47,6 +55,8 @@ export type PromptStatusConfig = Pick<
 >;
 
 const variantSuffixes: ReasoningVariant[] = [
+	"ultra",
+	"max",
 	"xhigh",
 	"high",
 	"medium",
@@ -84,10 +94,10 @@ export function inferReasoningVariantFromModelId(
 ): ReasoningVariant | undefined {
 	const modelPart = modelID?.split("/").pop()?.toLowerCase();
 	if (!modelPart) return undefined;
-	for (const variant of variantSuffixes) {
-		if (modelPart.endsWith(`-${variant}`)) return variant;
-	}
-	return undefined;
+	// getEffortSuffix knows `gpt-5.1-codex-max` is a model id, not a `max` request.
+	const suffix = getEffortSuffix(modelPart);
+	if (!suffix) return undefined;
+	return variantSuffixes.find((variant) => variant === suffix);
 }
 
 function splitProviderModel(model: string | undefined): {
