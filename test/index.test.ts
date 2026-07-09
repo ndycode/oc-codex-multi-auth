@@ -2717,8 +2717,14 @@ describe("OpenAIOAuthPlugin", () => {
 				expect(labels).not.toContain(RAW_EMAIL);
 				expect(labels).not.toContain("bob@other.org");
 			} finally {
+				// Off a real TTY there is no own `isTTY` descriptor to put back, so
+				// the stub has to be deleted rather than restored. Leaving it set
+				// leaks `isTTY: true` into every later test in this worker and makes
+				// non-interactive assertions fail under a shuffled test order.
 				if (stdinDesc) Object.defineProperty(process.stdin, "isTTY", stdinDesc);
+				else delete (process.stdin as { isTTY?: boolean }).isTTY;
 				if (stdoutDesc) Object.defineProperty(process.stdout, "isTTY", stdoutDesc);
+				else delete (process.stdout as { isTTY?: boolean }).isTTY;
 			}
 		});
 	});
