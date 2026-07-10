@@ -315,5 +315,38 @@ describe("responses-lite", () => {
 			const shaped = shapeBodyForModel(body);
 			expect(shaped.reasoning?.context).toBeUndefined();
 		});
+
+		// The canonical body must stay free of `context`: the unsupported-model
+		// fallback re-serializes it for a possibly non-lite model, and `all_turns`
+		// is only valid alongside the responses-lite header.
+		it("does not leak reasoning.context onto the canonical body of a lite model", () => {
+			const original = makeBody({
+				model: "gpt-5.6-sol",
+				reasoning: { effort: "high", summary: "auto" },
+			});
+			const reasoningRef = original.reasoning;
+
+			const shaped = shapeBodyForModel(original);
+			expect(shaped.reasoning?.context).toBe("all_turns");
+
+			expect(original.reasoning?.context).toBeUndefined();
+			expect(original.reasoning).toBe(reasoningRef);
+			expect(original.reasoning).toEqual({ effort: "high", summary: "auto" });
+		});
+
+		it("keeps a 5.6 -> 5.5 fallback free of reasoning.context", () => {
+			const canonical = makeBody({
+				model: "gpt-5.6-sol",
+				reasoning: { effort: "high", summary: "auto" },
+			});
+			// First attempt goes out lite.
+			expect(shapeBodyForModel(canonical).reasoning?.context).toBe("all_turns");
+
+			// Account lacks 5.6 access; the fallback swaps the model and re-serializes.
+			canonical.model = "gpt-5.5";
+			const fallback = shapeBodyForModel(canonical);
+			expect(fallback.reasoning?.context).toBeUndefined();
+			expect(fallback.tools).toEqual([{ type: "function", name: "read_file" }]);
+		});
 	});
 });
