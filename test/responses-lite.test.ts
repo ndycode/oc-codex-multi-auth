@@ -139,6 +139,31 @@ describe("responses-lite", () => {
 		});
 	});
 
+	describe("reasoning.context", () => {
+		it("sets reasoning.context to all_turns on the lite body", () => {
+			const body = applyResponsesLite(
+				makeBody({ reasoning: { effort: "low", summary: "auto" } }),
+			);
+			expect(body.reasoning?.context).toBe("all_turns");
+		});
+
+		it("preserves an existing resolved effort and summary", () => {
+			const body = applyResponsesLite(
+				makeBody({ reasoning: { effort: "high", summary: "concise" } }),
+			);
+			expect(body.reasoning).toEqual({
+				effort: "high",
+				summary: "concise",
+				context: "all_turns",
+			});
+		});
+
+		it("sets reasoning.context even when the body has no reasoning", () => {
+			const body = applyResponsesLite(makeBody({ reasoning: undefined }));
+			expect(body.reasoning?.context).toBe("all_turns");
+		});
+	});
+
 	describe("image detail stripping", () => {
 		it("strips detail from message input_image content", () => {
 			const body = applyResponsesLite(
@@ -280,6 +305,15 @@ describe("responses-lite", () => {
 			const original = body.input?.[0] as Record<string, unknown>;
 			const content = original.content as Record<string, unknown>[];
 			expect(content[0].detail).toBe("high");
+		});
+
+		it("does not add reasoning.context to a non-lite body", () => {
+			const body = makeBody({
+				model: "gpt-5.5",
+				reasoning: { effort: "high", summary: "auto" },
+			});
+			const shaped = shapeBodyForModel(body);
+			expect(shaped.reasoning?.context).toBeUndefined();
 		});
 	});
 });
