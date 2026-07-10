@@ -45,6 +45,7 @@ export interface ConfigOptions {
 export interface ReasoningConfig {
 	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	summary: "auto" | "concise" | "detailed";
+	context?: "all_turns";
 }
 
 export interface OAuthServerInfo {

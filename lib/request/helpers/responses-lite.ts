@@ -162,5 +162,7 @@ export function applyResponsesLite(body: RequestBody): RequestBody {
 
 	stripImageDetails(body.input);
 
+	body.reasoning = { ...body.reasoning, context: "all_turns" };
+
 	return body;
 }
