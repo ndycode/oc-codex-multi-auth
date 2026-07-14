@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.8.0] - 2026-07-14
+
+### Added
+- `codex-reset` tool: view banked Codex rate-limit reset credits and redeem one to clear the current usage windows. OpenAI grants eligible plans a small number of reset credits, but exposes redemption only in the Codex desktop app, the IDE extensions, and the Codex CLI `/usage` screen — so users of this plugin, Linux users in particular, had no way to spend a credit they already own without switching tools. The tool wraps the same two endpoints those clients use (`GET /wham/rate-limit-reset-credits`, `POST /wham/rate-limit-reset-credits/consume`), which authenticate exactly like the existing `/wham/usage` call and therefore reuse its credentials, timeout, and error-body sanitization. Redeeming is irreversible and spends a finite credit, so it is never implicit: `action="consume"` only issues the POST when `confirm=true`, and otherwise renders the same preview `dryRun` does. Each redemption carries a fresh `redeem_request_id` so a retry cannot spend two credits, a credit id that is not currently available is refused rather than posted, and once the POST returns, a failure of the follow-up usage read is surfaced as `usageError` alongside `redeemed: true` rather than reporting a spent credit as unredeemed. The listing path is verified against the live backend; the redeem path is covered by tests against a mocked `fetch`. (#193, #195)
+
+### Fixed
+- A rate-limit window the server reports as disabled is no longer rendered as a full quota. OpenAI encodes a switched-off window as `window-minutes: 0` / `limit_window_seconds: 0` with `used-percent: 0` rather than omitting it, and both quota paths retained that window because `used-percent` was numeric — surfacing a phantom `quota 100%` segment in the TUI status line next to the real weekly window (`7d 77% · quota 100%`). A window is now rejected on its *explicit* zero length; a window whose length header is *absent* is merely unknown and is still shown under the generic `quota` label. Two sibling defects of the same cause are fixed alongside the reported one: the `/wham/usage` path rounded a zero-second window up to one minute via `Math.max(1, …)`, surfacing a disabled window as a real `1m` limit, and `codex-limits` printed both windows unconditionally, so it showed the same phantom row. Snapshots already written by an older build are filtered on read, so a poisoned `oc-codex-multi-auth-tui-quota.json` heals without the user deleting it. Reported by @aic0d3r, correlated with OpenAI temporarily disabling the 5-hour Codex limit for some paid plans. (#194, #195)
+
 ## [6.7.1] - 2026-07-10
 
 ### Fixed
