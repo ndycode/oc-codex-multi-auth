@@ -136,6 +136,27 @@ export function formatUsageReset(
 	return `${time} on ${day}`;
 }
 
+/**
+ * Convert a reported window length in seconds to minutes.
+ *
+ * A non-positive length means the plan has the window switched off, and is
+ * preserved as `0` — the disabled marker {@link hasUsageWindow} filters on.
+ * Rounding it up to `1` would surface a disabled window as a real `1m` limit.
+ * A missing/non-finite length is an unknown window, which stays `undefined`.
+ */
+function mapUsageWindowMinutes(
+	limitWindowSeconds: number | undefined,
+): number | undefined {
+	if (
+		typeof limitWindowSeconds !== "number" ||
+		!Number.isFinite(limitWindowSeconds)
+	) {
+		return undefined;
+	}
+	if (limitWindowSeconds <= 0) return 0;
+	return Math.max(1, Math.ceil(limitWindowSeconds / 60));
+}
+
 export function mapUsageWindow(window: UsageWindow): LimitWindow {
 	if (!window) return {};
 	return {
@@ -144,11 +165,7 @@ export function mapUsageWindow(window: UsageWindow): LimitWindow {
 			Number.isFinite(window.used_percent)
 				? window.used_percent
 				: undefined,
-		windowMinutes:
-			typeof window.limit_window_seconds === "number" &&
-			Number.isFinite(window.limit_window_seconds)
-				? Math.max(1, Math.ceil(window.limit_window_seconds / 60))
-				: undefined,
+		windowMinutes: mapUsageWindowMinutes(window.limit_window_seconds),
 		resetAtMs:
 			typeof window.reset_at === "number" && window.reset_at > 0
 				? window.reset_at * 1000
@@ -215,7 +232,14 @@ export function formatAdditionalUsageLimitName(
 		.replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
+/**
+ * A window reported with a length of zero is disabled for the plan (e.g. the
+ * 5-hour window on plans where OpenAI has switched it off), not a window whose
+ * length is merely unknown. It still reports `used_percent: 0`, so it has to be
+ * rejected on the explicit zero length or it renders as a full quota.
+ */
 export function hasUsageWindow(window: LimitWindow): boolean {
+	if (window.windowMinutes === 0) return false;
 	return Boolean(
 		window.windowMinutes ||
 			typeof window.usedPercent === "number" ||
@@ -244,10 +268,13 @@ export function parseCodexUsagePayload(
 			),
 			window: mapUsageWindow(entry.rate_limit?.primary_window ?? null),
 		}));
-	const limits = [
-		toUsageLimitPayload(formatUsageLimitTitle(primary.windowMinutes), primary),
-		toUsageLimitPayload(formatUsageLimitTitle(secondary.windowMinutes), secondary),
-	];
+	const limits: UsageLimitPayload[] = [];
+	for (const window of [primary, secondary]) {
+		if (!hasUsageWindow(window)) continue;
+		limits.push(
+			toUsageLimitPayload(formatUsageLimitTitle(window.windowMinutes), window),
+		);
+	}
 	if (hasUsageWindow(codeReview)) {
 		limits.push(toUsageLimitPayload("Code review", codeReview));
 	}
@@ -266,7 +293,17 @@ export function parseCodexUsagePayload(
 	};
 }
 
-function sanitizeUsageErrorMessage(status: number, bodyText: string): string {
+/**
+ * Build a safe error message from a failed Codex backend response.
+ *
+ * Shared with the reset-credit client in `lib/codex-reset.ts`: both talk to
+ * `chatgpt.com/backend-api` with the same bearer credentials, so both must
+ * scrub tokens out of an error body before it reaches tool output or logs.
+ */
+export function sanitizeCodexApiErrorMessage(
+	status: number,
+	bodyText: string,
+): string {
 	const normalized = bodyText.replace(/\s+/g, " ").trim();
 	const redacted = normalized
 		.replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
@@ -279,7 +316,7 @@ function sanitizeUsageErrorMessage(status: number, bodyText: string): string {
 	return redacted ? `HTTP ${status}: ${redacted.slice(0, 200)}` : `HTTP ${status}`;
 }
 
-function isAbortError(error: unknown): boolean {
+export function isCodexAbortError(error: unknown): boolean {
 	return (
 		(error instanceof Error && error.name === "AbortError") ||
 		(typeof DOMException !== "undefined" &&
@@ -320,7 +357,7 @@ export async function fetchCodexUsage(params: {
 			try {
 				bodyText = (await response.text()).slice(0, usageErrorBodyMaxChars);
 			} catch (error) {
-				if (isAbortError(error) || controller.signal.aborted) {
+				if (isCodexAbortError(error) || controller.signal.aborted) {
 					throw createUsageRequestTimeoutError();
 				}
 				throw error;
@@ -328,11 +365,11 @@ export async function fetchCodexUsage(params: {
 			if (controller.signal.aborted) {
 				throw createUsageRequestTimeoutError();
 			}
-			throw new Error(sanitizeUsageErrorMessage(response.status, bodyText));
+			throw new Error(sanitizeCodexApiErrorMessage(response.status, bodyText));
 		}
 		return (await response.json()) as UsagePayload;
 	} catch (error) {
-		if (isAbortError(error)) {
+		if (isCodexAbortError(error)) {
 			throw createUsageRequestTimeoutError();
 		}
 		throw error;

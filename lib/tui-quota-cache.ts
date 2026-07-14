@@ -153,7 +153,20 @@ function parseLimit(headers: Headers, prefix: string): TuiQuotaLimit {
 	};
 }
 
+/**
+ * A window OpenAI reports with `window-minutes: 0` is switched off for the
+ * plan, not a window of unknown length. Such a window still carries
+ * `used-percent: 0`, so it must be recognized by the explicit zero rather than
+ * by the absence of data — otherwise it renders as a full `quota 100%` segment.
+ * A window whose header is absent entirely stays eligible: that is an unknown
+ * window, and it is still shown under the generic `quota` label.
+ */
+export function isDisabledQuotaLimit(limit: TuiQuotaLimit): boolean {
+	return limit.windowMinutes === 0;
+}
+
 function hasUsefulLimit(limit: TuiQuotaLimit): boolean {
+	if (isDisabledQuotaLimit(limit)) return false;
 	return Boolean(
 		limit.windowMinutes ||
 			typeof limit.usedPercent === "number" ||
@@ -267,13 +280,33 @@ export function isTuiQuotaSnapshot(value: unknown): value is TuiQuotaSnapshot {
 	);
 }
 
+/**
+ * Drop disabled windows from a snapshot read back from disk.
+ *
+ * A cache written by an older build can still hold a `windowMinutes: 0` entry.
+ * Filtering on read lets those snapshots heal without the user deleting the
+ * cache file, and keeps a stale-cache render consistent with a fresh one.
+ */
+export function sanitizeTuiQuotaSnapshot(
+	snapshot: TuiQuotaSnapshot,
+): TuiQuotaSnapshot {
+	const limits = snapshot.limits.filter(
+		(limit) => !isDisabledQuotaLimit(limit),
+	);
+	return limits.length === snapshot.limits.length
+		? snapshot
+		: { ...snapshot, limits };
+}
+
 export async function readTuiQuotaSnapshot(
 	cachePath?: string,
 ): Promise<TuiQuotaSnapshot | undefined> {
 	try {
 		const raw = await fs.readFile(cachePath ?? getTuiQuotaCachePath(), "utf-8");
 		const parsed = JSON.parse(raw) as unknown;
-		return isTuiQuotaSnapshot(parsed) ? parsed : undefined;
+		return isTuiQuotaSnapshot(parsed)
+			? sanitizeTuiQuotaSnapshot(parsed)
+			: undefined;
 	} catch {
 		return undefined;
 	}

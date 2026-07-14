@@ -218,12 +218,12 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 
 					if (ui.v2Enabled) {
 						lines.push(formatUiItem(ui, `${displayLabel}${activeSuffix}`));
-						lines.push(
-							`  ${formatUiKeyValue(ui, formatUsageLimitTitle(usage.primary.windowMinutes), formatUsageLimitSummary(usage.primary), "muted")}`,
-						);
-						lines.push(
-							`  ${formatUiKeyValue(ui, formatUsageLimitTitle(usage.secondary.windowMinutes), formatUsageLimitSummary(usage.secondary), "muted")}`,
-						);
+						for (const window of [usage.primary, usage.secondary]) {
+							if (!hasUsageWindow(window)) continue;
+							lines.push(
+								`  ${formatUiKeyValue(ui, formatUsageLimitTitle(window.windowMinutes), formatUsageLimitSummary(window), "muted")}`,
+							);
+						}
 						if (hasUsageWindow(usage.codeReview)) {
 							lines.push(
 								`  ${formatUiKeyValue(ui, "Code review", formatUsageLimitSummary(usage.codeReview), "muted")}`,
@@ -246,12 +246,12 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 						}
 					} else {
 						lines.push(`${displayLabel}${activeSuffix}:`);
-						lines.push(
-							`  ${formatUsageLimitTitle(usage.primary.windowMinutes)}: ${formatUsageLimitSummary(usage.primary)}`,
-						);
-						lines.push(
-							`  ${formatUsageLimitTitle(usage.secondary.windowMinutes)}: ${formatUsageLimitSummary(usage.secondary)}`,
-						);
+						for (const window of [usage.primary, usage.secondary]) {
+							if (!hasUsageWindow(window)) continue;
+							lines.push(
+								`  ${formatUsageLimitTitle(window.windowMinutes)}: ${formatUsageLimitSummary(window)}`,
+							);
+						}
 						if (hasUsageWindow(usage.codeReview)) {
 							lines.push(
 								`  Code review: ${formatUsageLimitSummary(usage.codeReview)}`,
