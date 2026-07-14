@@ -165,6 +165,47 @@ describe("codex-reset tool", () => {
 		expect(output).toContain("new usage:");
 	});
 
+	it("still reports the redemption when the usage re-read fails afterwards", async () => {
+		// The POST succeeds and the credit is spent; only the courtesy usage read
+		// that follows it fails. Reporting redeemed=false here would push the user
+		// to spend a second credit for a redemption that already happened.
+		let consumed = false;
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const url = String(input);
+			if (url === CREDITS_URL) return jsonResponse(creditsPayload);
+			if (url === CONSUME_URL) {
+				consumed = true;
+				return jsonResponse({ code: "ok" });
+			}
+			if (url === USAGE_URL) {
+				if (consumed) throw new TypeError("network down");
+				return jsonResponse(usagePayload);
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		});
+		const execute = createCodexResetTool(buildCtx()).execute as ToolExecute;
+
+		const parsed = JSON.parse(
+			await execute({ action: "consume", confirm: true, format: "json" }),
+		) as { redeemed: boolean; usageError: string | null; error?: string };
+
+		expect(parsed.redeemed).toBe(true);
+		expect(parsed.usageError).toContain("network down");
+		expect(parsed.error).toBeUndefined();
+	});
+
+	it("does not read usage before deciding whether to redeem", async () => {
+		const fetchMock = mockCodexFetch();
+		const execute = createCodexResetTool(buildCtx()).execute as ToolExecute;
+
+		await execute({ action: "consume" });
+
+		// An unconfirmed consume never redeems, so it must not spend a round-trip
+		// on the usage endpoint either.
+		expect(callsTo(fetchMock, USAGE_URL)).toHaveLength(0);
+		expect(callsTo(fetchMock, CONSUME_URL)).toHaveLength(0);
+	});
+
 	it("refuses to redeem an unavailable credit id", async () => {
 		const fetchMock = mockCodexFetch();
 		const execute = createCodexResetTool(buildCtx()).execute as ToolExecute;

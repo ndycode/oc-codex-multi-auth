@@ -236,12 +236,16 @@ export function createCodexResetTool(ctx: ToolContext): ToolDefinition {
 					accessToken: credentials.accessToken,
 					organizationId: target.organizationId,
 				};
-				const summary = parseCodexResetCredits(
-					await fetchCodexResetCredits(request),
-				);
-				const usage = parseCodexUsagePayload(await fetchCodexUsage(request));
-
 				if (resetAction === "status") {
+					// The two endpoints are independent, so overlap them rather than
+					// paying two serial round-trips on every status check.
+					const [creditsPayload, usagePayload] = await Promise.all([
+						fetchCodexResetCredits(request),
+						fetchCodexUsage(request),
+					]);
+					const summary = parseCodexResetCredits(creditsPayload);
+					const usage = parseCodexUsagePayload(usagePayload);
+
 					if (outputFormat === "json") {
 						return renderJsonOutput({
 							...identity,
@@ -268,6 +272,9 @@ export function createCodexResetTool(ctx: ToolContext): ToolDefinition {
 					return lines.join("\n");
 				}
 
+				const summary = parseCodexResetCredits(
+					await fetchCodexResetCredits(request),
+				);
 				const selection = selectRedeemableCredit(summary, creditId);
 				if (selection.type !== "selected") {
 					const message =
@@ -323,9 +330,18 @@ export function createCodexResetTool(ctx: ToolContext): ToolDefinition {
 					creditId: credit.id,
 					redeemRequestId: createRedeemRequestId(),
 				});
-				const usageAfter = parseCodexUsagePayload(
-					await fetchCodexUsage(request),
-				);
+
+				// Past this point the credit is spent and cannot be recovered. The
+				// usage refresh below is a courtesy read, so its failure must never
+				// reach the outer catch: reporting `redeemed: false` for a credit the
+				// server already consumed would send the user to redeem another one.
+				let usageAfter: CodexUsageSummary | undefined;
+				let usageError: string | undefined;
+				try {
+					usageAfter = parseCodexUsagePayload(await fetchCodexUsage(request));
+				} catch (error) {
+					usageError = error instanceof Error ? error.message : String(error);
+				}
 
 				if (outputFormat === "json") {
 					return renderJsonOutput({
@@ -338,8 +354,9 @@ export function createCodexResetTool(ctx: ToolContext): ToolDefinition {
 							windowsReset: result.windows_reset ?? null,
 							redeemedAt: result.credit?.redeemed_at ?? null,
 						},
-						planType: usageAfter.planType,
-						limits: usageAfter.limits,
+						planType: usageAfter?.planType ?? null,
+						limits: usageAfter?.limits ?? null,
+						usageError: usageError ? usageError.slice(0, 160) : null,
 					});
 				}
 				return [
@@ -347,8 +364,12 @@ export function createCodexResetTool(ctx: ToolContext): ToolDefinition {
 					`  redeemed ${credit.id}`,
 					`  ${formatCodexResetConsumeResult(result)}`,
 					"",
-					"new usage:",
-					...buildUsageLines(usageAfter),
+					...(usageAfter
+						? ["new usage:", ...buildUsageLines(usageAfter)]
+						: [
+								`new usage: unavailable (${usageError?.slice(0, 160)})`,
+								"The credit was redeemed. Run codex-reset to re-read usage.",
+							]),
 				].join("\n");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
