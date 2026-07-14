@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	deduplicateUsageAccountIndices,
 	getUsageLeftPercent,
+	hasUsageWindow,
 	parseCodexUsagePayload,
 	resolveCodexUsageActiveAccount,
 	type UsagePayload,
@@ -207,5 +208,44 @@ describe("codex usage helpers", () => {
 			index: 1,
 			account: { accountId: "acc-2" },
 		});
+	});
+});
+
+describe("disabled usage windows (issue #194)", () => {
+	it("drops a window the server reports with a zero-second length", () => {
+		const payload: UsagePayload = {
+			plan_type: "team",
+			rate_limit: {
+				primary_window: {
+					used_percent: 23,
+					limit_window_seconds: 10080 * 60,
+				},
+				secondary_window: {
+					used_percent: 0,
+					limit_window_seconds: 0,
+					reset_after_seconds: 0,
+				},
+			},
+		};
+
+		const usage = parseCodexUsagePayload(payload);
+
+		// A zero-length window is switched off, not a one-minute window.
+		expect(usage.secondary.windowMinutes).toBe(0);
+		expect(hasUsageWindow(usage.secondary)).toBe(false);
+		expect(usage.limits).toHaveLength(1);
+		expect(usage.limits[0]).toMatchObject({
+			name: "Weekly limit",
+			leftPercent: 77,
+		});
+	});
+
+	it("keeps a window whose length the server omits", () => {
+		const usage = parseCodexUsagePayload({
+			rate_limit: { primary_window: { used_percent: 10 } },
+		});
+
+		expect(hasUsageWindow(usage.primary)).toBe(true);
+		expect(usage.limits[0]).toMatchObject({ name: "quota limit", leftPercent: 90 });
 	});
 });

@@ -72,7 +72,7 @@ Native mode keeps the host payload shape whenever possible. Legacy mode applies 
 Common groups:
 
 - setup: `codex-setup`, `codex-help`, `codex-next`
-- daily account use: `codex-list`, `codex-switch`, `codex-status`, `codex-limits`
+- daily account use: `codex-list`, `codex-switch`, `codex-status`, `codex-limits`, `codex-reset`
 - account metadata: `codex-label`, `codex-tag`, `codex-note`, `codex-remove`, `codex-refresh`
 - diagnostics and resilience: `codex-health`, `codex-metrics`, `codex-doctor`, `codex-diag`, `codex-diff`
 - backup and secrets: `codex-export`, `codex-import`, `codex-keychain`

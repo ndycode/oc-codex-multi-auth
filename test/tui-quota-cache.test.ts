@@ -113,3 +113,77 @@ describe("TUI quota cache", () => {
 		}
 	});
 });
+
+describe("disabled quota windows (issue #194)", () => {
+	it("omits a secondary window the server reports as disabled", () => {
+		// Headers reproduced from the bug report: a paid Team workspace with an
+		// active weekly window and a secondary window switched off by OpenAI.
+		const headers = new Headers({
+			"x-codex-primary-used-percent": "23",
+			"x-codex-primary-window-minutes": "10080",
+			"x-codex-secondary-used-percent": "0",
+			"x-codex-secondary-window-minutes": "0",
+			"x-codex-secondary-reset-after-seconds": "0",
+		});
+
+		const snapshot = parseTuiQuotaSnapshotFromHeaders(headers, {
+			fingerprint: "acct",
+		});
+
+		expect(snapshot?.limits).toHaveLength(1);
+		expect(snapshot?.limits[0]).toMatchObject({
+			label: "7d",
+			leftPercent: 77,
+		});
+		expect(snapshot?.limits.some((limit) => limit.label === "quota")).toBe(false);
+	});
+
+	it("still keeps a window whose length header is absent", () => {
+		const headers = new Headers({
+			"x-codex-primary-used-percent": "40",
+		});
+
+		const snapshot = parseTuiQuotaSnapshotFromHeaders(headers, {
+			fingerprint: "acct",
+		});
+
+		expect(snapshot?.limits).toHaveLength(1);
+		expect(snapshot?.limits[0]).toMatchObject({ label: "quota", leftPercent: 60 });
+	});
+
+	it("returns undefined when every reported window is disabled", () => {
+		const headers = new Headers({
+			"x-codex-primary-window-minutes": "0",
+			"x-codex-primary-used-percent": "0",
+			"x-codex-secondary-window-minutes": "0",
+			"x-codex-secondary-used-percent": "0",
+		});
+
+		expect(
+			parseTuiQuotaSnapshotFromHeaders(headers, { fingerprint: "acct" }),
+		).toBeUndefined();
+	});
+
+	it("heals a cache already poisoned by an older build", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "tui-quota-disabled-"));
+		const cachePath = join(dir, "quota.json");
+		try {
+			const poisoned = createTuiQuotaSnapshot({
+				fingerprint: "acct",
+				source: "headers",
+				limits: [
+					{ label: "7d", leftPercent: 77, usedPercent: 23, windowMinutes: 10080 },
+					{ label: "quota", leftPercent: 100, usedPercent: 0, windowMinutes: 0 },
+				],
+			});
+			await writeTuiQuotaSnapshot(poisoned, cachePath);
+
+			const restored = await readTuiQuotaSnapshot(cachePath);
+
+			expect(restored?.limits).toHaveLength(1);
+			expect(restored?.limits[0]?.label).toBe("7d");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+});

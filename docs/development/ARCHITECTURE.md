@@ -45,7 +45,7 @@ index.ts
   |- ToolContext construction
   v
 lib/tools/index.ts
-  |- registers 22 OpenCode tools
+  |- registers 23 OpenCode tools
   |- each tool delegates to lib/tools/codex-*.ts
 
 Request path
@@ -90,7 +90,7 @@ tui.ts
 | Storage | `lib/storage.ts`, `lib/storage/` | V3 JSON storage, atomic writes, migrations, per-project paths, backups, import/export, keychain opt-in, flagged accounts |
 | Request bridge | `lib/request/fetch-helpers.ts`, `lib/request/request-transformer.ts`, `lib/request/response-handler.ts`, `lib/request/retry-budget.ts`, `lib/request/rate-limit-backoff.ts` | URL/body/header shaping, Codex invariants, SSE conversion, retry budgets, backoff, error mapping |
 | Model/prompt mapping | `lib/prompts/codex.ts`, `lib/prompts/opencode-codex.ts`, `lib/prompts/codex-opencode-bridge.ts`, `lib/request/helpers/model-map.ts` | model-family detection, Codex instructions cache, OpenCode prompt adaptation, fallback aliases |
-| Tool registry | `lib/tools/index.ts`, `lib/tools/codex-*.ts` | 22 OpenCode tools for setup, account switching, status, health, diagnostics, backup, keychain, and recovery |
+| Tool registry | `lib/tools/index.ts`, `lib/tools/codex-*.ts` | 23 OpenCode tools for setup, account switching, status, health, quota resets, diagnostics, backup, keychain, and recovery |
 | Runtime support | `lib/runtime.ts`, `lib/circuit-breaker.ts`, `lib/proactive-refresh.ts`, `lib/parallel-probe.ts`, `lib/recovery/`, `lib/shutdown.ts` | pure runtime helpers, failure isolation, refresh scheduling, health probing, session recovery, cleanup |
 | UI helpers | `lib/ui/` | terminal formatting, auth menu, select/confirm prompts, theme/color handling, beginner checklist |
 | Config templates | `config/opencode-modern.json`, `config/opencode-legacy.json`, `config/minimal-opencode.json`, `config/README.md` | copy-paste OpenCode provider templates and model catalog guidance |
@@ -169,7 +169,7 @@ Legacy mode exists for compatibility with older OpenCode/AI SDK payload behavior
 
 ## Tool Registry Architecture
 
-The plugin exposes 22 OpenCode tools through `lib/tools/index.ts`. `index.ts` builds one `ToolContext` from plugin-closure state and helper functions, then passes it to `createToolRegistry(ctx)`.
+The plugin exposes 23 OpenCode tools through `lib/tools/index.ts`. `index.ts` builds one `ToolContext` from plugin-closure state and helper functions, then passes it to `createToolRegistry(ctx)`.
 
 Why this shape exists:
 
@@ -183,7 +183,7 @@ Tool groups:
 | Group | Tools |
 | --- | --- |
 | Setup and help | `codex-setup`, `codex-help`, `codex-next` |
-| Daily account use | `codex-list`, `codex-switch`, `codex-status`, `codex-limits`, `codex-dashboard` |
+| Daily account use | `codex-list`, `codex-switch`, `codex-status`, `codex-limits`, `codex-reset`, `codex-dashboard` |
 | Account metadata | `codex-label`, `codex-tag`, `codex-note`, `codex-remove`, `codex-refresh` |
 | Diagnostics | `codex-health`, `codex-metrics`, `codex-doctor`, `codex-diag`, `codex-diff` |
 | Backup/secrets | `codex-export`, `codex-import`, `codex-keychain` |

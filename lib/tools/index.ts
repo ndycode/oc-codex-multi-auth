@@ -40,6 +40,7 @@ import { createCodexSwitchTool } from "./codex-switch.js";
 import { createCodexWarmTool } from "./codex-warm.js";
 import { createCodexStatusTool } from "./codex-status.js";
 import { createCodexLimitsTool } from "./codex-limits.js";
+import { createCodexResetTool } from "./codex-reset.js";
 import { createCodexMetricsTool } from "./codex-metrics.js";
 import { createCodexDoctorTool } from "./codex-doctor.js";
 import { createCodexLabelTool } from "./codex-label.js";
@@ -229,6 +230,7 @@ export function createToolRegistry(ctx: ToolContext): CodexToolRegistry {
 		"codex-warm": createCodexWarmTool(ctx),
 		"codex-status": createCodexStatusTool(ctx),
 		"codex-limits": createCodexLimitsTool(ctx),
+		"codex-reset": createCodexResetTool(ctx),
 		"codex-metrics": createCodexMetricsTool(ctx),
 		"codex-help": createCodexHelpTool(ctx),
 		"codex-setup": createCodexSetupTool(ctx),

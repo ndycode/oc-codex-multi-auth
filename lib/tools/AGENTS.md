@@ -1,6 +1,6 @@
 # lib/tools/
 
-Per-tool modules for the 22 `codex-*` tools registered by the plugin.
+Per-tool modules for the 23 `codex-*` tools registered by the plugin.
 
 ## Status
 
@@ -18,6 +18,7 @@ lib/tools/
   codex-switch.ts
   codex-status.ts
   codex-limits.ts
+  codex-reset.ts
   codex-metrics.ts
   codex-help.ts
   codex-setup.ts
