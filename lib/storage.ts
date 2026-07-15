@@ -28,6 +28,15 @@ export {
   setStoragePath,
   setStoragePathDirect,
   getStoragePath,
+  // Re-exported so tool-layer code that must wrap several raw fs operations
+  // (e.g. codex-keychain's rollback) in the SAME critical section as
+  // loadAccounts/saveAccounts can do so without duplicating the mutex.
+  // Callers must never call loadAccounts/saveAccounts/clearAccounts (the
+  // locked wrappers) from inside a withStorageLock callback -- the mutex is
+  // not re-entrant and doing so deadlocks. Use direct fs operations instead,
+  // mirroring how withAccountStorageTransaction's `persist` callback stays
+  // unlocked.
+  withStorageLock,
 } from "./storage/state.js";
 
 // --- Identity + dedup helpers ------------------------------------------------

@@ -4,7 +4,7 @@
  */
 
 import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
-import { loadAccounts, saveAccounts } from "../storage.js";
+import { loadAccounts, withAccountStorageTransaction } from "../storage.js";
 import { AccountManager } from "../accounts.js";
 import { logWarn } from "../logger.js";
 import {
@@ -44,8 +44,12 @@ export function createCodexLabelTool(ctx: ToolContext): ToolDefinition {
 		async execute({ index, label }: { index?: number; label: string }) {
 			const ui = resolveUiRuntime();
 			const maskEmail = resolveMaskEmail();
-			const storage = await loadAccounts();
-			if (!storage || storage.accounts.length === 0) {
+			// Read-only snapshot for the "no accounts" / interactive-picker UX.
+			// The actual mutate+save runs inside withAccountStorageTransaction
+			// below against a freshly re-read snapshot so a concurrent save
+			// between this read and the eventual persist can't be clobbered.
+			const initialStorage = await loadAccounts();
+			if (!initialStorage || initialStorage.accounts.length === 0) {
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Set account label"),
@@ -61,7 +65,7 @@ export function createCodexLabelTool(ctx: ToolContext): ToolDefinition {
 			if (resolvedIndex === undefined) {
 				const selectedIndex = await promptAccountIndexSelection(
 					ui,
-					storage,
+					initialStorage,
 					"Set account label",
 				);
 				if (selectedIndex === null) {
@@ -97,32 +101,6 @@ export function createCodexLabelTool(ctx: ToolContext): ToolDefinition {
 				resolvedIndex = selectedIndex + 1;
 			}
 
-			const targetIndex = Math.floor((resolvedIndex ?? 0) - 1);
-			if (
-				!Number.isFinite(targetIndex) ||
-				targetIndex < 0 ||
-				targetIndex >= storage.accounts.length
-			) {
-				if (ui.v2Enabled) {
-					return [
-						...formatUiHeader(ui, "Set account label"),
-						"",
-						formatUiItem(
-							ui,
-							`Invalid account number: ${resolvedIndex}`,
-							"danger",
-						),
-						formatUiKeyValue(
-							ui,
-							"Valid range",
-							`1-${storage.accounts.length}`,
-							"muted",
-						),
-					].join("\n");
-				}
-				return `Invalid account number: ${resolvedIndex}\n\nValid range: 1-${storage.accounts.length}`;
-			}
-
 			const normalizedLabel = (label ?? "").trim().replace(/\s+/g, " ");
 			if (normalizedLabel.length > 60) {
 				if (ui.v2Enabled) {
@@ -139,24 +117,83 @@ export function createCodexLabelTool(ctx: ToolContext): ToolDefinition {
 				return "Label is too long (max 60 characters).";
 			}
 
-			const account = storage.accounts[targetIndex];
-			if (!account) {
+			type LabelOutcome =
+				| { kind: "invalid"; accountCount: number }
+				| { kind: "not-found" }
+				| { kind: "save-failed" }
+				| {
+						kind: "ok";
+						accountLabel: string;
+						previousLabel: string;
+				  };
+
+			const outcome = await withAccountStorageTransaction<LabelOutcome>(
+				async (current, persist) => {
+					const storage = current;
+					const accounts = storage?.accounts ?? [];
+					const targetIndex = Math.floor((resolvedIndex ?? 0) - 1);
+					if (
+						!Number.isFinite(targetIndex) ||
+						targetIndex < 0 ||
+						targetIndex >= accounts.length
+					) {
+						return { kind: "invalid", accountCount: accounts.length };
+					}
+
+					const account = accounts[targetIndex];
+					if (!account || !storage) {
+						return { kind: "not-found" };
+					}
+
+					const previousLabel = account.accountLabel?.trim() ?? "";
+					if (normalizedLabel.length === 0) {
+						delete account.accountLabel;
+					} else {
+						account.accountLabel = normalizedLabel;
+					}
+
+					try {
+						await persist(storage);
+					} catch (saveError) {
+						logWarn("Failed to save account label update", {
+							error: String(saveError),
+						});
+						return { kind: "save-failed" };
+					}
+
+					const accountLabel = formatCommandAccountLabel(account, targetIndex, {
+						maskEmail,
+					});
+					return { kind: "ok", accountLabel, previousLabel };
+				},
+			);
+
+			if (outcome.kind === "invalid") {
+				if (ui.v2Enabled) {
+					return [
+						...formatUiHeader(ui, "Set account label"),
+						"",
+						formatUiItem(
+							ui,
+							`Invalid account number: ${resolvedIndex}`,
+							"danger",
+						),
+						formatUiKeyValue(
+							ui,
+							"Valid range",
+							`1-${outcome.accountCount}`,
+							"muted",
+						),
+					].join("\n");
+				}
+				return `Invalid account number: ${resolvedIndex}\n\nValid range: 1-${outcome.accountCount}`;
+			}
+
+			if (outcome.kind === "not-found") {
 				return `Account ${resolvedIndex} not found.`;
 			}
 
-			const previousLabel = account.accountLabel?.trim() ?? "";
-			if (normalizedLabel.length === 0) {
-				delete account.accountLabel;
-			} else {
-				account.accountLabel = normalizedLabel;
-			}
-
-			try {
-				await saveAccounts(storage);
-			} catch (saveError) {
-				logWarn("Failed to save account label update", {
-					error: String(saveError),
-				});
+			if (outcome.kind === "save-failed") {
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Set account label"),
@@ -177,7 +214,7 @@ export function createCodexLabelTool(ctx: ToolContext): ToolDefinition {
 				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
 			}
 
-			const accountLabel = formatCommandAccountLabel(account, targetIndex, { maskEmail });
+			const { accountLabel, previousLabel } = outcome;
 			if (ui.v2Enabled) {
 				const statusText =
 					normalizedLabel.length === 0

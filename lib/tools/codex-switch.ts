@@ -4,7 +4,7 @@
  */
 
 import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
-import { loadAccounts, saveAccounts } from "../storage.js";
+import { loadAccounts, withAccountStorageTransaction } from "../storage.js";
 import { AccountManager } from "../accounts.js";
 import { logWarn } from "../logger.js";
 import { MODEL_FAMILIES } from "../prompts/codex.js";
@@ -41,8 +41,14 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 		async execute({ index }: { index?: number } = {}) {
 			const ui = resolveUiRuntime();
 			const maskEmail = resolveMaskEmail();
-			const storage = await loadAccounts();
-			if (!storage || storage.accounts.length === 0) {
+			// This read is only used to render the "no accounts" / interactive
+			// picker UX. It is intentionally NOT the snapshot that gets mutated
+			// and saved below -- the mutate+save happens inside
+			// withAccountStorageTransaction against a freshly re-read snapshot so
+			// a concurrent save (e.g. a rotation persisting rate-limit state)
+			// between this read and the eventual save can't be clobbered.
+			const initialStorage = await loadAccounts();
+			if (!initialStorage || initialStorage.accounts.length === 0) {
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Switch account"),
@@ -58,7 +64,7 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 			if (resolvedIndex === undefined) {
 				const selectedIndex = await promptAccountIndexSelection(
 					ui,
-					storage,
+					initialStorage,
 					"Switch account",
 				);
 				if (selectedIndex === null) {
@@ -90,12 +96,54 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 				resolvedIndex = selectedIndex + 1;
 			}
 
-			const targetIndex = Math.floor((resolvedIndex ?? 0) - 1);
-			if (
-				!Number.isFinite(targetIndex) ||
-				targetIndex < 0 ||
-				targetIndex >= storage.accounts.length
-			) {
+			type SwitchOutcome =
+				| { kind: "invalid"; accountCount: number }
+				| { kind: "save-failed"; label: string }
+				| { kind: "ok"; label: string };
+
+			const outcome = await withAccountStorageTransaction<SwitchOutcome>(
+				async (current, persist) => {
+					const accounts = current?.accounts ?? [];
+					const targetIndex = Math.floor((resolvedIndex ?? 0) - 1);
+					if (
+						!current ||
+						!Number.isFinite(targetIndex) ||
+						targetIndex < 0 ||
+						targetIndex >= accounts.length
+					) {
+						return { kind: "invalid", accountCount: accounts.length };
+					}
+
+					const now = Date.now();
+					const account = accounts[targetIndex];
+					if (account) {
+						account.lastUsed = now;
+						account.lastSwitchReason = "rotation";
+					}
+
+					const storage = current;
+					storage.activeIndex = targetIndex;
+					storage.activeIndexByFamily = storage.activeIndexByFamily ?? {};
+					for (const family of MODEL_FAMILIES) {
+						storage.activeIndexByFamily[family] = targetIndex;
+					}
+
+					const label = formatCommandAccountLabel(account, targetIndex, {
+						maskEmail,
+					});
+					try {
+						await persist(storage);
+					} catch (saveError) {
+						logWarn("Failed to save account switch", {
+							error: String(saveError),
+						});
+						return { kind: "save-failed", label };
+					}
+					return { kind: "ok", label };
+				},
+			);
+
+			if (outcome.kind === "invalid") {
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Switch account"),
@@ -108,38 +156,20 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 						formatUiKeyValue(
 							ui,
 							"Valid range",
-							`1-${storage.accounts.length}`,
+							`1-${outcome.accountCount}`,
 							"muted",
 						),
 					].join("\n");
 				}
-				return `Invalid account number: ${resolvedIndex}\n\nValid range: 1-${storage.accounts.length}`;
+				return `Invalid account number: ${resolvedIndex}\n\nValid range: 1-${outcome.accountCount}`;
 			}
 
-			const now = Date.now();
-			const account = storage.accounts[targetIndex];
-			if (account) {
-				account.lastUsed = now;
-				account.lastSwitchReason = "rotation";
-			}
-
-			storage.activeIndex = targetIndex;
-			storage.activeIndexByFamily = storage.activeIndexByFamily ?? {};
-			for (const family of MODEL_FAMILIES) {
-				storage.activeIndexByFamily[family] = targetIndex;
-			}
-			try {
-				await saveAccounts(storage);
-			} catch (saveError) {
-				logWarn("Failed to save account switch", {
-					error: String(saveError),
-				});
-				const label = formatCommandAccountLabel(account, targetIndex, { maskEmail });
+			if (outcome.kind === "save-failed") {
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Switch account"),
 						"",
-						formatUiItem(ui, `Switched to ${label}`, "warning"),
+						formatUiItem(ui, `Switched to ${outcome.label}`, "warning"),
 						formatUiItem(
 							ui,
 							"Failed to persist change. It may be lost on restart.",
@@ -147,8 +177,9 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 						),
 					].join("\n");
 				}
-				return `Switched to ${label} but failed to persist. Changes may be lost on restart.`;
+				return `Switched to ${outcome.label} but failed to persist. Changes may be lost on restart.`;
 			}
+
 			try {
 				await clearTuiQuotaSnapshot();
 			} catch (cacheError) {
@@ -163,19 +194,18 @@ export function createCodexSwitchTool(ctx: ToolContext): ToolDefinition {
 				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
 			}
 
-			const label = formatCommandAccountLabel(account, targetIndex, { maskEmail });
 			if (ui.v2Enabled) {
 				return [
 					...formatUiHeader(ui, "Switch account"),
 					"",
 					formatUiItem(
 						ui,
-						`${getStatusMarker(ui, "ok")} Switched to ${label}`,
+						`${getStatusMarker(ui, "ok")} Switched to ${outcome.label}`,
 						"success",
 					),
 				].join("\n");
 			}
-			return `Switched to account: ${label}`;
+			return `Switched to account: ${outcome.label}`;
 		},
 	});
 }

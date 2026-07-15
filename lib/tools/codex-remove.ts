@@ -4,7 +4,7 @@
  */
 
 import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
-import { loadAccounts, saveAccounts } from "../storage.js";
+import { loadAccounts, withAccountStorageTransaction } from "../storage.js";
 import { AccountManager } from "../accounts.js";
 import { resolveDisplayEmail } from "../account-display.js";
 import { logWarn } from "../logger.js";
@@ -68,8 +68,12 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 				}
 				return guidance;
 			}
-			const storage = await loadAccounts();
-			if (!storage || storage.accounts.length === 0) {
+			// Read-only snapshot for the "no accounts" / interactive-picker UX.
+			// The actual mutate+save runs inside withAccountStorageTransaction
+			// below against a freshly re-read snapshot so a concurrent save
+			// between this read and the eventual persist can't be clobbered.
+			const initialStorage = await loadAccounts();
+			if (!initialStorage || initialStorage.accounts.length === 0) {
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Remove account"),
@@ -84,7 +88,7 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 			if (resolvedIndex === undefined) {
 				const selectedIndex = await promptAccountIndexSelection(
 					ui,
-					storage,
+					initialStorage,
 					"Remove account",
 				);
 				if (selectedIndex === null) {
@@ -116,12 +120,91 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 				resolvedIndex = selectedIndex + 1;
 			}
 
-			const targetIndex = Math.floor((resolvedIndex ?? 0) - 1);
-			if (
-				!Number.isFinite(targetIndex) ||
-				targetIndex < 0 ||
-				targetIndex >= storage.accounts.length
-			) {
+			type RemoveOutcome =
+				| { kind: "invalid"; accountCount: number }
+				| { kind: "not-found" }
+				| { kind: "save-failed"; label: string }
+				| {
+						kind: "ok";
+						label: string;
+						remaining: number;
+						matchingEmailRemaining: number;
+						removedEmail?: string;
+				  };
+
+			const outcome = await withAccountStorageTransaction<RemoveOutcome>(
+				async (current, persist) => {
+					const storage = current;
+					const accounts = storage?.accounts ?? [];
+					const targetIndex = Math.floor((resolvedIndex ?? 0) - 1);
+					if (
+						!Number.isFinite(targetIndex) ||
+						targetIndex < 0 ||
+						targetIndex >= accounts.length
+					) {
+						return { kind: "invalid", accountCount: accounts.length };
+					}
+
+					const account = accounts[targetIndex];
+					if (!account || !storage) {
+						return { kind: "not-found" };
+					}
+
+					const label = formatCommandAccountLabel(account, targetIndex, {
+						maskEmail,
+					});
+
+					storage.accounts.splice(targetIndex, 1);
+
+					if (storage.accounts.length === 0) {
+						storage.activeIndex = 0;
+						storage.activeIndexByFamily = {};
+					} else {
+						if (storage.activeIndex >= storage.accounts.length) {
+							storage.activeIndex = 0;
+						} else if (storage.activeIndex > targetIndex) {
+							storage.activeIndex -= 1;
+						}
+
+						if (storage.activeIndexByFamily) {
+							for (const family of MODEL_FAMILIES) {
+								const idx = storage.activeIndexByFamily[family];
+								if (typeof idx === "number") {
+									if (idx >= storage.accounts.length) {
+										storage.activeIndexByFamily[family] = 0;
+									} else if (idx > targetIndex) {
+										storage.activeIndexByFamily[family] = idx - 1;
+									}
+								}
+							}
+						}
+					}
+
+					try {
+						await persist(storage);
+					} catch (saveError) {
+						logWarn("Failed to save account removal", {
+							error: String(saveError),
+						});
+						return { kind: "save-failed", label };
+					}
+
+					const remaining = storage.accounts.length;
+					const matchingEmailRemaining = account.email?.trim()
+						? storage.accounts.filter((entry) => entry.email === account.email)
+								.length
+						: 0;
+					return {
+						kind: "ok",
+						label,
+						remaining,
+						matchingEmailRemaining,
+						removedEmail: account.email,
+					};
+				},
+			);
+
+			if (outcome.kind === "invalid") {
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Remove account"),
@@ -134,59 +217,29 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 						formatUiKeyValue(
 							ui,
 							"Valid range",
-							`1-${storage.accounts.length}`,
+							`1-${outcome.accountCount}`,
 							"muted",
 						),
 						formatUiItem(ui, "Use codex-list to list all accounts.", "accent"),
 					].join("\n");
 				}
-				return `Invalid account number: ${resolvedIndex}\n\nValid range: 1-${storage.accounts.length}\n\nUse codex-list to list all accounts.`;
+				return `Invalid account number: ${resolvedIndex}\n\nValid range: 1-${outcome.accountCount}\n\nUse codex-list to list all accounts.`;
 			}
 
-			const account = storage.accounts[targetIndex];
-			if (!account) {
+			if (outcome.kind === "not-found") {
 				return `Account ${resolvedIndex} not found.`;
 			}
 
-			const label = formatCommandAccountLabel(account, targetIndex, { maskEmail });
-
-			storage.accounts.splice(targetIndex, 1);
-
-			if (storage.accounts.length === 0) {
-				storage.activeIndex = 0;
-				storage.activeIndexByFamily = {};
-			} else {
-				if (storage.activeIndex >= storage.accounts.length) {
-					storage.activeIndex = 0;
-				} else if (storage.activeIndex > targetIndex) {
-					storage.activeIndex -= 1;
-				}
-
-				if (storage.activeIndexByFamily) {
-					for (const family of MODEL_FAMILIES) {
-						const idx = storage.activeIndexByFamily[family];
-						if (typeof idx === "number") {
-							if (idx >= storage.accounts.length) {
-								storage.activeIndexByFamily[family] = 0;
-							} else if (idx > targetIndex) {
-								storage.activeIndexByFamily[family] = idx - 1;
-							}
-						}
-					}
-				}
-			}
-
-			try {
-				await saveAccounts(storage);
-			} catch (saveError) {
-				logWarn("Failed to save account removal", {
-					error: String(saveError),
-				});
+			if (outcome.kind === "save-failed") {
 				if (ui.v2Enabled) {
 					return [
 						...formatUiHeader(ui, "Remove account"),
 						"",
-						formatUiItem(ui, `Removed selected entry: ${label}`, "warning"),
+						formatUiItem(
+							ui,
+							`Removed selected entry: ${outcome.label}`,
+							"warning",
+						),
 						formatUiItem(ui, "Only the selected index was changed.", "muted"),
 						formatUiItem(
 							ui,
@@ -195,7 +248,7 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 						),
 					].join("\n");
 				}
-				return `Removed selected entry: ${label} from memory, but failed to persist. Only the selected index was changed and this may be lost on restart.`;
+				return `Removed selected entry: ${outcome.label} from memory, but failed to persist. Only the selected index was changed and this may be lost on restart.`;
 			}
 
 			if (cachedAccountManagerRef.current) {
@@ -204,12 +257,8 @@ export function createCodexRemoveTool(ctx: ToolContext): ToolDefinition {
 				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
 			}
 
-			const remaining = storage.accounts.length;
-			const matchingEmailRemaining = account.email?.trim()
-				? storage.accounts.filter((entry) => entry.email === account.email)
-						.length
-				: 0;
-			const displayEmail = resolveDisplayEmail(account.email, maskEmail);
+			const { label, remaining, matchingEmailRemaining, removedEmail } = outcome;
+			const displayEmail = resolveDisplayEmail(removedEmail, maskEmail);
 			if (ui.v2Enabled) {
 				const postRemoveHint =
 					matchingEmailRemaining > 0 && displayEmail
