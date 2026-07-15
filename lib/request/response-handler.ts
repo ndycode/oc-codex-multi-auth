@@ -223,12 +223,40 @@ export async function convertSseToJson(
 
 			logRequest("stream-error", { error: "No response.done event found" });
 
-			// Return original stream if we can't parse
-			return new Response(fullText, {
-				status: response.status,
-				statusText: response.statusText,
-				headers: headers,
-			});
+			// Non-streaming responses are routed here unconditionally, so a body
+			// with no SSE framing at all may simply be plain JSON — pass it
+			// through untouched. A body that DID carry SSE data lines but never
+			// reached a terminal event is a truncated upstream response:
+			// returning it at the original 2xx status would credit the account
+			// with a success and hand the client an unparseable body, so it is
+			// surfaced like the terminal-error branch above instead.
+			const carriedSseData = /^(data|event):/m.test(fullText);
+			if (!carriedSseData) {
+				return new Response(fullText, {
+					status: response.status,
+					statusText: response.statusText,
+					headers: headers,
+				});
+			}
+
+			const jsonHeaders = new Headers(headers);
+			jsonHeaders.set("content-type", "application/json; charset=utf-8");
+			const status = response.status >= 400 ? response.status : 502;
+			return new Response(
+				JSON.stringify({
+					error: {
+						message:
+							"Upstream SSE stream ended without a terminal response event.",
+						type: STREAM_ERROR_CODE,
+						code: "incomplete_stream",
+					},
+				}),
+				{
+					status,
+					statusText: status === 502 ? "Bad Gateway" : response.statusText,
+					headers: jsonHeaders,
+				},
+			);
 		}
 
 		// Return as plain JSON (not SSE)

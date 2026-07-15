@@ -101,14 +101,16 @@ describe("contract: Codex SSE stream events", () => {
 		const resp = new Response(streamWithoutTerminal, { status: 200 });
 		const converted = await convertSseToJson(resp, new Headers());
 
-		// Production falls back to returning the raw text unchanged when no
-		// terminal event is seen. Assert that behavior — it is the signal
-		// that we are looking at a parser-vs-upstream mismatch.
-		expect(converted.headers.get("content-type")).not.toBe(
-			"application/json; charset=utf-8",
-		);
-		const text = await converted.text();
-		expect(text).toContain("response.output_text.delta");
+		// Production surfaces this as a loud 502 `incomplete_stream` error:
+		// SSE data lines with no terminal event mean either a truncated
+		// upstream response or a parser-vs-upstream mismatch, and neither may
+		// be reported to the caller (or the account pool) as a success.
+		expect(converted.status).toBe(502);
+		const body = (await converted.json()) as {
+			error?: { code?: string; type?: string };
+		};
+		expect(body.error?.code).toBe("incomplete_stream");
+		expect(body.error?.type).toBe("stream_error");
 	});
 
 	it("pins stream error event shape (error contract)", async () => {

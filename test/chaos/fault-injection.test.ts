@@ -316,18 +316,25 @@ describe("SSE Parsing Edge Cases", () => {
 			expect(result.status).toBe(200);
 		});
 
-		it("handles [DONE] marker only", async () => {
+		it("handles [DONE] marker only as a truncated stream", async () => {
+			// SSE framing with no terminal response event is a cut-off upstream
+			// response, not a success — surfacing it as 200 would credit the
+			// account and hand the client an unparseable body.
 			const sseText = "data: [DONE]\n\n";
 			const response = new Response(sseText, { status: 200 });
 			const result = await convertSseToJson(response, new Headers());
-			expect(result.status).toBe(200);
+			expect(result.status).toBe(502);
+			const body = (await result.json()) as {
+				error: { code: string };
+			};
+			expect(body.error.code).toBe("incomplete_stream");
 		});
 
-		it("handles malformed JSON in SSE event", async () => {
+		it("handles malformed JSON in SSE event as a truncated stream", async () => {
 			const sseText = 'data: {"invalid json\n\ndata: [DONE]\n\n';
 			const response = new Response(sseText, { status: 200 });
 			const result = await convertSseToJson(response, new Headers());
-			expect(result.status).toBe(200);
+			expect(result.status).toBe(502);
 		});
 
 		it("handles response.done event", async () => {

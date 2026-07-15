@@ -61,6 +61,37 @@ data: {"type":"response.completed","response":{"id":"resp_456","output":"done"}}
 			expect(body).toEqual({ id: 'resp_456', output: 'done' });
 		});
 
+		it('should surface a truncated SSE stream as a 502 instead of a fake 200', async () => {
+			// The stream carried SSE data lines but ended before any terminal
+			// event (completed/done/failed/incomplete/error): the upstream
+			// response was cut off. Returning the raw SSE at 200 would credit
+			// the account with a success and hand the client an unparseable body.
+			const sseContent = `data: {"type":"response.created","response":{"id":"resp_cut"}}
+data: {"type":"response.in_progress","response":{"id":"resp_cut"}}
+`;
+			const response = new Response(sseContent, { status: 200 });
+
+			const result = await convertSseToJson(response, new Headers());
+			const body = await result.json();
+
+			expect(result.status).toBe(502);
+			expect(body.error.code).toBe('incomplete_stream');
+			expect(body.error.type).toBe('stream_error');
+		});
+
+		it('should pass a plain JSON body through untouched', async () => {
+			// Non-streaming responses route through convertSseToJson
+			// unconditionally, so a body with no SSE framing is not an error —
+			// it is the JSON answer itself.
+			const jsonBody = JSON.stringify({ id: 'resp_json', output: 'plain' });
+			const response = new Response(jsonBody, { status: 200 });
+
+			const result = await convertSseToJson(response, new Headers());
+
+			expect(result.status).toBe(200);
+			expect(await result.text()).toBe(jsonBody);
+		});
+
 		it('should convert SSE error events into JSON error responses', async () => {
 			const sseContent = `data: {"type":"error","error":{"message":"Tool call failed","code":"tool_failed"}}`;
 			const response = new Response(sseContent);
@@ -109,7 +140,7 @@ data: {"type":"response.completed","response":{"id":"resp_456","output":"done"}}
 			expect(body).toEqual({ id: 'resp_no_space', output: 'ok' });
 		});
 
-		it('should return original text if no final response found', async () => {
+		it('should report a 502 if SSE data was carried but no final response found', async () => {
 			const sseContent = `data: {"type":"response.started"}
 data: {"type":"chunk","delta":"text"}
 `;
@@ -117,9 +148,10 @@ data: {"type":"chunk","delta":"text"}
 			const headers = new Headers();
 
 			const result = await convertSseToJson(response, headers);
-			const text = await result.text();
+			const body = await result.json();
 
-			expect(text).toBe(sseContent);
+			expect(result.status).toBe(502);
+			expect(body.error.code).toBe('incomplete_stream');
 		});
 
 		it('should skip malformed JSON in SSE stream', async () => {
