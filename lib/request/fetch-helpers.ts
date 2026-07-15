@@ -125,6 +125,13 @@ export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> 
 const DEFAULT_AUTO_FALLBACK_ENTRY_OPT_OUT_ENV: Record<string, string> = {
 	[GPT_55_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT55_AUTO_FALLBACK",
 	"gpt-5-codex": "CODEX_AUTH_DISABLE_CODEX_AUTO_FALLBACK",
+	// GPT-5.6 shipped as a limited preview, so entitlement 400s on these
+	// default selectors are expected for most accounts. Auto-degrading down the
+	// tier chain (sol -> terra -> luna -> gpt-5.5) keeps the documented preview
+	// behavior without requiring `unsupportedCodexPolicy: "fallback"` (#196).
+	[GPT_56_SOL_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK",
+	[GPT_56_TERRA_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK",
+	[GPT_56_LUNA_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK",
 };
 
 const DEFAULT_AUTO_FALLBACK_CONTINUATION_MODELS = new Set([
@@ -188,6 +195,13 @@ function canonicalizeModelName(model: string | undefined): string | undefined {
 		withoutEffort === "gpt-5.5-pro-20260423"
 	) {
 		return GPT_55_MODEL_ID;
+	}
+
+	// Bare `gpt-5.6` is the Sol flagship alias (see MODEL_MAP). The request path
+	// normalizes it before dispatch, but direct helper callers and custom chains
+	// keyed as `gpt-5.6` need the same collapse for chain lookups to work.
+	if (withoutEffort === "gpt-5.6") {
+		return GPT_56_SOL_MODEL_ID;
 	}
 
 	return withoutEffort;
@@ -1095,6 +1109,8 @@ function normalizeErrorPayload(
 								message:
 										`The model '${unsupportedModel}' is not currently available for this ChatGPT account when using Codex OAuth. ` +
 										"This is an account/workspace entitlement gate, not a temporary rate limit. " +
+										"Default gpt-5.6 tiers, gpt-5.5, and gpt-5-codex selectors auto-degrade down their fallback chains " +
+										"(opt out via CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK/GPT55/CODEX=1). " +
 										"Try 'gpt-5.5' (latest general), 'gpt-5-codex' (canonical), or legacy aliases like 'gpt-5.3-codex'/'gpt-5.2-codex', or enable automatic fallback via " +
 										'unsupportedCodexPolicy: "fallback" (or CODEX_AUTH_UNSUPPORTED_MODEL_POLICY=fallback). ' +
 										"(Legacy: CODEX_AUTH_FALLBACK_UNSUPPORTED_MODEL=1 or fallbackOnUnsupportedCodexModel).",

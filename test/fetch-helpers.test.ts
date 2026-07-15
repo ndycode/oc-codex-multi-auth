@@ -631,6 +631,118 @@ describe('Fetch Helpers Module', () => {
 			}
 		});
 
+		it('auto-fallbacks gpt-5.6 tiers down the chain when fallback policy is disabled', () => {
+			const unsupportedBody = (model: string) => ({
+				error: {
+					code: 'model_not_supported_with_chatgpt_account',
+					message: `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
+				},
+			});
+
+			const solFallback = resolveUnsupportedCodexFallbackModel({
+				requestedModel: 'gpt-5.6-sol',
+				errorBody: unsupportedBody('gpt-5.6-sol'),
+				attemptedModels: ['gpt-5.6-sol'],
+				fallbackOnUnsupportedCodexModel: false,
+				fallbackToGpt52OnUnsupportedGpt53: true,
+			});
+			expect(solFallback).toBe('gpt-5.6-terra');
+
+			const terraFallback = resolveUnsupportedCodexFallbackModel({
+				requestedModel: 'gpt-5.6-terra',
+				errorBody: unsupportedBody('gpt-5.6-terra'),
+				attemptedModels: ['gpt-5.6-sol', 'gpt-5.6-terra'],
+				fallbackOnUnsupportedCodexModel: false,
+				fallbackToGpt52OnUnsupportedGpt53: true,
+			});
+			expect(terraFallback).toBe('gpt-5.6-luna');
+
+			const lunaFallback = resolveUnsupportedCodexFallbackModel({
+				requestedModel: 'gpt-5.6-luna',
+				errorBody: unsupportedBody('gpt-5.6-luna'),
+				attemptedModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+				fallbackOnUnsupportedCodexModel: false,
+				fallbackToGpt52OnUnsupportedGpt53: true,
+			});
+			expect(lunaFallback).toBe('gpt-5.5');
+
+			// The chain keeps degrading through the GPT-5.4 family once it lands
+			// on gpt-5.5, matching the existing default-selector behavior.
+			const gpt55Fallback = resolveUnsupportedCodexFallbackModel({
+				requestedModel: 'gpt-5.5',
+				errorBody: unsupportedBody('gpt-5.5'),
+				attemptedModels: [
+					'gpt-5.6-sol',
+					'gpt-5.6-terra',
+					'gpt-5.6-luna',
+					'gpt-5.5',
+				],
+				fallbackOnUnsupportedCodexModel: false,
+				fallbackToGpt52OnUnsupportedGpt53: true,
+			});
+			expect(gpt55Fallback).toBe('gpt-5.4');
+		});
+
+		it('treats the bare gpt-5.6 alias as the Sol tier for auto-fallback', () => {
+			const fallback = resolveUnsupportedCodexFallbackModel({
+				requestedModel: 'gpt-5.6',
+				errorBody: {
+					error: {
+						code: 'model_not_supported_with_chatgpt_account',
+						message:
+							"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+					},
+				},
+				attemptedModels: ['gpt-5.6'],
+				fallbackOnUnsupportedCodexModel: false,
+				fallbackToGpt52OnUnsupportedGpt53: true,
+			});
+			expect(fallback).toBe('gpt-5.6-terra');
+		});
+
+		it('honors the gpt-5.6 auto-fallback opt-out', () => {
+			const previous = process.env.CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK;
+			try {
+				process.env.CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK = '1';
+				const strictFallback = resolveUnsupportedCodexFallbackModel({
+					requestedModel: 'gpt-5.6-sol',
+					errorBody: {
+						error: {
+							code: 'model_not_supported_with_chatgpt_account',
+							message:
+								"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+						},
+					},
+					attemptedModels: ['gpt-5.6-sol'],
+					fallbackOnUnsupportedCodexModel: false,
+					fallbackToGpt52OnUnsupportedGpt53: true,
+				});
+				expect(strictFallback).toBeUndefined();
+
+				// The explicit fallback policy still applies when opted out.
+				const policyFallback = resolveUnsupportedCodexFallbackModel({
+					requestedModel: 'gpt-5.6-sol',
+					errorBody: {
+						error: {
+							code: 'model_not_supported_with_chatgpt_account',
+							message:
+								"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
+						},
+					},
+					attemptedModels: ['gpt-5.6-sol'],
+					fallbackOnUnsupportedCodexModel: true,
+					fallbackToGpt52OnUnsupportedGpt53: true,
+				});
+				expect(policyFallback).toBe('gpt-5.6-terra');
+			} finally {
+				if (previous === undefined) {
+					delete process.env.CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK;
+				} else {
+					process.env.CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK = previous;
+				}
+			}
+		});
+
 		it('keeps manual gpt-5.4-pro strict when fallback policy is disabled', () => {
 			const fallback = resolveUnsupportedCodexFallbackModel({
 				requestedModel: 'gpt-5.4-pro',

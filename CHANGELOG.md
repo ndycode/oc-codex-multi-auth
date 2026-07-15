@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `gpt-5.6-sol` (and the other 5.6 tiers) no longer hard-fails with `model not supported` when the account is outside the GPT-5.6 preview. 6.7.0 documented that an account without access "degrades `gpt-5.6-sol` → `gpt-5.6-terra` → `gpt-5.6-luna` → `gpt-5.5` through the unsupported-model fallback chain", but the chain was only traversed under `unsupportedCodexPolicy: "fallback"`: the default-selector auto-fallback allowlist listed only `gpt-5.5` and `gpt-5-codex`, so under the default `strict` policy a Sol request burned through every pooled account and returned an entitlement error. The three 5.6 tiers are now on the same auto-fallback path as `gpt-5.5`/`gpt-5-codex`, so the documented degradation works out of the box; opt out with `CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK=1`. Bare `gpt-5.6` is also canonicalized to `gpt-5.6-sol` inside the fallback resolver, matching the request path, so custom chains keyed as `gpt-5.6` resolve correctly. (#196)
+
 ## [6.8.0] - 2026-07-14
 
 ### Added

@@ -362,12 +362,13 @@ resolvedConfig: { reasoningEffort: 'low', ... }  ← Should show your options
    opencode auth login
    ```
 2. Add another entitled account/workspace. The plugin tries remaining accounts/workspaces before model fallback.
-3. Default public selectors that are commonly entitlement-gated (`gpt-5.5` and canonical `gpt-5-codex`) can auto-fallback through `gpt-5.4`, `gpt-5.4-mini`, then `gpt-5.4-nano`.
+3. Default public selectors that are commonly entitlement-gated can auto-fallback: the GPT-5.6 preview tiers (`gpt-5.6-sol`/`gpt-5.6-terra`/`gpt-5.6-luna`) degrade down the tier chain to `gpt-5.5`, and `gpt-5.5`/canonical `gpt-5-codex` degrade through `gpt-5.4`, `gpt-5.4-mini`, then `gpt-5.4-nano`.
 4. Enable fallback policy if you also want automatic downgrades for manual/legacy selectors:
    ```bash
    CODEX_AUTH_UNSUPPORTED_MODEL_POLICY=fallback opencode
    ```
-5. Default fallback chain (auto-fallback for `gpt-5.5`/`gpt-5-codex` through the GPT-5.4 family; full chain when policy is `fallback` and not overridden):
+5. Default fallback chain (auto-fallback for the 5.6 tiers and `gpt-5.5`/`gpt-5-codex`; full chain when policy is `fallback` and not overridden):
+   - `gpt-5.6-sol -> gpt-5.6-terra -> gpt-5.6-luna -> gpt-5.5` (then the `gpt-5.5` chain below)
    - `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini -> gpt-5.4-nano`
    - `gpt-5-codex -> gpt-5.4 -> gpt-5.4-mini -> gpt-5.4-nano`
    - `gpt-5.4-pro -> gpt-5.4` (if `gpt-5.4-pro` is selected manually)
@@ -396,10 +397,11 @@ resolvedConfig: { reasoningEffort: 'low', ... }  ← Should show your options
    ```
 8. Disable default-selector auto-fallbacks when you need strict entitlement failures for those selectors:
    ```bash
+   CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK=1 opencode
    CODEX_AUTH_DISABLE_GPT55_AUTO_FALLBACK=1 opencode
    CODEX_AUTH_DISABLE_CODEX_AUTO_FALLBACK=1 opencode
    ```
-   `CODEX_AUTH_DISABLE_CODEX_AUTO_FALLBACK=1` only disables the automatic canonical Codex/GPT-5.4-family fallback path; explicit `unsupportedCodexPolicy: "fallback"` chains still apply.
+   Each variable only disables its own automatic default-selector fallback path (`GPT56` covers all three 5.6 tiers); explicit `unsupportedCodexPolicy: "fallback"` chains still apply.
 9. Legacy compatibility toggle (only controls `gpt-5.3-codex -> gpt-5.2-codex`):
    ```bash
    CODEX_AUTH_FALLBACK_GPT53_TO_GPT52=0 opencode
