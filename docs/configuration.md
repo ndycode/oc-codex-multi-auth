@@ -294,6 +294,9 @@ override any config with env vars:
 | `CODEX_AUTH_DISABLE_GPT55_AUTO_FALLBACK=1` | disable automatic `gpt-5.5 -> gpt-5.4` fallback during rollout |
 | `CODEX_AUTH_DISABLE_CODEX_AUTO_FALLBACK=1` | disable automatic canonical Codex/GPT-5.4-family fallback |
 | `CODEX_AUTH_ACCOUNT_ID=acc_xxx` | force specific workspace id |
+| `CODEX_AUTH_DISABLE_CODEX_USER_AGENT=1` | keep the host runtime's `User-Agent` instead of the Codex CLI identity |
+| `CODEX_AUTH_CLIENT_VERSION=0.150.0` | override the Codex CLI version advertised in the `User-Agent` |
+| `CODEX_AUTH_SEND_ORGANIZATION_HEADER=1` | restore legacy `openai-organization` request pinning (off by default; upstream Codex never sends it) |
 | `CODEX_AUTH_FETCH_TIMEOUT_MS=120000` | override fetch timeout |
 | `CODEX_AUTH_STREAM_STALL_TIMEOUT_MS=60000` | override SSE stall timeout |
 

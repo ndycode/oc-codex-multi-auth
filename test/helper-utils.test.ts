@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
 	rewriteUrlForCodex,
 	extractRequestUrl,
@@ -207,12 +207,25 @@ describe("Helper Utilities", () => {
 			expect(headers.get("X-Custom-Header")).toBe("custom-value");
 		});
 
-		it("should set organization_id when provided", () => {
+		it("should not set organization_id by default even when provided (Codex CLI parity, #196)", () => {
 			const headers = createCodexHeaders(undefined, accountId, accessToken, {
 				organizationId: "org-123",
 			});
 
-			expect(headers.get(OPENAI_HEADERS.ORGANIZATION_ID)).toBe("org-123");
+			expect(headers.get(OPENAI_HEADERS.ORGANIZATION_ID)).toBeNull();
+		});
+
+		it("should set organization_id when provided and CODEX_AUTH_SEND_ORGANIZATION_HEADER=1", () => {
+			try {
+				vi.stubEnv("CODEX_AUTH_SEND_ORGANIZATION_HEADER", "1");
+				const headers = createCodexHeaders(undefined, accountId, accessToken, {
+					organizationId: "org-123",
+				});
+
+				expect(headers.get(OPENAI_HEADERS.ORGANIZATION_ID)).toBe("org-123");
+			} finally {
+				vi.unstubAllEnvs();
+			}
 		});
 
 		it("should not set organization_id when not provided", () => {

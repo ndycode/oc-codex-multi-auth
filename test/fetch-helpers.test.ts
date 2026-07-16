@@ -223,6 +223,54 @@ describe('Fetch Helpers Module', () => {
 			expect(headers.get(OPENAI_HEADERS.SESSION_ID)).toBeNull();
 		});
 
+		it('sends a Codex CLI user-agent by default, replacing the host user-agent', () => {
+			const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as any;
+			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.6-sol' });
+			expect(headers.get('user-agent')).toMatch(/^codex_cli_rs\/\d+\.\d+\.\d+ \(/);
+		});
+
+		it('honors the CODEX_AUTH_DISABLE_CODEX_USER_AGENT opt-out', () => {
+			try {
+				vi.stubEnv('CODEX_AUTH_DISABLE_CODEX_USER_AGENT', '1');
+				const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as any;
+				const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.6-sol' });
+				expect(headers.get('user-agent')).toBe('opencode/1.17.20');
+			} finally {
+				vi.unstubAllEnvs();
+			}
+		});
+
+		it('advertises CODEX_AUTH_CLIENT_VERSION when overridden', () => {
+			try {
+				vi.stubEnv('CODEX_AUTH_CLIENT_VERSION', '0.150.2');
+				const headers = createCodexHeaders(undefined, accountId, accessToken, { model: 'gpt-5.6-sol' });
+				expect(headers.get('user-agent')).toMatch(/^codex_cli_rs\/0\.150\.2 \(/);
+			} finally {
+				vi.unstubAllEnvs();
+			}
+		});
+
+		it('does not send openai-organization by default (Codex CLI parity, #196)', () => {
+			const headers = createCodexHeaders(undefined, accountId, accessToken, { model: 'gpt-5.6-sol', organizationId: 'org-123' });
+			expect(headers.get(OPENAI_HEADERS.ORGANIZATION_ID)).toBeNull();
+		});
+
+		it('strips an inherited openai-organization header by default', () => {
+			const init = { headers: { [OPENAI_HEADERS.ORGANIZATION_ID]: 'org-stale' } } as any;
+			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5' });
+			expect(headers.get(OPENAI_HEADERS.ORGANIZATION_ID)).toBeNull();
+		});
+
+		it('sends openai-organization when CODEX_AUTH_SEND_ORGANIZATION_HEADER=1', () => {
+			try {
+				vi.stubEnv('CODEX_AUTH_SEND_ORGANIZATION_HEADER', '1');
+				const headers = createCodexHeaders(undefined, accountId, accessToken, { model: 'gpt-5.6-sol', organizationId: 'org-123' });
+				expect(headers.get(OPENAI_HEADERS.ORGANIZATION_ID)).toBe('org-123');
+			} finally {
+				vi.unstubAllEnvs();
+			}
+		});
+
 		it('maps usage_not_included 404 to 403 entitlement error, not rate limit', async () => {
 			const body = {
 				error: {

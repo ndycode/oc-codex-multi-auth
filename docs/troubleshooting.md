@@ -362,12 +362,19 @@ resolvedConfig: { reasoningEffort: 'low', ... }  ← Should show your options
    opencode auth login
    ```
 2. Add another entitled account/workspace. The plugin tries remaining accounts/workspaces before model fallback.
-3. Default public selectors that are commonly entitlement-gated can auto-fallback: the GPT-5.6 preview tiers (`gpt-5.6-sol`/`gpt-5.6-terra`/`gpt-5.6-luna`) degrade down the tier chain to `gpt-5.5`, and `gpt-5.5`/canonical `gpt-5-codex` degrade through `gpt-5.4`, `gpt-5.4-mini`, then `gpt-5.4-nano`.
-4. Enable fallback policy if you also want automatic downgrades for manual/legacy selectors:
+3. **Model works in the Codex CLI/TUI but not through this plugin** (typically the newest preview tier, e.g. `gpt-5.6-sol`): the plugin now sends the same client identity Codex does — a `codex_cli_rs/<version>` `User-Agent` (the backend gates preview tiers on the catalog's `minimal_client_version`, read from the UA) — and no longer pins `openai-organization` (upstream Codex never sends it; workspace routing is carried by `chatgpt-account-id`, and org pinning could shift entitlement evaluation to a workspace outside the preview). Escape hatches if your setup relied on the old behavior:
+   ```bash
+   CODEX_AUTH_DISABLE_CODEX_USER_AGENT=1 opencode   # keep the host runtime's User-Agent
+   CODEX_AUTH_CLIENT_VERSION=0.150.0 opencode       # advertise a different Codex CLI version
+   CODEX_AUTH_SEND_ORGANIZATION_HEADER=1 opencode   # restore legacy openai-organization pinning
+   ```
+   If the model still fails only through the plugin, run `codex-health` and compare the failing pooled account ids against the account the Codex CLI uses (`~/.codex/auth.json`).
+4. Default public selectors that are commonly entitlement-gated can auto-fallback: the GPT-5.6 preview tiers (`gpt-5.6-sol`/`gpt-5.6-terra`/`gpt-5.6-luna`) degrade down the tier chain to `gpt-5.5`, and `gpt-5.5`/canonical `gpt-5-codex` degrade through `gpt-5.4`, `gpt-5.4-mini`, then `gpt-5.4-nano`.
+5. Enable fallback policy if you also want automatic downgrades for manual/legacy selectors:
    ```bash
    CODEX_AUTH_UNSUPPORTED_MODEL_POLICY=fallback opencode
    ```
-5. Default fallback chain (auto-fallback for the 5.6 tiers and `gpt-5.5`/`gpt-5-codex`; full chain when policy is `fallback` and not overridden):
+6. Default fallback chain (auto-fallback for the 5.6 tiers and `gpt-5.5`/`gpt-5-codex`; full chain when policy is `fallback` and not overridden):
    - `gpt-5.6-sol -> gpt-5.6-terra -> gpt-5.6-luna -> gpt-5.5` (then the `gpt-5.5` chain below)
    - `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini -> gpt-5.4-nano`
    - `gpt-5-codex -> gpt-5.4 -> gpt-5.4-mini -> gpt-5.4-nano`
@@ -376,7 +383,7 @@ resolvedConfig: { reasoningEffort: 'low', ... }  ← Should show your options
    - `gpt-5.3-codex-spark -> gpt-5-codex -> gpt-5.3-codex -> gpt-5.2-codex` (if Spark IDs are selected manually)
    - `gpt-5.2-codex -> gpt-5-codex`
    - `gpt-5.1-codex -> gpt-5-codex`
-6. Configure a custom fallback chain in `~/.opencode/openai-codex-auth-config.json`:
+7. Configure a custom fallback chain in `~/.opencode/openai-codex-auth-config.json`:
    ```json
    {
    "unsupportedCodexPolicy": "fallback",
@@ -391,26 +398,26 @@ resolvedConfig: { reasoningEffort: 'low', ... }  ← Should show your options
      }
    }
    ```
-7. Use strict mode for explicit entitlement failures outside the default public selector auto-fallbacks:
+8. Use strict mode for explicit entitlement failures outside the default public selector auto-fallbacks:
    ```bash
    CODEX_AUTH_UNSUPPORTED_MODEL_POLICY=strict opencode
    ```
-8. Disable default-selector auto-fallbacks when you need strict entitlement failures for those selectors:
+9. Disable default-selector auto-fallbacks when you need strict entitlement failures for those selectors:
    ```bash
    CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK=1 opencode
    CODEX_AUTH_DISABLE_GPT55_AUTO_FALLBACK=1 opencode
    CODEX_AUTH_DISABLE_CODEX_AUTO_FALLBACK=1 opencode
    ```
    Each variable only disables its own automatic default-selector fallback path (`GPT56` covers all three 5.6 tiers); explicit `unsupportedCodexPolicy: "fallback"` chains still apply.
-9. Legacy compatibility toggle (only controls `gpt-5.3-codex -> gpt-5.2-codex`):
+10. Legacy compatibility toggle (only controls `gpt-5.3-codex -> gpt-5.2-codex`):
    ```bash
    CODEX_AUTH_FALLBACK_GPT53_TO_GPT52=0 opencode
    ```
-10. Legacy generic fallback toggle compatibility:
+11. Legacy generic fallback toggle compatibility:
    ```bash
    CODEX_AUTH_FALLBACK_UNSUPPORTED_MODEL=1 opencode
    ```
-11. Verify effective upstream model when debugging Spark/fallback behavior:
+12. Verify effective upstream model when debugging Spark/fallback behavior:
    ```bash
    ENABLE_PLUGIN_REQUEST_LOGGING=1 CODEX_PLUGIN_LOG_BODIES=1 opencode run "ping" --model=openai/gpt-5.3-codex-spark
    ```

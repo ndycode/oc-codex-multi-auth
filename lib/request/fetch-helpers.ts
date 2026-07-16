@@ -29,6 +29,7 @@ import {
 	shapeBodyForModel,
 	usesResponsesLite,
 } from "./helpers/responses-lite.js";
+import { buildCodexUserAgent } from "./helpers/user-agent.js";
 import { convertSseToJson, ensureContentType } from "./response-handler.js";
 import type { OAuthAuthDetails, UserConfig, RequestBody } from "../types.js";
 import { CodexAuthError } from "../errors.js";
@@ -837,6 +838,15 @@ export function createCodexHeaders(
 		headers.delete(RESPONSES_LITE_HEADER);
 	}
 
+	// The backend reads the client version from the User-Agent product token
+	// and gates preview tiers on the catalog's `minimal_client_version`
+	// (0.144.0 for gpt-5.6-*). The host runtime's UA fails that gate even
+	// though we already declare `originator: codex_cli_rs`, so send the Codex
+	// CLI identity the originator claims (#196).
+	if (process.env.CODEX_AUTH_DISABLE_CODEX_USER_AGENT !== "1") {
+		headers.set("user-agent", buildCodexUserAgent());
+	}
+
     const cacheKey = opts?.promptCacheKey;
     if (cacheKey) {
         headers.set(OPENAI_HEADERS.CONVERSATION_ID, cacheKey);
@@ -846,9 +856,20 @@ export function createCodexHeaders(
         headers.delete(OPENAI_HEADERS.SESSION_ID);
     }
 
+    // Upstream Codex never sends `openai-organization` on ChatGPT-Codex
+    // requests — workspace routing is carried entirely by `chatgpt-account-id`.
+    // Pinning an org can shift the backend's entitlement evaluation to a
+    // workspace outside a limited preview and 400 an otherwise-entitled
+    // account (gpt-5.6-sol, #196). Legacy behavior stays opt-in for multi-org
+    // setups that relied on it.
     const organizationId = opts?.organizationId;
-    if (organizationId) {
+    if (
+        organizationId &&
+        process.env.CODEX_AUTH_SEND_ORGANIZATION_HEADER === "1"
+    ) {
         headers.set(OPENAI_HEADERS.ORGANIZATION_ID, organizationId);
+    } else {
+        headers.delete(OPENAI_HEADERS.ORGANIZATION_ID);
     }
 
     headers.set("accept", "text/event-stream");

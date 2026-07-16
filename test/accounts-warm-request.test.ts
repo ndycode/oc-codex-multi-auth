@@ -108,11 +108,24 @@ describe("warmAccountWindow (#182)", () => {
 		await expect(warmAccountWindow({ ...PARAMS, fetchImpl })).rejects.toThrow(/ECONNRESET/);
 	});
 
-	it("passes organizationId into the request headers when present", async () => {
+	it("does not pin openai-organization by default (Codex CLI parity, #196)", async () => {
 		const fetchImpl = vi.fn(async () => fakeResponse(200));
 		await warmAccountWindow({ ...PARAMS, organizationId: "org-9", fetchImpl });
 		const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
 		const headers = init.headers as Headers;
-		expect(headers.get("openai-organization")).toBe("org-9");
+		expect(headers.get("openai-organization")).toBeNull();
+	});
+
+	it("passes organizationId into the request headers when CODEX_AUTH_SEND_ORGANIZATION_HEADER=1", async () => {
+		try {
+			vi.stubEnv("CODEX_AUTH_SEND_ORGANIZATION_HEADER", "1");
+			const fetchImpl = vi.fn(async () => fakeResponse(200));
+			await warmAccountWindow({ ...PARAMS, organizationId: "org-9", fetchImpl });
+			const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+			const headers = init.headers as Headers;
+			expect(headers.get("openai-organization")).toBe("org-9");
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 });

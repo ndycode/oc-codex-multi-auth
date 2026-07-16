@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`gpt-5.6-sol` rejected through the plugin while working in the Codex CLI/TUI for the same account**: two request-identity mismatches versus upstream Codex could make the backend evaluate a sol request against the wrong client or workspace context and return `model_not_supported_with_chatgpt_account` for an entitled account. First, the plugin declared `originator: codex_cli_rs` but sent the host runtime's `User-Agent`, while the backend reads the client version from the UA product token and the model catalog gates the 5.6 tiers on `minimal_client_version: 0.144.0`; requests now carry a Codex CLI `User-Agent` (`codex_cli_rs/<version> (<os>; <arch>)`), with `CODEX_AUTH_DISABLE_CODEX_USER_AGENT=1` to opt out and `CODEX_AUTH_CLIENT_VERSION` to override the advertised version. Second, the plugin pinned `openai-organization` on every request for accounts whose token carries an organization claim — a header upstream Codex never sends on ChatGPT-Codex requests (workspace routing is carried entirely by `chatgpt-account-id`), and one that can shift the backend's entitlement evaluation to a workspace outside the narrow sol preview while the broader terra/luna preview still passes. The header is no longer sent by default; multi-org setups that relied on it can restore it with `CODEX_AUTH_SEND_ORGANIZATION_HEADER=1`. Follow-up to the #196 auto-fallback fix in 6.8.1, prompted by the report that sol works in the Codex TUI and in opencode without the plugin but not through it; needs verification by an affected preview account. (#196)
+
 ## [6.8.1] - 2026-07-15
 
 ### Fixed
