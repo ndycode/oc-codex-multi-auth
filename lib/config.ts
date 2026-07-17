@@ -2,6 +2,7 @@ import { readFileSync, existsSync, promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { lock } from "proper-lockfile";
 import type { PluginConfig } from "./types.js";
 import {
 	normalizeRetryBudgetValue,
@@ -164,9 +165,31 @@ export function updateModelAccountPool(
 	accountIds: readonly string[] = [],
 	options: { dryRun?: boolean } = {},
 ): Promise<ModelAccountPoolMutationResult> {
-	const pending = modelAccountPoolMutationQueue.then(() =>
-		performModelAccountPoolMutation(model, mutation, accountIds, options),
-	);
+	const pending = modelAccountPoolMutationQueue.then(async () => {
+		await fs.mkdir(dirname(CONFIG_PATH), { recursive: true, mode: 0o700 });
+		const release = await lock(CONFIG_PATH, {
+			realpath: false,
+			stale: 10_000,
+			update: 2_000,
+			retries: {
+				retries: 20,
+				factor: 1.2,
+				minTimeout: 25,
+				maxTimeout: 200,
+				randomize: true,
+			},
+		});
+		try {
+			return await performModelAccountPoolMutation(
+				model,
+				mutation,
+				accountIds,
+				options,
+			);
+		} finally {
+			await release();
+		}
+	});
 	modelAccountPoolMutationQueue = pending.then(
 		() => undefined,
 		() => undefined,
@@ -247,7 +270,6 @@ async function performModelAccountPoolMutation(
 			delete rawConfig.modelAccountPools;
 		}
 
-		await fs.mkdir(dirname(CONFIG_PATH), { recursive: true, mode: 0o700 });
 		const tempPath = `${CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
 		try {
 			await fs.writeFile(tempPath, `${JSON.stringify(rawConfig, null, 2)}\n`, {

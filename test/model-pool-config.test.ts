@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { lock } from "proper-lockfile";
 
 const testHome = vi.hoisted(
 	() => `/tmp/oc-codex-model-pool-config-${process.pid}`,
@@ -106,6 +107,31 @@ describe("model account pool config mutation", () => {
 		});
 	});
 
+	it("waits for a foreign lock before reading and preserves the latest config", async () => {
+		await fs.writeFile(
+			configPath,
+			JSON.stringify({ modelAccountPools: { model: ["one"] } }),
+		);
+		const releaseForeignLock = await lock(configPath, { realpath: false });
+		const pendingMutation = updateModelAccountPool("model", "add", ["two"]);
+
+		await new Promise((resolve) => setTimeout(resolve, 75));
+		await fs.writeFile(
+			configPath,
+			JSON.stringify({
+				rotationStrategy: "sticky",
+				modelAccountPools: { model: ["one", "external"] },
+			}),
+		);
+		await releaseForeignLock();
+		await pendingMutation;
+
+		expect(await readConfig()).toMatchObject({
+			rotationStrategy: "sticky",
+			modelAccountPools: { model: ["one", "external", "two"] },
+		});
+	});
+
 	it("previews a change without creating or modifying the config file", async () => {
 		const result = await updateModelAccountPool("model", "set", ["one"], {
 			dryRun: true,
@@ -138,6 +164,8 @@ describe("model account pool config mutation", () => {
 			updateModelAccountPool("model", "set", ["one"]),
 		).rejects.toThrow();
 		expect(await fs.readFile(configPath, "utf-8")).toBe("{ malformed");
+		const release = await lock(configPath, { realpath: false });
+		await release();
 	});
 
 	it("refuses to overwrite an invalid existing pool", async () => {

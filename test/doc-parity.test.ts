@@ -259,8 +259,16 @@ describe("runtime documentation parity", () => {
 			[
 				"docs/development/ARCHITECTURE.md",
 				[
-					"23 OpenCode tools",
+					"24 OpenCode tools",
+					"`codex-list`, `codex-switch`, `codex-warm`",
 					"every registered `codex-*` tool is its own file under `lib/tools/`",
+				],
+			],
+			[
+				"docs/architecture.md",
+				[
+					"24 per-file factories",
+					"`codex-list`, `codex-switch`, `codex-warm`",
 				],
 			],
 			[
