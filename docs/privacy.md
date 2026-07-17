@@ -43,6 +43,19 @@ Contents typically include OAuth access/refresh material, account IDs, labels/ta
 
 On startup the plugin may also read Codex CLI account material under `~/.codex` (for example `accounts.json`) to help bootstrap the local pool. Disable with `CODEX_AUTH_SYNC_CODEX_CLI=0`. This is local filesystem access only; nothing is uploaded to the package maintainers.
 
+### Legacy account filenames (migration only)
+
+Older installs may still have migration sources under `~/.opencode/` or a project tree:
+
+| Legacy file | Role |
+|-------------|------|
+| `openai-codex-accounts.json` | Pre-rename account pool seed |
+| `openai-codex-flagged-accounts.json` | Pre-rename flagged metadata |
+| `openai-codex-blocked-accounts.json` | Older blocked-account list (migrated into flagged handling) |
+| `<project>/.opencode/openai-codex-accounts.json` | In-repo legacy pool (read for migration; current pools live under `~/.opencode/projects/…`) |
+
+Current canonical names use the `oc-codex-multi-auth-*.json` prefix. Do not hand-edit legacy files unless you are recovering an old backup.
+
 ### Plugin configuration
 
 | Item | Default path |
@@ -67,9 +80,21 @@ When `CODEX_KEYCHAIN=1` is set, account pools can be stored in the OS credential
 
 | Item | Default path |
 |------|----------------|
-| TUI quota cache | OpenCode state path, with fallback `~/.opencode/oc-codex-multi-auth-tui-quota.json` |
+| TUI quota cache | `$OPENCODE_STATE_DIR` when set, otherwise OpenCode's state directory (typically `~/.local/state/opencode/`), file `oc-codex-multi-auth-tui-quota.json`, with a `~/.opencode/` fallback in some builds |
 
 Caches recent quota/usage snapshots for prompt status display.
+
+### Session recovery storage (host OpenCode)
+
+When `sessionRecovery` is enabled (default), recoverable session repairs read/write OpenCode's on-disk message/part store:
+
+| Item | Default path |
+|------|----------------|
+| OpenCode storage root | `$XDG_DATA_HOME/opencode/storage` (macOS/Linux default `~/.local/share/opencode/storage`; Windows `%APPDATA%/opencode/storage`) |
+| Messages | `…/message/{sessionID}/…` |
+| Parts | `…/part/{messageID}/*.json` |
+
+Only known structural recovery cases are patched (missing tool results, thinking-block order, thinking-disabled violations). Tokens are not written here.
 
 ### Catalog and instruction caches
 

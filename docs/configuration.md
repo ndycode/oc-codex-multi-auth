@@ -376,6 +376,20 @@ override any config with env vars (boolean values are truthy only for `"1"`):
 | `CODEX_COLLABORATION_MODE=plan` | collaboration mode hint for request shaping (`OPENCODE_COLLABORATION_MODE` is accepted as an alias) |
 | `OPENCODE_STATE_DIR=/path` | override OpenCode state dir used for the TUI quota cache file |
 
+### Advanced / power-user environment variables
+
+These are real runtime knobs used by the plugin. Most people never need them.
+
+| variable | what it does |
+|----------|--------------|
+| `CODEX_THREAD_ID=<id>` | optional correlation / prompt-cache seed attached to outbound Codex requests |
+| `OPENCODE_CODEX_PROMPT_URL=<url>` | override the OpenCode→Codex bridge prompt catalog URL used in legacy transform |
+| `OPENCODE_SKIP_EMAIL_HYDRATE=1` | skip account email hydrate during account-manager bootstrap |
+| `FORCE_INTERACTIVE_MODE=1` | force interactive menu paths even when the host looks non-interactive (tests / special shells) |
+| `OPENCODE_TUI=1` / `OPENCODE_DESKTOP=1` | host-injected markers used for non-interactive detection (normally set by OpenCode, not by you) |
+
+Boolean overrides remain truthy only for the literal string `"1"`.
+
 ---
 
 ## Config Patterns
@@ -476,7 +490,12 @@ opencode run "task" --model=openai/gpt-5.6-sol-high
 | `~/.opencode/auth/openai.json` | OpenCode OAuth tokens |
 | `~/.opencode/oc-codex-multi-auth-accounts.json` | global V3 account pool |
 | `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` | per-project account pool |
+| `~/.opencode/oc-codex-multi-auth-flagged-accounts.json` | flagged/deactivated account metadata |
 | `~/.opencode/logs/codex-plugin/` | request/debug logs when enabled |
+| `~/.opencode/cache/` | instruction/catalog and auto-update caches |
+| `$OPENCODE_STATE_DIR` or OpenCode state dir + `oc-codex-multi-auth-tui-quota.json` | TUI quota cache |
+| `$XDG_DATA_HOME/opencode/storage/…` (Windows: `%APPDATA%/opencode/storage`) | OpenCode session message/part store (session recovery) |
+| `openai-codex-accounts.json` / `openai-codex-flagged-accounts.json` / `openai-codex-blocked-accounts.json` | legacy migration sources only |
 
 ---
 

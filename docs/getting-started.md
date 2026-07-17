@@ -75,7 +75,12 @@ opencode auth login
 Then choose:
 
 1. `OpenAI`
-2. `Codex OAuth (ChatGPT Plus/Pro)`
+2. One of the **three** plugin OAuth methods:
+   - `Codex OAuth (ChatGPT Plus/Pro)` — browser callback (default)
+   - `Codex OAuth (Device Code)` — headless / SSH
+   - `Codex OAuth (Manual URL Paste)` — paste the redirect URL
+
+There is **no** registered “Manual API Key” login path for this plugin. The provider still presents a dummy SDK key (`chatgpt-oauth`) internally; real auth is always OAuth.
 
 The browser-based OAuth flow uses the same local callback port as Codex CLI. The authorize redirect is `http://localhost:1455/auth/callback`, while the local callback server binds `http://127.0.0.1:1455/auth/callback` and `[::1]:1455` for dual-stack localhost redirects. Authorization and token exchange go to `auth.openai.com`.
 

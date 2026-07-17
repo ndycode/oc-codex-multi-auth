@@ -2,7 +2,7 @@
 
 Common setup, authentication, model, and request-debugging issues for `oc-codex-multi-auth` (current package line, including the 24-tool surface and GPT-5.6 catalog).
 
-For install modes, the full tool list, and standalone CLI commands (`doctor`, `status`, `list`, `limits`, `health`, `diag`, `warm`), see [Tools and CLI](tools-and-cli.md) and [Getting Started](getting-started.md).
+For install modes, the full tool list (with args), and standalone CLI commands (`doctor`, `status`, `list`, `limits`, `health`, `diag`, `warm`), see [Tools and CLI](tools-and-cli.md) and [Getting Started](getting-started.md). For advanced env vars (`CODEX_THREAD_ID`, `OPENCODE_CODEX_PROMPT_URL`, etc.) see [Configuration](configuration.md#advanced--power-user-environment-variables).
 
 ---
 

@@ -146,9 +146,11 @@ The storage layer uses V3 account files with migrations from older formats, atom
 - Multi-turn continuity depends on `reasoning.encrypted_content` and the host-supplied conversation history.
 - Account pool limits: max **20** accounts; auth-failure cooldown **30s**; auto-removal after **3** consecutive auth failures.
 - Account bootstrap can hydrate from Codex CLI storage under `~/.codex` unless `CODEX_AUTH_SYNC_CODEX_CLI=0`.
+- Auth methods exposed to OpenCode are the three OAuth labels only (browser, device code, manual URL). There is no registered API-key login method.
 - Credentials and account metadata stay local unless the user exports or migrates them.
 - Diagnostic commands redact sensitive account/token details by default.
 - The optional keychain backend must fall back without deleting JSON credentials silently.
+- Session recovery rewrites OpenCode message/part files under the host storage root (`$XDG_DATA_HOME/opencode/storage` or platform equivalent) when `sessionRecovery` is enabled.
 
 ---
 

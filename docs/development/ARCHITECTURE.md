@@ -232,6 +232,18 @@ Storage invariants:
 
 ---
 
+## Session Recovery Storage
+
+When `sessionRecovery` is true (default), `lib/recovery/` may rewrite OpenCode host storage:
+
+| Path | Purpose |
+|------|---------|
+| `$XDG_DATA_HOME/opencode/storage` (or `%APPDATA%/opencode/storage` on Windows; else `~/.local/share/opencode/storage`) | Root |
+| `…/message/{sessionID}/…` | Session messages |
+| `…/part/{messageID}/*.json` | Message parts (thinking inject/strip, synthetic tool results) |
+
+Recovered classes: `tool_result_missing`, `thinking_block_order`, `thinking_disabled_violation`. Optional `autoResume` re-prompts after thinking recovery.
+
 ## TUI Quota Status Flow
 
 `tui.ts` is loaded by OpenCode's TUI plugin system after the installer writes `~/.config/opencode/tui.json`.

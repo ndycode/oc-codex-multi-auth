@@ -85,6 +85,44 @@ codex-keychain
 
 Many tools accept structured output (`format="json"`) and opt-in sensitive fields (`includeSensitive=true`). Prefer labels over emails; enable `maskEmail` in plugin config for shared screens.
 
+### Tool arguments matrix
+
+Account indices are **1-based**. Destructive tools require an explicit confirm flag.
+
+| Tool | Args |
+|------|------|
+| `codex-setup` | `wizard?` (bool) — menu-driven setup when terminal supports it |
+| `codex-help` | `topic?` — `setup`, `switch`, `pools`, `health`, `backup`, `dashboard` |
+| `codex-next` | `format?` — `text` \| `json` |
+| `codex-list` | `tag?`, `format?`, `includeSensitive?` |
+| `codex-switch` | `index?` — omit for interactive picker when supported |
+| `codex-warm` | _(none)_ |
+| `codex-status` | `format?`, `includeSensitive?` |
+| `codex-limits` | `format?`, `includeSensitive?` |
+| `codex-reset` | `action?` (`status` \| `consume`), `creditId?`, `confirm?` (required true to redeem), `dryRun?`, `account?` (1-based), `format?`, `includeSensitive?` |
+| `codex-dashboard` | `format?`, `includeSensitive?` |
+| `codex-label` | `index?`, `label` (empty string clears) |
+| `codex-tag` | `index?`, `tags` (CSV; empty clears) |
+| `codex-note` | `index?`, `note` (empty clears) |
+| `codex-pool` | `action?` (`status` \| `set` \| `add` \| `remove` \| `clear`), `model?`, `accounts?` (1-based number array), `dryRun?`, `format?`, `includeSensitive?` |
+| `codex-remove` | `index?`, `confirm` (must be `true` to delete) |
+| `codex-refresh` | _(none)_ |
+| `codex-health` | `format?`, `includeSensitive?` |
+| `codex-metrics` | `format?` |
+| `codex-doctor` | `deep?`, `fix?` (safe automated fixes), `format?` |
+| `codex-diag` | _(none)_ — redacted snapshot only |
+| `codex-diff` | `left`, `right` (paths), `section?` (`accounts` \| `config` \| `both`) |
+| `codex-export` | `path?`, `force?`, `timestamped?` (default true when path omitted) |
+| `codex-import` | `path`, `dryRun?` |
+| `codex-keychain` | `command?` (`status` \| `migrate` \| `rollback`), `confirm?` (required for rollback when a live JSON file exists) |
+
+### Operational notes
+
+- **`codex-warm` / CLI `warm`:** one lightweight request per enabled account to open usage windows. CLI exits non-zero if any account fails; disabled accounts are skipped.
+- **`codex-reset`:** banked WHAM/rate-limit reset credits. `action="consume"` is irreversible and requires `confirm=true` (use `dryRun=true` to preview).
+- **`codex-pool`:** accepts 1-based numbers but persists **stable account IDs** in `~/.opencode/openai-codex-auth-config.json`. Restart OpenCode after mutations.
+- **Standalone default storage:** CLI commands read the **global** accounts file unless `--config-path` points at a project pool. In-session tools use the active per-project path when `perProjectAccounts` is true.
+
 ---
 
 ## Standalone CLI

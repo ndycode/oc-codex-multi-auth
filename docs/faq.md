@@ -64,7 +64,11 @@ That opens every enabled account's usage window with no OpenCode agent loop. Ins
 
 ## Where does it store data?
 
-Tokens, account state, plugin config, quota cache, and logs are stored locally on your machine. See [Privacy & Data Handling](privacy.md) for the exact paths. Account pools use V3 JSON by default; opt into the OS keychain with `CODEX_KEYCHAIN=1`.
+Tokens, account state, plugin config, quota cache, and logs are stored locally on your machine. See [Privacy & Data Handling](privacy.md) for the exact paths. Account pools use V3 JSON by default; opt into the OS keychain with `CODEX_KEYCHAIN=1`. Session recovery may also touch OpenCode's message/part store under the host data directory. Older `openai-codex-*.json` filenames are migration sources only.
+
+## Is there an API-key login?
+
+No. The plugin registers three OAuth methods only (browser, device code, manual URL paste). A dummy SDK key string is used internally for the OpenAI client; ChatGPT OAuth tokens do the real auth.
 
 ## What should I do if authentication fails?
 

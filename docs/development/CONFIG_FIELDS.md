@@ -302,6 +302,21 @@ Important behavior:
 - Explicit IDs such as `openai/gpt-5.5-medium` require `--full` or `--legacy` unless you added them manually.
 - Do not use `gpt-5.5-medium` for verification unless the full/legacy catalog is installed.
 
+## Advanced / non-schema environment variables
+
+Not part of `PluginConfigSchema`, but used by runtime modules:
+
+| Env | Effect |
+|-----|--------|
+| `CODEX_THREAD_ID` | Optional correlation / prompt-cache seed on outbound requests |
+| `OPENCODE_CODEX_PROMPT_URL` | Override OpenCode→Codex bridge prompt catalog URL (legacy transform) |
+| `OPENCODE_SKIP_EMAIL_HYDRATE=1` | Skip email hydrate during account bootstrap |
+| `FORCE_INTERACTIVE_MODE=1` | Force interactive menu paths for tests/special shells |
+| `CODEX_AUTH_SYNC_CODEX_CLI=0` | Disable `~/.codex` account hydrate (on unless `"0"`) |
+| `CODEX_CONSOLE_LOG=1` | Mirror plugin logs to console |
+| `CODEX_COLLABORATION_MODE` / `OPENCODE_COLLABORATION_MODE` | Collaboration mode hint for request shaping |
+| `OPENCODE_STATE_DIR` | Override state directory for TUI quota cache |
+
 ## Account Metadata Fields
 
 Account storage also includes user-facing metadata fields used by the `codex-*` tools:
