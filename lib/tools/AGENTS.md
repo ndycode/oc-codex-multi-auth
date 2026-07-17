@@ -1,6 +1,6 @@
 # lib/tools/
 
-Per-tool modules for the 23 `codex-*` tools registered by the plugin.
+Per-tool modules for the 24 `codex-*` tools registered by the plugin.
 
 ## Status
 
@@ -26,6 +26,7 @@ lib/tools/
   codex-next.ts
   codex-label.ts
   codex-tag.ts
+  codex-pool.ts
   codex-note.ts
   codex-dashboard.ts
   codex-health.ts

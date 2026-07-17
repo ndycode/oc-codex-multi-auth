@@ -53,12 +53,44 @@ export class AccountRotation {
 		return getTokenTracker().hasToken(account.index, quotaKey);
 	}
 
+	private getPreferredSelectableIndices(
+		accountIds: readonly string[] | undefined,
+		family: ModelFamily,
+		model?: string | null,
+	): ReadonlySet<number> | null {
+		if (!accountIds?.length) return null;
+		const preferredIds = new Set(accountIds);
+		const indices = this.state.accounts
+			.filter(
+				(account) =>
+					account &&
+					account.accountId !== undefined &&
+					preferredIds.has(account.accountId) &&
+					this.isSelectable(account, family, model),
+			)
+			.map((account) => account.index);
+		return indices.length > 0 ? new Set(indices) : null;
+	}
+
+	private isInSelectionPool(
+		account: ManagedAccount,
+		preferredIndices: ReadonlySet<number> | null,
+	): boolean {
+		return preferredIndices === null || preferredIndices.has(account.index);
+	}
+
 	getCurrentOrNextForFamily(
 		family: ModelFamily,
 		model?: string | null,
+		preferredAccountIds?: readonly string[],
 	): ManagedAccount | null {
 		const count = this.state.accounts.length;
 		if (count === 0) return null;
+		const preferredIndices = this.getPreferredSelectableIndices(
+			preferredAccountIds,
+			family,
+			model,
+		);
 
 		const cursor = this.state.cursorByFamily[family];
 
@@ -66,6 +98,7 @@ export class AccountRotation {
 			const idx = (cursor + i) % count;
 			const account = this.state.accounts[idx];
 			if (!account) continue;
+			if (!this.isInSelectionPool(account, preferredIndices)) continue;
 			if (!this.isSelectable(account, family, model)) continue;
 
 			this.state.cursorByFamily[family] = (idx + 1) % count;
@@ -101,9 +134,15 @@ export class AccountRotation {
 		family: ModelFamily,
 		model?: string | null,
 		options?: HybridSelectionOptions,
+		preferredAccountIds?: readonly string[],
 	): ManagedAccount | null {
 		const count = this.state.accounts.length;
 		if (count === 0) return null;
+		const preferredIndices = this.getPreferredSelectableIndices(
+			preferredAccountIds,
+			family,
+			model,
+		);
 
 		const currentIndex = this.state.currentAccountIndexByFamily[family];
 		if (currentIndex >= 0 && currentIndex < count) {
@@ -111,7 +150,10 @@ export class AccountRotation {
 			if (currentAccount) {
 				if (currentAccount.enabled === false) {
 					// Fall through to hybrid selection.
-				} else if (this.isSelectable(currentAccount, family, model)) {
+				} else if (
+					this.isInSelectionPool(currentAccount, preferredIndices) &&
+					this.isSelectable(currentAccount, family, model)
+				) {
 					currentAccount.lastUsed = nowMs();
 					return currentAccount;
 				}
@@ -126,6 +168,7 @@ export class AccountRotation {
 			.map((account): AccountWithMetrics | null => {
 				if (!account) return null;
 				if (account.enabled === false) return null;
+				if (!this.isInSelectionPool(account, preferredIndices)) return null;
 				return {
 					index: account.index,
 					isAvailable: this.isSelectable(account, family, model),
@@ -172,15 +215,25 @@ export class AccountRotation {
 	getCurrentOrNextForFamilySticky(
 		family: ModelFamily,
 		model?: string | null,
+		preferredAccountIds?: readonly string[],
 	): ManagedAccount | null {
 		const count = this.state.accounts.length;
 		if (count === 0) return null;
+		const preferredIndices = this.getPreferredSelectableIndices(
+			preferredAccountIds,
+			family,
+			model,
+		);
 
 		// Prefer the account we are already pinned to while it still has quota.
 		const currentIndex = this.state.currentAccountIndexByFamily[family];
 		if (currentIndex >= 0 && currentIndex < count) {
 			const currentAccount = this.state.accounts[currentIndex];
-			if (currentAccount && this.isSelectable(currentAccount, family, model)) {
+			if (
+				currentAccount &&
+				this.isInSelectionPool(currentAccount, preferredIndices) &&
+				this.isSelectable(currentAccount, family, model)
+			) {
 				currentAccount.lastUsed = nowMs();
 				return currentAccount;
 			}
@@ -191,6 +244,7 @@ export class AccountRotation {
 		for (let idx = 0; idx < count; idx++) {
 			const account = this.state.accounts[idx];
 			if (!account) continue;
+			if (!this.isInSelectionPool(account, preferredIndices)) continue;
 			if (!this.isSelectable(account, family, model)) continue;
 
 			this.state.currentAccountIndexByFamily[family] = idx;

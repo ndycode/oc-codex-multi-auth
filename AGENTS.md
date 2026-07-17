@@ -32,7 +32,7 @@ Package version: 6.1.8
 | Installer behavior | `scripts/install-oc-codex-multi-auth.js`, `scripts/install-oc-codex-multi-auth-core.js` | npm bin, config merge, cache cleanup, TUI config enablement |
 | Plugin orchestration | `index.ts` | OAuth loader, request pipeline, metrics, recovery, `ToolContext` assembly |
 | TUI quota status | `tui.ts`, `lib/tui-status.ts`, `lib/tui-quota-cache.ts`, `lib/codex-usage.ts` | prompt quota status, quota details, shared quota cache |
-| Tool registry | `lib/tools/index.ts` + `lib/tools/codex-*.ts` | 21 registered `codex-*` tools |
+| Tool registry | `lib/tools/index.ts` + `lib/tools/codex-*.ts` | 24 registered `codex-*` tools |
 | OAuth flow + PKCE | `lib/auth/auth.ts`, `lib/auth/server.ts`, `lib/auth/device-code.ts`, `lib/auth/login-runner.ts` | browser/device/manual login, token refresh, workspace selection |
 | OAuth scopes | `lib/auth/scopes.ts` | connector scope validation and re-auth checks |
 | Multi-account rotation | `lib/accounts.ts`, `lib/accounts/`, `lib/rotation.ts` | health scoring, cooldowns, token bucket, recovery |

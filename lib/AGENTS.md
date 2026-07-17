@@ -41,7 +41,7 @@ lib/
 ├── storage.ts              # V3 JSON storage facade
 ├── storage/                # atomic writes, paths, migrations, keychain, backup/import/export
 ├── table-formatter.ts      # CLI table formatting
-├── tools/                  # 21 codex-* tool factories + registry
+├── tools/                  # 24 codex-* tool factories + registry
 ├── tui-quota-cache.ts      # shared quota snapshot cache
 ├── tui-status.ts           # prompt quota status formatting
 ├── types.ts                # TypeScript interfaces

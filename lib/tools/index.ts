@@ -45,6 +45,7 @@ import { createCodexMetricsTool } from "./codex-metrics.js";
 import { createCodexDoctorTool } from "./codex-doctor.js";
 import { createCodexLabelTool } from "./codex-label.js";
 import { createCodexTagTool } from "./codex-tag.js";
+import { createCodexPoolTool } from "./codex-pool.js";
 import { createCodexNoteTool } from "./codex-note.js";
 import { createCodexDashboardTool } from "./codex-dashboard.js";
 import { createCodexHealthTool } from "./codex-health.js";
@@ -82,7 +83,7 @@ export type MutableRef<T> = { current: T };
  *
  * The factory `create<Name>Tool(ctx)` returns a standard `tool({...})`
  * result. Keeping the surface in one type lets us evolve it without
- * threading dozens of arguments through 21 call sites.
+	 * threading dozens of arguments through 24 call sites.
  *
  * The type lists the closure state and helpers used across the current
  * registry. Each tool only destructures the subset it uses.
@@ -238,6 +239,7 @@ export function createToolRegistry(ctx: ToolContext): CodexToolRegistry {
 		"codex-next": createCodexNextTool(ctx),
 		"codex-label": createCodexLabelTool(ctx),
 		"codex-tag": createCodexTagTool(ctx),
+		"codex-pool": createCodexPoolTool(ctx),
 		"codex-note": createCodexNoteTool(ctx),
 		"codex-dashboard": createCodexDashboardTool(ctx),
 		"codex-health": createCodexHealthTool(ctx),

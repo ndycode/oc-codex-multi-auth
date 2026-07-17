@@ -77,6 +77,7 @@ import {
 	getEmptyResponseRetryDelayMs,
 	getPidOffsetEnabled,
 	getRotationStrategy,
+	getModelAccountPool,
 	getFetchTimeoutMs,
 	getStreamStallTimeoutMs,
 	getCodexTuiV2,
@@ -316,6 +317,8 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 			fallbackFrom: snapshot?.fallbackFrom ?? null,
 			fallbackTo: snapshot?.fallbackTo ?? null,
 			fallbackReason: snapshot?.fallbackReason ?? null,
+			accountPoolMode: snapshot?.accountPoolMode ?? null,
+			configuredAccountPoolSize: snapshot?.configuredAccountPoolSize ?? 0,
 			selectionExplainability: serializeSelectionExplainability(
 				options.selectionExplainability ?? snapshot?.explainability ?? [],
 			),
@@ -372,6 +375,8 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 		lines.push(`  Fallback from: ${formatRoutingValue(routing.fallbackFrom)}`);
 		lines.push(`  Fallback to: ${formatRoutingValue(routing.fallbackTo)}`);
 		lines.push(`  Fallback reason: ${formatRoutingValue(routing.fallbackReason)}`);
+		lines.push(`  Account pool: ${formatRoutingValue(routing.accountPoolMode)}`);
+		lines.push(`  Configured pool size: ${routing.configuredAccountPoolSize}`);
 		if (options.includeExplainability) {
 			lines.push("  Selection explainability:");
 			if (routing.selectionExplainability.length === 0) {
@@ -466,6 +471,22 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				"Fallback reason",
 				formatRoutingValue(routing.fallbackReason),
 				routing.fallbackReason ? "warning" : "muted",
+			),
+		);
+		lines.push(
+			formatUiKeyValue(
+				ui,
+				"Account pool",
+				formatRoutingValue(routing.accountPoolMode),
+				routing.accountPoolMode === "general-fallback" ? "warning" : "muted",
+			),
+		);
+		lines.push(
+			formatUiKeyValue(
+				ui,
+				"Configured pool size",
+				String(routing.configuredAccountPoolSize),
+				"muted",
 			),
 		);
 		if (options.includeExplainability) {
@@ -1923,8 +1944,9 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 						const attempted = new Set<number>();
 						let restartAccountTraversalWithFallback = false;
 						let restartAccountTraversalAfterWorkspaceDeactivation = false;
+						const preferredAccountIds = getModelAccountPool(pluginConfig, model);
 
-while (attempted.size < Math.max(1, accountCount)) {
+			while (attempted.size < Math.max(1, accountCount)) {
 				const selectionExplainability = accountManager.getSelectionExplainability(
 					modelFamily,
 					model,
@@ -1943,8 +1965,15 @@ while (attempted.size < Math.max(1, accountCount)) {
 					fallbackFrom,
 					fallbackTo,
 					fallbackReason,
+					configuredAccountPoolSize: preferredAccountIds.length,
 				};
-				const account = accountManager.getAccountForStrategy(rotationStrategy, modelFamily, model, { pidOffsetEnabled });
+				const account = accountManager.getAccountForStrategy(
+					rotationStrategy,
+					modelFamily,
+					model,
+					{ pidOffsetEnabled },
+					preferredAccountIds,
+				);
 				if (!account || attempted.has(account.index)) {
 					break;
 				}
@@ -1961,8 +1990,16 @@ while (attempted.size < Math.max(1, accountCount)) {
 									fallbackApplied,
 									fallbackFrom,
 									fallbackTo,
-									fallbackReason,
-								};
+					fallbackReason,
+					accountPoolMode:
+						preferredAccountIds.length === 0
+							? "general"
+							: account.accountId !== undefined &&
+								preferredAccountIds.includes(account.accountId)
+								? "preferred"
+								: "general-fallback",
+					configuredAccountPoolSize: preferredAccountIds.length,
+				};
 							}
 							// Log account selection for debugging rotation
 							logDebug(

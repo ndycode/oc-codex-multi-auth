@@ -15,6 +15,7 @@ vi.mock("@opencode-ai/plugin/tool", () => {
 		number: () => makeSchema(),
 		boolean: () => makeSchema(),
 		string: () => makeSchema(),
+		array: () => makeSchema(),
 	};
 
 	return { tool };
@@ -132,6 +133,7 @@ vi.mock("../lib/config.js", () => ({
 	getEmptyResponseRetryDelayMs: () => 1000,
 	getPidOffsetEnabled: () => false,
 	getRotationStrategy: () => "hybrid",
+	getModelAccountPool: vi.fn(() => []),
 	getFetchTimeoutMs: () => 60000,
 	getStreamStallTimeoutMs: () => 45000,
 	getCodexTuiV2: () => false,
@@ -532,6 +534,14 @@ type PluginType = {
 		"codex-next": OptionalToolExecute<{ format?: string }>;
 		"codex-label": ToolExecute<{ index?: number; label: string }>;
 		"codex-tag": ToolExecute<{ index?: number; tags: string }>;
+		"codex-pool": OptionalToolExecute<{
+			action?: string;
+			model?: string;
+			accounts?: number[];
+			dryRun?: boolean;
+			format?: string;
+			includeSensitive?: boolean;
+		}>;
 		"codex-note": ToolExecute<{ index?: number; note: string }>;
 		"codex-dashboard": OptionalToolExecute<{ format?: string; includeSensitive?: boolean }>;
 		"codex-health": OptionalToolExecute<{ format?: string; includeSensitive?: boolean }>;
@@ -594,6 +604,7 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(plugin.tool["codex-next"]).toBeDefined();
 			expect(plugin.tool["codex-label"]).toBeDefined();
 			expect(plugin.tool["codex-tag"]).toBeDefined();
+			expect(plugin.tool["codex-pool"]).toBeDefined();
 			expect(plugin.tool["codex-note"]).toBeDefined();
 			expect(plugin.tool["codex-dashboard"]).toBeDefined();
 			expect(plugin.tool["codex-health"]).toBeDefined();
@@ -2995,6 +3006,39 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 
 		expect(response.status).toBe(200);
 	});
+
+	it.each([
+		{ pool: [], mode: "general", size: 0 },
+		{ pool: ["acc-1"], mode: "preferred", size: 1 },
+		{ pool: ["unavailable-account"], mode: "general-fallback", size: 1 },
+	] as const)(
+		"reports $mode account pool routing diagnostics",
+		async ({ pool, mode, size }) => {
+			const configModule = await import("../lib/config.js");
+			vi.mocked(configModule.getModelAccountPool).mockReturnValueOnce([...pool]);
+			globalThis.fetch = vi.fn().mockResolvedValue(
+				new Response(JSON.stringify({ content: "test" }), { status: 200 }),
+			);
+
+			const { plugin, sdk } = await setupPlugin();
+			const response = await sdk.fetch!("https://api.openai.com/v1/chat", {
+				method: "POST",
+				body: JSON.stringify({ model: "gpt-5.1" }),
+			});
+
+			expect(response.status).toBe(200);
+			const metrics = parseJsonOutput<{
+				routingVisibility: {
+					accountPoolMode: string | null;
+					configuredAccountPoolSize: number;
+				};
+			}>(await plugin.tool["codex-metrics"].execute({ format: "json" }));
+			expect(metrics.routingVisibility).toMatchObject({
+				accountPoolMode: mode,
+				configuredAccountPoolSize: size,
+			});
+		},
+	);
 
 	it("records TUI quota cache from successful Codex response headers", async () => {
 		const previousStateDir = process.env.OPENCODE_STATE_DIR;

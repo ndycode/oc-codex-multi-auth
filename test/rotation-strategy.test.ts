@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { AccountManager } from "../lib/accounts.js";
 import { resetTrackers } from "../lib/rotation.js";
-import { getRotationStrategy } from "../lib/config.js";
+import { getModelAccountPool, getRotationStrategy } from "../lib/config.js";
 import type { PluginConfig } from "../lib/types.js";
 import type { AccountStorageV3 } from "../lib/storage.js";
 import type { ModelFamily } from "../lib/prompts/codex.js";
@@ -30,6 +30,7 @@ function makeStorage(count: number): AccountStorageV3 {
   return {
     version: 3,
     accounts: Array.from({ length: count }, (_v, idx) => ({
+		accountId: `account-id-${idx + 1}`,
       email: `account${idx + 1}@example.com`,
       refreshToken: `fake_refresh_token_${idx + 1}_for_testing_only`,
       addedAt: now - (count - idx) * 1000,
@@ -80,6 +81,24 @@ describe("getRotationStrategy (#183 config)", () => {
     process.env.CODEX_AUTH_ROTATION_STRATEGY = "  Round-Robin  ";
     expect(getRotationStrategy(baseConfig())).toBe("round-robin");
   });
+});
+
+describe("model account pool config", () => {
+	it("matches model names case-insensitively and removes duplicate IDs", () => {
+		const config = {
+			modelAccountPools: {
+				"GPT-5.6-SOL": [" account-id-2 ", "account-id-2", "account-id-3"],
+			},
+		} as PluginConfig;
+		expect(getModelAccountPool(config, "gpt-5.6-sol")).toEqual([
+			"account-id-2",
+			"account-id-3",
+		]);
+	});
+
+	it("returns an empty pool for unmapped models", () => {
+		expect(getModelAccountPool({ modelAccountPools: {} } as PluginConfig, "gpt-5.5")).toEqual([]);
+	});
 });
 
 describe("sticky selection (#183, drain-first)", () => {
@@ -176,4 +195,45 @@ describe("strategy dispatcher (#183)", () => {
       viaDispatcher?.index,
     );
   });
+
+	it.each(["sticky", "round-robin", "hybrid"] as const)(
+		"%s prefers an assigned healthy account",
+		(strategy) => {
+			const selected = manager.getAccountForStrategy(
+				strategy,
+				FAMILY,
+				"gpt-5.6-sol",
+				undefined,
+				["account-id-2"],
+			);
+			expect(selected?.accountId).toBe("account-id-2");
+		},
+	);
+
+	it.each(["sticky", "round-robin", "hybrid"] as const)(
+		"%s falls back to the general pool when assigned accounts are unavailable",
+		(strategy) => {
+			manager.setAccountEnabled(1, false);
+			const selected = manager.getAccountForStrategy(
+				strategy,
+				FAMILY,
+				"gpt-5.6-sol",
+				undefined,
+				["account-id-2"],
+			);
+			expect(selected).not.toBeNull();
+			expect(selected?.accountId).not.toBe("account-id-2");
+		},
+	);
+
+	it("falls back to the general pool when configured IDs are unknown", () => {
+		const selected = manager.getAccountForStrategy(
+			"sticky",
+			FAMILY,
+			"gpt-5.6-sol",
+			undefined,
+			["unknown-account-id"],
+		);
+		expect(selected?.index).toBe(0);
+	});
 });

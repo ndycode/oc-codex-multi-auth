@@ -1,6 +1,8 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync, promises as fs } from "node:fs";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { lock } from "proper-lockfile";
 import type { PluginConfig } from "./types.js";
 import {
 	normalizeRetryBudgetValue,
@@ -9,6 +11,7 @@ import {
 } from "./request/retry-budget.js";
 import { logWarn } from "./logger.js";
 import { stripEffortSuffix } from "./request/helpers/effort-suffix.js";
+import { renameWithWindowsRetry } from "./storage/atomic-write.js";
 import {
 	PluginConfigSchema,
 	getValidationErrors,
@@ -25,6 +28,18 @@ const UNSUPPORTED_CODEX_POLICIES = new Set(["strict", "fallback"]);
 const RETRY_PROFILES = new Set(["conservative", "balanced", "aggressive"]);
 
 export type UnsupportedCodexPolicy = "strict" | "fallback";
+
+export type ModelAccountPoolMutation = "set" | "add" | "remove" | "clear";
+
+export interface ModelAccountPoolMutationResult {
+	model: string;
+	previousAccountIds: string[];
+	accountIds: string[];
+	changed: boolean;
+	dryRun: boolean;
+}
+
+let modelAccountPoolMutationQueue: Promise<void> = Promise.resolve();
 
 /**
  * Default plugin configuration
@@ -137,6 +152,143 @@ export function loadPluginConfig(): PluginConfig {
 		);
 		return DEFAULT_CONFIG;
 	}
+}
+
+/**
+ * Update one model pool while preserving every unrelated raw config key.
+ * Account indexes are deliberately resolved by the caller; only stable IDs
+ * cross this persistence boundary.
+ */
+export function updateModelAccountPool(
+	model: string,
+	mutation: ModelAccountPoolMutation,
+	accountIds: readonly string[] = [],
+	options: { dryRun?: boolean } = {},
+): Promise<ModelAccountPoolMutationResult> {
+	const pending = modelAccountPoolMutationQueue.then(async () => {
+		await fs.mkdir(dirname(CONFIG_PATH), { recursive: true, mode: 0o700 });
+		const release = await lock(CONFIG_PATH, {
+			realpath: false,
+			stale: 10_000,
+			update: 2_000,
+			retries: {
+				retries: 20,
+				factor: 1.2,
+				minTimeout: 25,
+				maxTimeout: 200,
+				randomize: true,
+			},
+		});
+		try {
+			return await performModelAccountPoolMutation(
+				model,
+				mutation,
+				accountIds,
+				options,
+			);
+		} finally {
+			await release();
+		}
+	});
+	modelAccountPoolMutationQueue = pending.then(
+		() => undefined,
+		() => undefined,
+	);
+	return pending;
+}
+
+async function performModelAccountPoolMutation(
+	model: string,
+	mutation: ModelAccountPoolMutation,
+	accountIds: readonly string[],
+	options: { dryRun?: boolean },
+): Promise<ModelAccountPoolMutationResult> {
+	const normalizedModel = model.trim().toLowerCase();
+	if (!normalizedModel) throw new Error("Model is required.");
+
+	let rawConfig: Record<string, unknown> = {};
+	try {
+		const content = await fs.readFile(CONFIG_PATH, "utf-8");
+		const parsed = JSON.parse(stripUtf8Bom(content)) as unknown;
+		if (!isRecord(parsed) || Array.isArray(parsed)) {
+			throw new Error(`Plugin config at ${CONFIG_PATH} is not a JSON object.`);
+		}
+		rawConfig = parsed;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+
+	const poolResult = PluginConfigSchema.safeParse({
+		modelAccountPools: rawConfig.modelAccountPools,
+	});
+	if (!poolResult.success) {
+		throw new Error(
+			`Existing modelAccountPools configuration is invalid: ${getValidationErrors(
+				PluginConfigSchema,
+				{ modelAccountPools: rawConfig.modelAccountPools },
+			)[0] ?? "validation failed"}`,
+		);
+	}
+
+	const pools = { ...(poolResult.data.modelAccountPools ?? {}) };
+	const matchingKeys = Object.keys(pools).filter(
+		(key) => key.trim().toLowerCase() === normalizedModel,
+	);
+	const previousAccountIds = Array.from(
+		new Set(matchingKeys.flatMap((key) => pools[key] ?? [])),
+	);
+	for (const key of matchingKeys) delete pools[key];
+
+	const normalizedAccountIds = Array.from(
+		new Set(accountIds.map((id) => id.trim()).filter(Boolean)),
+	);
+	let nextAccountIds: string[];
+	if (mutation === "set") {
+		nextAccountIds = normalizedAccountIds;
+	} else if (mutation === "add") {
+		nextAccountIds = Array.from(
+			new Set([...previousAccountIds, ...normalizedAccountIds]),
+		);
+	} else if (mutation === "remove") {
+		const removedIds = new Set(normalizedAccountIds);
+		nextAccountIds = previousAccountIds.filter((id) => !removedIds.has(id));
+	} else {
+		nextAccountIds = [];
+	}
+
+	if (nextAccountIds.length > 0) pools[normalizedModel] = nextAccountIds;
+	const changed =
+		matchingKeys.length !== (nextAccountIds.length > 0 ? 1 : 0) ||
+		previousAccountIds.length !== nextAccountIds.length ||
+		previousAccountIds.some((id, index) => id !== nextAccountIds[index]) ||
+		(matchingKeys[0] !== undefined && matchingKeys[0] !== normalizedModel);
+
+	if (changed && options.dryRun !== true) {
+		if (Object.keys(pools).length > 0) {
+			rawConfig.modelAccountPools = pools;
+		} else {
+			delete rawConfig.modelAccountPools;
+		}
+
+		const tempPath = `${CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
+		try {
+			await fs.writeFile(tempPath, `${JSON.stringify(rawConfig, null, 2)}\n`, {
+				encoding: "utf-8",
+				mode: 0o600,
+			});
+			await renameWithWindowsRetry(tempPath, CONFIG_PATH);
+		} finally {
+			await fs.rm(tempPath, { force: true }).catch(() => undefined);
+		}
+	}
+
+	return {
+		model: normalizedModel,
+		previousAccountIds,
+		accountIds: nextAccountIds,
+		changed,
+		dryRun: options.dryRun === true,
+	};
 }
 
 /**
@@ -367,6 +519,22 @@ export function getRotationStrategy(pluginConfig: PluginConfig): RotationStrateg
 	const configured = pluginConfig.rotationStrategy;
 	if (configured === "sticky" || configured === "round-robin") return configured;
 	return "hybrid";
+}
+
+export function getModelAccountPool(
+	pluginConfig: PluginConfig,
+	model?: string | null,
+): string[] {
+	if (!model) return [];
+	const normalizedModel = model.trim().toLowerCase();
+	for (const [configuredModel, accountIds] of Object.entries(
+		pluginConfig.modelAccountPools ?? {},
+	)) {
+		if (configuredModel.trim().toLowerCase() === normalizedModel) {
+			return [...new Set(accountIds.map((id) => id.trim()).filter(Boolean))];
+		}
+	}
+	return [];
 }
 
 export function getFastSessionMaxInputItems(pluginConfig: PluginConfig): number {

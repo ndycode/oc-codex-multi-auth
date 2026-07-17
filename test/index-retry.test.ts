@@ -11,6 +11,7 @@ vi.mock("@opencode-ai/plugin/tool", () => {
 		number: () => makeSchema(),
 		boolean: () => makeSchema(),
 		string: () => makeSchema(),
+		array: () => makeSchema(),
 	};
 
 	return { tool };

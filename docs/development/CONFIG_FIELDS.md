@@ -171,6 +171,36 @@ Examples:
 
 This normalization is why legacy aliases and snapshot-like IDs can still route to a stable family while preserving the user-facing config surface.
 
+## `modelAccountPools`
+
+The plugin runtime config at `~/.opencode/openai-codex-auth-config.json` can
+map effective model IDs to preferred stable account IDs:
+
+```json
+{
+  "modelAccountPools": {
+    "gpt-5.6-sol": ["org-example-account-id"]
+  }
+}
+```
+
+The request pipeline resolves the pool after model normalization. All rotation
+strategies restrict selection to healthy accounts in the preferred pool while
+one is available. If the configured IDs are unknown or every preferred account
+is disabled, cooling down, rate-limited, or locally depleted, selection falls
+back to the general account pool. Empty lists and unmapped models use the
+general pool directly.
+
+`codex-pool` is the supported mutation surface. It accepts 1-based account
+numbers for `set`, `add`, and `remove`, but resolves and atomically persists
+only stable account IDs. `clear` removes a model mapping, and every mutation
+supports a dry-run preview. Writes preserve unrelated raw config fields and
+refuse to replace malformed JSON or an invalid existing pool.
+
+The config file is global while account storage is per-project by default.
+Consequently, status may report unresolved references for the current project;
+the tool does not automatically prune them because they may be valid elsewhere.
+
 ## Verification Notes
 
 Use these commands when validating config fields:

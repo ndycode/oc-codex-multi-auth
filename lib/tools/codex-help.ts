@@ -21,7 +21,7 @@ export function createCodexHelpTool(ctx: ToolContext): ToolDefinition {
 				.string()
 				.optional()
 				.describe(
-					"Optional topic: setup, switch, health, backup, dashboard.",
+					"Optional topic: setup, switch, pools, health, backup, dashboard.",
 				),
 		},
 		async execute({ topic }) {
@@ -39,6 +39,17 @@ export function createCodexHelpTool(ctx: ToolContext): ToolDefinition {
 						"4) Run checklist: codex-setup",
 						"5) Use guided wizard: codex-setup --wizard",
 						"6) Start requests and monitor: codex-dashboard",
+					],
+				},
+				{
+					key: "pools",
+					title: "Model account pools",
+					lines: [
+						"Show all pools: codex-pool",
+						'Assign accounts: codex-pool action="set" model="gpt-5.6-sol" accounts=[7,8]',
+						'Add an account: codex-pool action="add" model="gpt-5.6-sol" accounts=[9]',
+						'Remove an account: codex-pool action="remove" model="gpt-5.6-sol" accounts=[7]',
+						'Clear a pool: codex-pool action="clear" model="gpt-5.6-sol"',
 					],
 				},
 				{

@@ -155,6 +155,9 @@ advanced settings go in `~/.opencode/openai-codex-auth-config.json`:
   "fastSession": false,
   "fastSessionStrategy": "hybrid",
   "fastSessionMaxInputItems": 30,
+  "modelAccountPools": {
+    "gpt-5.6-sol": ["org-example-account-id"]
+  },
   "retryProfile": "balanced",
   "retryBudgetOverrides": {
     "network": 2,
@@ -193,6 +196,7 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `fastSession` | `false` | forces low-latency settings per request (`reasoningEffort=none/low`, `reasoningSummary=auto`, `textVerbosity=low`) |
 | `fastSessionStrategy` | `hybrid` | `hybrid` speeds simple turns and keeps full-depth for complex prompts; `always` forces fast mode every turn |
 | `fastSessionMaxInputItems` | `30` | max input items kept when fast mode is applied |
+| `modelAccountPools` | `{}` | optional map of effective model IDs to preferred stable account IDs; selection uses the configured pool while it has a healthy account, then falls back to the general account pool |
 | `retryProfile` | `balanced` | retry budget profile for request classes (`conservative`, `balanced`, `aggressive`) |
 | `retryBudgetOverrides` | `{}` | optional per-class budget overrides (`authRefresh`, `network`, `server`, `rateLimitShort`, `rateLimitGlobal`, `emptyResponse`) |
 | `perProjectAccounts` | `true` | each project gets its own account storage |
@@ -211,6 +215,18 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `rateLimitToastDebounceMs` | `60000` | debounce rate limit toasts |
 | `fetchTimeoutMs` | `60000` | upstream fetch timeout in ms |
 | `streamStallTimeoutMs` | `45000` | max time to wait for next SSE chunk before aborting |
+
+Use `codex-pool action="set" model="gpt-5.6-sol" accounts=[7,8]` to manage a
+pool with 1-based account numbers while persisting stable IDs. The tool also
+supports `status` (default), `add`, `remove`, `clear`, `dryRun=true`, and JSON
+output. Restart OpenCode after an applied mutation. Because this config is
+global while account storage is per-project by default, references unavailable
+in the current project are reported but not automatically pruned.
+
+Model keys are matched case-insensitively after request model normalization.
+Empty lists, unmapped models, and pools with no selectable accounts use the
+general account pool. Routing diagnostics expose the resulting mode as
+`preferred`, `general`, or `general-fallback`.
 
 ### Beginner Safe Mode Behavior
 
