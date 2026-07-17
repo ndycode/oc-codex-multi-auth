@@ -225,8 +225,15 @@ describe('Fetch Helpers Module', () => {
 
 		it('sends a Codex CLI user-agent by default, replacing the host user-agent', () => {
 			const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as any;
-			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.6-sol' });
+			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.5' });
 			expect(headers.get('user-agent')).toMatch(/^codex_cli_rs\/\d+\.\d+\.\d+ \(/);
+		});
+
+		it('sends the host identity for gpt-5.6 models by default', () => {
+			const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as any;
+			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.6-sol' });
+			expect(headers.get('user-agent')).toMatch(/^opencode\/\d+\.\d+\.\d+ \(/);
+			expect(headers.get(OPENAI_HEADERS.ORIGINATOR)).toBe('opencode');
 		});
 
 		it('honors the CODEX_AUTH_DISABLE_CODEX_USER_AGENT opt-out', () => {
@@ -243,7 +250,7 @@ describe('Fetch Helpers Module', () => {
 		it('advertises CODEX_AUTH_CLIENT_VERSION when overridden', () => {
 			try {
 				vi.stubEnv('CODEX_AUTH_CLIENT_VERSION', '0.150.2');
-				const headers = createCodexHeaders(undefined, accountId, accessToken, { model: 'gpt-5.6-sol' });
+				const headers = createCodexHeaders(undefined, accountId, accessToken, { model: 'gpt-5.5' });
 				expect(headers.get('user-agent')).toMatch(/^codex_cli_rs\/0\.150\.2 \(/);
 			} finally {
 				vi.unstubAllEnvs();

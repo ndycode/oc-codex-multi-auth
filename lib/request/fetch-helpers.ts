@@ -29,7 +29,7 @@ import {
 	shapeBodyForModel,
 	usesResponsesLite,
 } from "./helpers/responses-lite.js";
-import { buildCodexUserAgent } from "./helpers/user-agent.js";
+import { resolveClientIdentity } from "./helpers/client-identity.js";
 import { convertSseToJson, ensureContentType } from "./response-handler.js";
 import type { OAuthAuthDetails, UserConfig, RequestBody } from "../types.js";
 import { CodexAuthError } from "../errors.js";
@@ -829,7 +829,6 @@ export function createCodexHeaders(
 	headers.set("Authorization", `Bearer ${accessToken}`);
 	headers.set(OPENAI_HEADERS.ACCOUNT_ID, accountId);
 	headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
-	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
 
 	// GPT-5.6 models are served over the responses-lite path.
 	if (usesResponsesLite(opts?.model)) {
@@ -838,13 +837,15 @@ export function createCodexHeaders(
 		headers.delete(RESPONSES_LITE_HEADER);
 	}
 
-	// The backend reads the client version from the User-Agent product token
-	// and gates preview tiers on the catalog's `minimal_client_version`
-	// (0.144.0 for gpt-5.6-*). The host runtime's UA fails that gate even
-	// though we already declare `originator: codex_cli_rs`, so send the Codex
-	// CLI identity the originator claims (#196).
+	// Originator and UA must agree: the backend evaluates model entitlement
+	// per originator and reads the client version from the UA product token.
+	// gpt-5.6 tiers default to the host (opencode) identity — the one plain
+	// opencode passes sol with on accounts that reject `codex_cli_rs` (#196);
+	// everything else keeps the Codex CLI identity from PR #199.
+	const identity = resolveClientIdentity(opts?.model);
+	headers.set(OPENAI_HEADERS.ORIGINATOR, identity.originator);
 	if (process.env.CODEX_AUTH_DISABLE_CODEX_USER_AGENT !== "1") {
-		headers.set("user-agent", buildCodexUserAgent());
+		headers.set("user-agent", identity.userAgent);
 	}
 
     const cacheKey = opts?.promptCacheKey;

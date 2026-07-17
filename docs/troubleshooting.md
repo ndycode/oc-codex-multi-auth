@@ -362,10 +362,13 @@ resolvedConfig: { reasoningEffort: 'low', ... }  ← Should show your options
    opencode auth login
    ```
 2. Add another entitled account/workspace. The plugin tries remaining accounts/workspaces before model fallback.
-3. **Model works in the Codex CLI/TUI but not through this plugin** (typically the newest preview tier, e.g. `gpt-5.6-sol`): the plugin now sends the same client identity Codex does — a `codex_cli_rs/<version>` `User-Agent` (the backend gates preview tiers on the catalog's `minimal_client_version`, read from the UA) — and no longer pins `openai-organization` (upstream Codex never sends it; workspace routing is carried by `chatgpt-account-id`, and org pinning could shift entitlement evaluation to a workspace outside the preview). Escape hatches if your setup relied on the old behavior:
+3. **Model works in the Codex CLI/TUI or plain opencode but not through this plugin** (typically the newest preview tier, e.g. `gpt-5.6-sol`): the backend evaluates model entitlement per client identity (`originator` + `User-Agent`). The plugin defaults GPT-5.6 tiers to the host identity (`originator: opencode`, the one plain opencode passes sol with) and everything else to the Codex CLI identity (`codex_cli_rs/<version>`; the backend gates those tiers on the catalog's `minimal_client_version`, read from the UA). It never pins `openai-organization` (upstream clients don't send it; workspace routing is carried by `chatgpt-account-id`). Escape hatches:
    ```bash
+   CODEX_AUTH_CLIENT_IDENTITY=codex opencode        # force the Codex CLI identity for all models
+   CODEX_AUTH_CLIENT_IDENTITY=opencode opencode     # force the host identity for all models
    CODEX_AUTH_DISABLE_CODEX_USER_AGENT=1 opencode   # keep the host runtime's User-Agent
    CODEX_AUTH_CLIENT_VERSION=0.150.0 opencode       # advertise a different Codex CLI version
+   CODEX_AUTH_HOST_VERSION=1.18.0 opencode          # advertise a different opencode version
    CODEX_AUTH_SEND_ORGANIZATION_HEADER=1 opencode   # restore legacy openai-organization pinning
    ```
    If the model still fails only through the plugin, run `codex-health` and compare the failing pooled account ids against the account the Codex CLI uses (`~/.codex/auth.json`).
