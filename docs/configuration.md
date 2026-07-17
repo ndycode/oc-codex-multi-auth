@@ -155,6 +155,9 @@ advanced settings go in `~/.opencode/openai-codex-auth-config.json`:
   "fastSession": false,
   "fastSessionStrategy": "hybrid",
   "fastSessionMaxInputItems": 30,
+  "modelAccountPools": {
+    "gpt-5.6-sol": ["org-example-account-id"]
+  },
   "retryProfile": "balanced",
   "retryBudgetOverrides": {
     "network": 2,
@@ -193,6 +196,7 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `fastSession` | `false` | forces low-latency settings per request (`reasoningEffort=none/low`, `reasoningSummary=auto`, `textVerbosity=low`) |
 | `fastSessionStrategy` | `hybrid` | `hybrid` speeds simple turns and keeps full-depth for complex prompts; `always` forces fast mode every turn |
 | `fastSessionMaxInputItems` | `30` | max input items kept when fast mode is applied |
+| `modelAccountPools` | `{}` | optional map of effective model IDs to preferred stable account IDs; selection uses the configured pool while it has a healthy account, then falls back to the general account pool |
 | `retryProfile` | `balanced` | retry budget profile for request classes (`conservative`, `balanced`, `aggressive`) |
 | `retryBudgetOverrides` | `{}` | optional per-class budget overrides (`authRefresh`, `network`, `server`, `rateLimitShort`, `rateLimitGlobal`, `emptyResponse`) |
 | `perProjectAccounts` | `true` | each project gets its own account storage |
@@ -211,6 +215,12 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `rateLimitToastDebounceMs` | `60000` | debounce rate limit toasts |
 | `fetchTimeoutMs` | `60000` | upstream fetch timeout in ms |
 | `streamStallTimeoutMs` | `45000` | max time to wait for next SSE chunk before aborting |
+
+Use `codex-list format="json" includeSensitive=true` to retrieve stable account
+IDs for `modelAccountPools`. Model keys are matched case-insensitively after
+request model normalization. Empty lists, unmapped models, and pools with no
+selectable accounts use the general account pool. Routing diagnostics expose
+the resulting mode as `preferred`, `general`, or `general-fallback`.
 
 ### Beginner Safe Mode Behavior
 

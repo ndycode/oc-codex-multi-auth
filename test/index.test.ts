@@ -132,6 +132,7 @@ vi.mock("../lib/config.js", () => ({
 	getEmptyResponseRetryDelayMs: () => 1000,
 	getPidOffsetEnabled: () => false,
 	getRotationStrategy: () => "hybrid",
+	getModelAccountPool: () => [],
 	getFetchTimeoutMs: () => 60000,
 	getStreamStallTimeoutMs: () => 45000,
 	getCodexTuiV2: () => false,

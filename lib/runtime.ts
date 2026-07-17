@@ -84,6 +84,8 @@ export type SelectionSnapshot = {
 	fallbackFrom: string | null;
 	fallbackTo: string | null;
 	fallbackReason: string | null;
+	accountPoolMode?: "general" | "preferred" | "general-fallback";
+	configuredAccountPoolSize?: number;
 };
 
 export type SerializedSelectionExplainability = {
@@ -113,6 +115,8 @@ export type RoutingVisibilitySnapshot = {
 	fallbackFrom: string | null;
 	fallbackTo: string | null;
 	fallbackReason: string | null;
+	accountPoolMode: "general" | "preferred" | "general-fallback" | null;
+	configuredAccountPoolSize: number;
 	selectionExplainability: SerializedSelectionExplainability[];
 };
 

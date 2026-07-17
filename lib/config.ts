@@ -369,6 +369,22 @@ export function getRotationStrategy(pluginConfig: PluginConfig): RotationStrateg
 	return "hybrid";
 }
 
+export function getModelAccountPool(
+	pluginConfig: PluginConfig,
+	model?: string | null,
+): string[] {
+	if (!model) return [];
+	const normalizedModel = model.trim().toLowerCase();
+	for (const [configuredModel, accountIds] of Object.entries(
+		pluginConfig.modelAccountPools ?? {},
+	)) {
+		if (configuredModel.trim().toLowerCase() === normalizedModel) {
+			return [...new Set(accountIds.map((id) => id.trim()).filter(Boolean))];
+		}
+	}
+	return [];
+}
+
 export function getFastSessionMaxInputItems(pluginConfig: PluginConfig): number {
 	return resolveNumberSetting(
 		"CODEX_AUTH_FAST_SESSION_MAX_INPUT_ITEMS",

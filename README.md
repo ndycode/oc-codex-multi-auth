@@ -244,6 +244,47 @@ Primary config files:
 - `~/.config/opencode/tui.json`
 - `~/.opencode/openai-codex-auth-config.json`
 
+### Route models to preferred accounts
+
+Use `modelAccountPools` to assign one or more preferred ChatGPT accounts to a
+model. Account references use stable account IDs, so adding, removing, or
+reordering accounts does not silently change a model's routing.
+
+```json
+{
+  "modelAccountPools": {
+    "gpt-5.6-sol": [
+      "org-example-account-id",
+      "00000000-0000-0000-0000-000000000000"
+    ],
+    "gpt-5.6-terra": [
+      "org-another-account-id"
+    ]
+  }
+}
+```
+
+Save this configuration in `~/.opencode/openai-codex-auth-config.json`, then
+restart OpenCode. Model matching is case-insensitive and uses the effective
+model after request model normalization.
+
+To find stable account IDs, run:
+
+```text
+codex-list format="json" includeSensitive=true
+```
+
+Routing behavior:
+
+- A mapped model uses only healthy, selectable accounts in its preferred pool.
+- Existing rotation strategy, quota, cooldown, and token-health rules still apply within the preferred pool.
+- If every preferred account is unavailable, disabled, unknown, cooling down, or rate-limited, routing automatically falls back to the healthy general account pool.
+- An unmapped model or an empty account list uses the general account pool directly.
+- `codex-status`, `codex-dashboard`, and routing diagnostics report the account-pool mode as `preferred`, `general`, or `general-fallback`.
+
+Account IDs are local account metadata but should still be treated as private
+configuration. Do not publish a populated configuration file.
+
 Selected runtime/environment overrides:
 
 | Variable | Effect |

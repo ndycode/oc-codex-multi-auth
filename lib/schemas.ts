@@ -22,6 +22,10 @@ export const PluginConfigSchema = z.object({
 	fastSession: z.boolean().optional(),
 	fastSessionStrategy: z.enum(["hybrid", "always"]).optional(),
 	rotationStrategy: z.enum(["hybrid", "sticky", "round-robin"]).optional(),
+	modelAccountPools: z.record(
+		z.string().min(1),
+		z.array(z.string().min(1)),
+	).optional(),
 	fastSessionMaxInputItems: z.number().min(8).max(200).optional(),
 	retryProfile: z.enum(["conservative", "balanced", "aggressive"]).optional(),
 	retryBudgetOverrides: z.object({

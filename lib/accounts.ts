@@ -225,14 +225,28 @@ export class AccountManager {
 		family: ModelFamily,
 		model?: string | null,
 		options?: HybridSelectionOptions,
+		preferredAccountIds?: readonly string[],
 	): ManagedAccount | null {
 		switch (strategy) {
 			case "sticky":
-				return this.rotation.getCurrentOrNextForFamilySticky(family, model);
+				return this.rotation.getCurrentOrNextForFamilySticky(
+					family,
+					model,
+					preferredAccountIds,
+				);
 			case "round-robin":
-				return this.rotation.getCurrentOrNextForFamily(family, model);
+				return this.rotation.getCurrentOrNextForFamily(
+					family,
+					model,
+					preferredAccountIds,
+				);
 			default:
-				return this.rotation.getCurrentOrNextForFamilyHybrid(family, model, options);
+				return this.rotation.getCurrentOrNextForFamilyHybrid(
+					family,
+					model,
+					options,
+					preferredAccountIds,
+				);
 		}
 	}
 
