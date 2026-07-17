@@ -156,6 +156,22 @@ describe("gpt-5.6 client identity (#196)", () => {
 			});
 			expect(headers.get(OPENAI_HEADERS.ORIGINATOR)).toBe("codex_cli_rs");
 			expect(headers.get("user-agent")).toBe(buildCodexUserAgent());
+			// Identity forcing changes who we claim to be, never the wire
+			// shape: sol is still a responses-lite model.
+			expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("accepts `host` as an alias for the opencode identity", () => {
+		try {
+			vi.stubEnv("CODEX_AUTH_CLIENT_IDENTITY", "host");
+			const headers = createCodexHeaders(undefined, ACCOUNT_ID, TOKEN, {
+				model: "gpt-5.5",
+			});
+			expect(headers.get(OPENAI_HEADERS.ORIGINATOR)).toBe("opencode");
+			expect(headers.get("user-agent")).toBe(buildOpencodeUserAgent());
 		} finally {
 			vi.unstubAllEnvs();
 		}

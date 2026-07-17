@@ -224,22 +224,39 @@ describe('Fetch Helpers Module', () => {
 		});
 
 		it('sends a Codex CLI user-agent by default, replacing the host user-agent', () => {
-			const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as any;
+			const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as RequestInit;
 			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.5' });
 			expect(headers.get('user-agent')).toMatch(/^codex_cli_rs\/\d+\.\d+\.\d+ \(/);
 		});
 
 		it('sends the host identity for gpt-5.6 models by default', () => {
-			const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as any;
+			const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as RequestInit;
 			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.6-sol' });
 			expect(headers.get('user-agent')).toMatch(/^opencode\/\d+\.\d+\.\d+ \(/);
 			expect(headers.get(OPENAI_HEADERS.ORIGINATOR)).toBe('opencode');
 		});
 
+		it('reuses the host-injected UA version for the host identity', () => {
+			const init = { headers: { 'user-agent': 'opencode/1.99.5 (linux 6.8.0; x64)' } } as RequestInit;
+			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.6-sol' });
+			expect(headers.get('user-agent')).toMatch(/^opencode\/1\.99\.5 \(/);
+		});
+
+		it('prefers CODEX_AUTH_HOST_VERSION over the host-injected UA version', () => {
+			try {
+				vi.stubEnv('CODEX_AUTH_HOST_VERSION', '2.0.1');
+				const init = { headers: { 'user-agent': 'opencode/1.99.5' } } as RequestInit;
+				const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.6-sol' });
+				expect(headers.get('user-agent')).toMatch(/^opencode\/2\.0\.1 \(/);
+			} finally {
+				vi.unstubAllEnvs();
+			}
+		});
+
 		it('honors the CODEX_AUTH_DISABLE_CODEX_USER_AGENT opt-out', () => {
 			try {
 				vi.stubEnv('CODEX_AUTH_DISABLE_CODEX_USER_AGENT', '1');
-				const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as any;
+				const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as RequestInit;
 				const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.6-sol' });
 				expect(headers.get('user-agent')).toBe('opencode/1.17.20');
 			} finally {
@@ -252,6 +269,20 @@ describe('Fetch Helpers Module', () => {
 				vi.stubEnv('CODEX_AUTH_CLIENT_VERSION', '0.150.2');
 				const headers = createCodexHeaders(undefined, accountId, accessToken, { model: 'gpt-5.5' });
 				expect(headers.get('user-agent')).toMatch(/^codex_cli_rs\/0\.150\.2 \(/);
+			} finally {
+				vi.unstubAllEnvs();
+			}
+		});
+
+		it('strips whitespace from version overrides so the UA product token stays well-formed', () => {
+			try {
+				vi.stubEnv('CODEX_AUTH_CLIENT_VERSION', '0.150 rc2');
+				const codexHeaders = createCodexHeaders(undefined, accountId, accessToken, { model: 'gpt-5.5' });
+				expect(codexHeaders.get('user-agent')).toMatch(/^codex_cli_rs\/0\.150rc2 \(/);
+
+				vi.stubEnv('CODEX_AUTH_HOST_VERSION', '1.17 rc1');
+				const hostHeaders = createCodexHeaders(undefined, accountId, accessToken, { model: 'gpt-5.6-sol' });
+				expect(hostHeaders.get('user-agent')).toMatch(/^opencode\/1\.17rc1 \(/);
 			} finally {
 				vi.unstubAllEnvs();
 			}

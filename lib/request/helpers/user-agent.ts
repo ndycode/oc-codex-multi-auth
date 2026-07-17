@@ -33,10 +33,21 @@ function sanitizeToken(value: string): string {
 	return value.replace(/[^\x20-\x7e]/g, "").trim();
 }
 
+/**
+ * Versions live in the UA product token (`name/version`), where a space would
+ * split the token and break the backend's version parse. Keep only characters
+ * that are safe in a product-token version; an empty result falls back to the
+ * caller's default.
+ */
+export function sanitizeVersionToken(value: string): string {
+	return value.replace(/[^0-9A-Za-z.+_-]/g, "");
+}
+
 export function buildCodexUserAgent(): string {
 	const envVersion = process.env.CODEX_AUTH_CLIENT_VERSION;
 	const version =
-		(envVersion ? sanitizeToken(envVersion) : "") || DEFAULT_CODEX_CLIENT_VERSION;
+		(envVersion ? sanitizeVersionToken(envVersion) : "") ||
+		DEFAULT_CODEX_CLIENT_VERSION;
 	const platform = PLATFORM_LABELS[os.platform()] ?? os.platform();
 	const release = sanitizeToken(os.release());
 	const arch = os.arch();

@@ -841,8 +841,11 @@ export function createCodexHeaders(
 	// per originator and reads the client version from the UA product token.
 	// gpt-5.6 tiers default to the host (opencode) identity — the one plain
 	// opencode passes sol with on accounts that reject `codex_cli_rs` (#196);
-	// everything else keeps the Codex CLI identity from PR #199.
-	const identity = resolveClientIdentity(opts?.model);
+	// everything else keeps the Codex CLI identity from PR #199. The host's
+	// own UA (when the runtime injected one) keeps the advertised opencode
+	// version in sync with the real host build.
+	const hostUserAgent = headers.get("user-agent") ?? undefined;
+	const identity = resolveClientIdentity(opts?.model, hostUserAgent);
 	headers.set(OPENAI_HEADERS.ORIGINATOR, identity.originator);
 	if (process.env.CODEX_AUTH_DISABLE_CODEX_USER_AGENT !== "1") {
 		headers.set("user-agent", identity.userAgent);

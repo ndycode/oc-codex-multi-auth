@@ -362,7 +362,7 @@ resolvedConfig: { reasoningEffort: 'low', ... }  ← Should show your options
    opencode auth login
    ```
 2. Add another entitled account/workspace. The plugin tries remaining accounts/workspaces before model fallback.
-3. **Model works in the Codex CLI/TUI or plain opencode but not through this plugin** (typically the newest preview tier, e.g. `gpt-5.6-sol`): the backend evaluates model entitlement per client identity (`originator` + `User-Agent`). The plugin defaults GPT-5.6 tiers to the host identity (`originator: opencode`, the one plain opencode passes sol with) and everything else to the Codex CLI identity (`codex_cli_rs/<version>`; the backend gates those tiers on the catalog's `minimal_client_version`, read from the UA). It never pins `openai-organization` (upstream clients don't send it; workspace routing is carried by `chatgpt-account-id`). Escape hatches:
+3. **Model works in the Codex CLI/TUI or plain opencode but not through this plugin** (typically the newest preview tier, e.g. `gpt-5.6-sol`): the backend evaluates model entitlement per client identity (`originator` + `User-Agent`). The plugin defaults GPT-5.6 tiers to the host identity (`originator: opencode`, the one plain opencode passes sol with) and everything else to the Codex CLI identity (`codex_cli_rs/<version>`; the backend gates those tiers on the catalog's `minimal_client_version`, read from the UA). By default it does not pin `openai-organization` (upstream clients don't send it; workspace routing is carried by `chatgpt-account-id`). Escape hatches:
    ```bash
    CODEX_AUTH_CLIENT_IDENTITY=codex opencode        # force the Codex CLI identity for all models
    CODEX_AUTH_CLIENT_IDENTITY=opencode opencode     # force the host identity for all models
