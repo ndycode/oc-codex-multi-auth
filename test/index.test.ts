@@ -128,7 +128,7 @@ vi.mock("../lib/config.js", () => ({
 	getAutoResume: () => false,
 	getAutoUpdate: () => true,
 	getToastDurationMs: () => 5000,
-	getAccountToastsEnabled: () => true,
+	getAccountToastsEnabled: vi.fn(() => true),
 	getPerProjectAccounts: () => false,
 	getEmptyResponseMaxRetries: () => 2,
 	getEmptyResponseRetryDelayMs: () => 1000,
@@ -3006,6 +3006,117 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		});
 
 		expect(response.status).toBe(200);
+	});
+
+	// issue #203: gate the informational "Using <account> (N/N)" toast behind
+	// the accountToasts opt-out, without affecting warning/error toasts. These
+	// tests drive a real request through the selection path and OBSERVE whether
+	// the toast reaches client.tui.showToast.
+	describe("issue #203: account-selection toast opt-out", () => {
+		const buildMultiAccountManager = () => {
+			const account = {
+				index: 0,
+				accountId: "acc-1",
+				email: "user@example.com",
+				refreshToken: "refresh-1",
+			};
+			return {
+				getAccountCount: () => 2,
+				getCurrentOrNextForFamilyHybrid: () => account,
+				getAccountForStrategy: () => account,
+				getSelectionExplainability: () => [
+					{
+						index: 0,
+						enabled: true,
+						isCurrentForFamily: true,
+						eligible: true,
+						reasons: ["eligible"],
+						healthScore: 100,
+						tokensAvailable: 50,
+						lastUsed: 1,
+					},
+				],
+				toAuthDetails: () => ({
+					type: "oauth" as const,
+					access: "access-1",
+					refresh: account.refreshToken,
+					expires: 2,
+				}),
+				hasRefreshToken: () => true,
+				saveToDiskDebounced: vi.fn(),
+				updateFromAuth: vi.fn(),
+				clearAuthFailures: vi.fn(),
+				incrementAuthFailures: vi.fn(() => 1),
+				markAccountCoolingDown: vi.fn(),
+				markRateLimitedWithReason: vi.fn(),
+				recordRateLimit: vi.fn(),
+				consumeToken: vi.fn(() => true),
+				refundToken: vi.fn(),
+				markSwitched: vi.fn(),
+				removeAccount: vi.fn(() => false),
+				removeAccountsWithSameRefreshToken: vi.fn(() => 0),
+				recordFailure: vi.fn(),
+				recordSuccess: vi.fn(),
+				getMinWaitTimeForFamily: vi.fn(() => 0),
+				shouldShowAccountToast: vi.fn(() => true),
+				markToastShown: vi.fn(),
+				setActiveIndex: vi.fn(() => account),
+				getAccountsSnapshot: vi.fn(() => [account]),
+			};
+		};
+
+		const usingToastCalls = (client: ReturnType<typeof createMockClient>) =>
+			client.tui.showToast.mock.calls.filter((call) => {
+				const message = (call[0] as { body?: { message?: string } })?.body?.message;
+				return typeof message === "string" && /^Using .+ \(\d+\/\d+\)$/.test(message);
+			});
+
+		it("shows the account-selection toast when accountToasts is enabled", async () => {
+			const configModule = await import("../lib/config.js");
+			vi.mocked(configModule.getAccountToastsEnabled).mockReturnValue(true);
+
+			const { AccountManager } = await import("../lib/accounts.js");
+			const manager = buildMultiAccountManager();
+			vi.spyOn(AccountManager, "loadFromDisk").mockResolvedValueOnce(manager as never);
+			globalThis.fetch = vi
+				.fn()
+				.mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), { status: 200 }));
+
+			const { sdk, mockClient } = await setupPlugin();
+			const response = await sdk.fetch!("https://api.openai.com/v1/chat", {
+				method: "POST",
+				body: JSON.stringify({ model: "gpt-5.1" }),
+			});
+
+			expect(response.status).toBe(200);
+			expect(usingToastCalls(mockClient)).toHaveLength(1);
+			expect(manager.markToastShown).toHaveBeenCalledTimes(1);
+		});
+
+		it("suppresses ONLY the selection toast when accountToasts is disabled", async () => {
+			const configModule = await import("../lib/config.js");
+			vi.mocked(configModule.getAccountToastsEnabled).mockReturnValue(false);
+
+			const { AccountManager } = await import("../lib/accounts.js");
+			const manager = buildMultiAccountManager();
+			vi.spyOn(AccountManager, "loadFromDisk").mockResolvedValueOnce(manager as never);
+			globalThis.fetch = vi
+				.fn()
+				.mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), { status: 200 }));
+
+			const { sdk, mockClient } = await setupPlugin();
+			const response = await sdk.fetch!("https://api.openai.com/v1/chat", {
+				method: "POST",
+				body: JSON.stringify({ model: "gpt-5.1" }),
+			});
+
+			// Request still succeeds; the toast is the only thing suppressed.
+			expect(response.status).toBe(200);
+			expect(usingToastCalls(mockClient)).toHaveLength(0);
+			// The info toast is skipped, so its debounce marker is never consumed —
+			// which keeps warning toasts fully eligible rather than suppressing them.
+			expect(manager.markToastShown).not.toHaveBeenCalled();
+		});
 	});
 
 	it.each([
