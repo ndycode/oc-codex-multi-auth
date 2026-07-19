@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.10.0] - 2026-07-20
+
+### Added
+- **`accountToasts` — opt out of the account-selection toast**: a new boolean config field (default `true`) with env override `CODEX_AUTH_ACCOUNT_TOASTS` gates only the informational `Using <account> (N/N)` toast the plugin renders when it selects or rotates to an account. Because OpenCode draws that toast over the output rather than reserving layout space, during a large diff it could cover several lines until it faded, and there was previously no way to disable it — `CODEX_AUTH_TOAST_DURATION_MS` has a 1000 ms floor and the debounce only suppresses repeats. Setting `accountToasts: false` (or `CODEX_AUTH_ACCOUNT_TOASTS=0`) hides just that informational toast while every warning and error toast — rate-limit switches, expired-auth recovery, unsupported-model and retry notices — stays visible. Resolution follows the standard env-over-config precedence (`"1"` enables, `"0"` disables), and like the other plugin settings it lives in `openai-codex-auth-config.json`, which the installer never rewrites, so the opt-out persists across upgrades. Reported by @aic0d3r. (#203)
+
 ## [6.9.1] - 2026-07-18
 
 ### Fixed
