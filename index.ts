@@ -72,6 +72,7 @@ import {
 	getAutoResume,
 	getAutoUpdate,
 	getToastDurationMs,
+	getAccountToastsEnabled,
 	getPerProjectAccounts,
 	getEmptyResponseMaxRetries,
 	getEmptyResponseRetryDelayMs,
@@ -1645,6 +1646,7 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				const unsupportedCodexFallbackChain =
 					getUnsupportedCodexFallbackChain(pluginConfig);
 				const toastDurationMs = getToastDurationMs(pluginConfig);
+				const accountToastsEnabled = getAccountToastsEnabled(pluginConfig);
 				const fetchTimeoutMs = getFetchTimeoutMs(pluginConfig);
 				const streamStallTimeoutMs = getStreamStallTimeoutMs(pluginConfig);
 
@@ -2148,6 +2150,7 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 											accountManager.saveToDiskDebounced();
 
 											if (
+												accountToastsEnabled &&
 												accountCount > 1 &&
 												accountManager.shouldShowAccountToast(
 													account.index,

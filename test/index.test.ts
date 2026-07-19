@@ -128,6 +128,7 @@ vi.mock("../lib/config.js", () => ({
 	getAutoResume: () => false,
 	getAutoUpdate: () => true,
 	getToastDurationMs: () => 5000,
+	getAccountToastsEnabled: () => true,
 	getPerProjectAccounts: () => false,
 	getEmptyResponseMaxRetries: () => 2,
 	getEmptyResponseRetryDelayMs: () => 1000,

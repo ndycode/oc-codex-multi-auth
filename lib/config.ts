@@ -70,6 +70,7 @@ const DEFAULT_CONFIG: PluginConfig = {
 	tokenRefreshSkewMs: 60_000,
 	rateLimitToastDebounceMs: 60_000,
 	toastDurationMs: 5_000,
+	accountToasts: true,
 	perProjectAccounts: true,
 	sessionRecovery: true,
 	autoResume: true,
@@ -738,6 +739,19 @@ export function getToastDurationMs(pluginConfig: PluginConfig): number {
 		pluginConfig.toastDurationMs,
 		5_000,
 		{ min: 1_000 },
+	);
+}
+
+/**
+ * Gates only the informational "Using <account> (N/N)" account-selection toast.
+ * Warning/error toasts (rate limits, expired auth, recovery, retries) are never
+ * affected by this setting.
+ */
+export function getAccountToastsEnabled(pluginConfig: PluginConfig): boolean {
+	return resolveBooleanSetting(
+		"CODEX_AUTH_ACCOUNT_TOASTS",
+		pluginConfig.accountToasts,
+		true,
 	);
 }
 

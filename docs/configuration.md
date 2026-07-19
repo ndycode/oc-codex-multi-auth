@@ -187,6 +187,7 @@ advanced settings go in `~/.opencode/openai-codex-auth-config.json`:
   "perProjectAccounts": true,
   "autoUpdate": true,
   "toastDurationMs": 5000,
+  "accountToasts": true,
   "retryAllAccountsRateLimited": true,
   "retryAllAccountsMaxWaitMs": 0,
   "retryAllAccountsMaxRetries": 3,
@@ -235,6 +236,7 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `perProjectAccounts` | `true` | each project gets its own account storage |
 | `autoUpdate` | `true` | check npm daily and clear the OpenCode-managed plugin cache on exit when a newer version is available; restart OpenCode to install it |
 | `toastDurationMs` | `5000` | how long toast notifications stay visible (ms) |
+| `accountToasts` | `true` | show the transient `Using <account> (N/N)` account-selection toast; set `false` to hide only this informational toast (rate-limit/auth/recovery warnings and errors still show) |
 | `retryAllAccountsRateLimited` | `true` | wait and retry when all accounts hit rate limits |
 | `retryAllAccountsMaxWaitMs` | `0` | max wait time in ms (0 = unlimited) |
 | `retryAllAccountsMaxRetries` | `Infinity` | max retry attempts (omit this key for unlimited retries) |
@@ -353,6 +355,7 @@ override any config with env vars (boolean values are truthy only for `"1"`):
 | `CODEX_AUTH_PID_OFFSET_ENABLED=1` | enable PID-based hybrid score offset |
 | `CODEX_AUTH_AUTO_UPDATE=0` | disable automatic OpenCode plugin cache refresh when npm has a newer plugin version |
 | `CODEX_AUTH_TOAST_DURATION_MS=8000` | set toast duration |
+| `CODEX_AUTH_ACCOUNT_TOASTS=0` | hide the `Using <account> (N/N)` account-selection toast (warnings and errors still show) |
 | `CODEX_AUTH_RETRY_ALL_RATE_LIMITED=0` | disable wait-and-retry |
 | `CODEX_AUTH_RETRY_ALL_MAX_WAIT_MS=30000` | set max wait time |
 | `CODEX_AUTH_RETRY_ALL_MAX_RETRIES=1` | set max retries |

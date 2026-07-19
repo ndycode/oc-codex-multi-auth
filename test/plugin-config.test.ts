@@ -23,6 +23,7 @@ import {
 	getFetchTimeoutMs,
 	getStreamStallTimeoutMs,
 	getAutoUpdate,
+	getAccountToastsEnabled,
 } from '../lib/config.js';
 import type { PluginConfig } from '../lib/types.js';
 import * as fs from 'node:fs';
@@ -69,6 +70,7 @@ describe('Plugin Configuration', () => {
 		'CODEX_AUTH_FALLBACK_UNSUPPORTED_MODEL',
 		'CODEX_AUTH_FALLBACK_GPT53_TO_GPT52',
 		'CODEX_AUTH_AUTO_UPDATE',
+		'CODEX_AUTH_ACCOUNT_TOASTS',
 	] as const;
 	const originalEnv: Partial<Record<(typeof envKeys)[number], string | undefined>> = {};
 
@@ -121,6 +123,7 @@ describe('Plugin Configuration', () => {
 				tokenRefreshSkewMs: 60_000,
 				rateLimitToastDebounceMs: 60_000,
 				toastDurationMs: 5_000,
+				accountToasts: true,
 				perProjectAccounts: true,
 				sessionRecovery: true,
 				autoResume: true,
@@ -169,6 +172,7 @@ describe('Plugin Configuration', () => {
 				tokenRefreshSkewMs: 60_000,
 				rateLimitToastDebounceMs: 60_000,
 				toastDurationMs: 5_000,
+				accountToasts: true,
 				perProjectAccounts: true,
 				sessionRecovery: true,
 				autoResume: true,
@@ -214,6 +218,7 @@ describe('Plugin Configuration', () => {
 				tokenRefreshSkewMs: 60_000,
 				rateLimitToastDebounceMs: 60_000,
 				toastDurationMs: 5_000,
+				accountToasts: true,
 				perProjectAccounts: true,
 				sessionRecovery: true,
 				autoResume: true,
@@ -270,6 +275,7 @@ describe('Plugin Configuration', () => {
 		tokenRefreshSkewMs: 60_000,
 		rateLimitToastDebounceMs: 60_000,
 		toastDurationMs: 5_000,
+		accountToasts: true,
 		perProjectAccounts: true,
 		sessionRecovery: true,
 		autoResume: true,
@@ -320,6 +326,7 @@ describe('Plugin Configuration', () => {
 			tokenRefreshSkewMs: 60_000,
 			rateLimitToastDebounceMs: 60_000,
 			toastDurationMs: 5_000,
+			accountToasts: true,
 			perProjectAccounts: true,
 			sessionRecovery: true,
 			autoResume: true,
@@ -536,6 +543,25 @@ describe('Plugin Configuration', () => {
 			expect(getAutoUpdate({ autoUpdate: true })).toBe(false);
 			process.env.CODEX_AUTH_AUTO_UPDATE = '1';
 			expect(getAutoUpdate({ autoUpdate: false })).toBe(true);
+		});
+	});
+
+	describe('getAccountToastsEnabled', () => {
+		it('should default to true', () => {
+			delete process.env.CODEX_AUTH_ACCOUNT_TOASTS;
+			expect(getAccountToastsEnabled({})).toBe(true);
+		});
+
+		it('should use config value when env var not set', () => {
+			delete process.env.CODEX_AUTH_ACCOUNT_TOASTS;
+			expect(getAccountToastsEnabled({ accountToasts: false })).toBe(false);
+		});
+
+		it('should prioritize env var over config', () => {
+			process.env.CODEX_AUTH_ACCOUNT_TOASTS = '0';
+			expect(getAccountToastsEnabled({ accountToasts: true })).toBe(false);
+			process.env.CODEX_AUTH_ACCOUNT_TOASTS = '1';
+			expect(getAccountToastsEnabled({ accountToasts: false })).toBe(true);
 		});
 	});
 

@@ -48,6 +48,7 @@ describe("PluginConfigSchema", () => {
 			tokenRefreshSkewMs: 60000,
 			rateLimitToastDebounceMs: 30000,
 			toastDurationMs: 5000,
+			accountToasts: true,
 			perProjectAccounts: true,
 			sessionRecovery: true,
 			autoResume: false,
