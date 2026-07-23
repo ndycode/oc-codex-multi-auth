@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.10.1] - 2026-07-23
+
+### Fixed
+- **Account verification consumed single-use refresh tokens without persisting the rotation**, so `codex-health`, `codex-doctor --fix`, and `codex-refresh` bricked the accounts they checked: verifying an account exchanges its refresh token, which OpenAI rotates and invalidates on use, but health and doctor treated the check as read-only and never saved the new credential. The consumed token stayed on disk and the next load returned `refresh_token_reused` for every verified account until re-login. All three tools now persist the rotated credential in a storage transaction before reporting, through a shared refresh/persist path that skips intentionally-disabled accounts without touching their token, propagates a rotated token shared by workspace-sibling records, and reconciles concurrent storage changes by stable account identity (organizationId → accountId → refreshToken) rather than list position. `codex-doctor --fix` reloads diagnostics after applying fixes so the reported health can never contradict the live verification result, and marks refresh-verification failures as blocked with a re-login next action. (#205)
+- **The cached account-manager reload leaked a shutdown handler on every `codex-health`/`codex-refresh` call and could overwrite freshly rotated tokens.** It now flushes the outgoing manager's pending debounced save and disposes its shutdown handler before installing the reloaded instance — mirroring `invalidateAccountManagerCache` — and is error-guarded so a reload failure degrades gracefully instead of crashing an already-successful response. The `account.select` event handler reuses the same safe reload. A duplicate `refresh-verification-failed` finding in `codex-doctor` output was also removed. (#205)
+- **The OAuth callback success page was broken by the strict callback Content-Security-Policy**: it depended on inline scripts, external Google Fonts, and inline styles the CSP blocked, so it rendered as an unstyled white page exposing raw unicode escape sequences. It is now a compact static page whose only stylesheet is bound to a per-request CSP nonce, with the policy tightened to `default-src 'none'; script-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` and `Cache-Control: no-store` / `Referrer-Policy: no-referrer` added to the response. No external font or script is loaded. (#206)
+
 ## [6.10.0] - 2026-07-20
 
 ### Added
