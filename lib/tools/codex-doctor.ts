@@ -7,10 +7,10 @@ import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
 import {
 	getStoragePath,
 	loadAccounts,
-	saveAccounts,
+	withAccountStorageTransaction,
+	type AccountStorageV3,
 } from "../storage.js";
 import { AccountManager } from "../accounts.js";
-import { queuedRefresh } from "../refresh-queue.js";
 import { MODEL_FAMILIES } from "../prompts/codex.js";
 import {
 	clearRefreshedAccountsStaleState,
@@ -23,6 +23,8 @@ import {
 	formatPromptCacheSnapshot,
 	recommendBeginnerNextAction,
 	summarizeBeginnerAccounts,
+	type BeginnerAccountSummary,
+	type BeginnerDiagnosticFinding,
 } from "../ui/beginner.js";
 import {
 	formatUiHeader,
@@ -35,7 +37,23 @@ import {
 	renderJsonOutput,
 	type RoutingVisibilitySnapshot,
 } from "../runtime.js";
+import {
+	buildRefreshInputs,
+	findAccountIndexByIdentity,
+	refreshAndPersistAccount,
+	type RefreshAccountIdentity,
+} from "./refresh-account.js";
 import type { ToolContext } from "./index.js";
+
+interface DoctorDiagnostics {
+	storage: AccountStorageV3 | null;
+	activeIndex: number;
+	snapshots: ReturnType<ToolContext["toBeginnerAccountSnapshots"]>;
+	runtime: ReturnType<ToolContext["getBeginnerRuntimeSnapshot"]>;
+	summary: BeginnerAccountSummary;
+	findings: BeginnerDiagnosticFinding[];
+	nextAction: string;
+}
 
 export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 	const {
@@ -52,6 +70,72 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 		cachedAccountManagerRef,
 		accountManagerPromiseRef,
 	} = ctx;
+
+	async function loadDiagnostics(
+		extraFindings: BeginnerDiagnosticFinding[] = [],
+	): Promise<DoctorDiagnostics> {
+		const storage = await loadAccounts();
+		const now = Date.now();
+		const activeIndex =
+			storage && storage.accounts.length > 0
+				? resolveActiveIndex(storage, "codex")
+				: 0;
+		const snapshots = storage
+			? toBeginnerAccountSnapshots(storage, activeIndex, now)
+			: [];
+		const runtime = getBeginnerRuntimeSnapshot();
+		const summary = summarizeBeginnerAccounts(snapshots, now);
+		const findings = buildBeginnerDoctorFindings({
+			accounts: snapshots,
+			now,
+			runtime,
+		});
+		const nextAction = recommendBeginnerNextAction({
+			accounts: snapshots,
+			now,
+			runtime,
+		});
+
+		// Surface disabled token-source duplicates that shadow an enabled,
+		// org-backed account by email (issue #171). These appear when a
+		// re-login mints a token-source entry instead of updating the org
+		// account; harmless for rotation but they pollute diagnostics. We flag
+		// rather than auto-remove because the only link between the two is
+		// email, and email-only merges must not blindly collapse multi-org
+		// accounts (#64).
+		const disabledTokenSourceDuplicates = storage
+			? findDisabledTokenSourceDuplicates(storage.accounts)
+			: [];
+		if (disabledTokenSourceDuplicates.length > 0) {
+			findings.push({
+				severity: "warning",
+				code: "disabled-token-source-duplicate",
+				summary: `${disabledTokenSourceDuplicates.length} disabled duplicate account entry(ies) shadow a real account.`,
+				action: `Remove the leftover entry(ies) with \`codex-remove\` (slots: ${disabledTokenSourceDuplicates
+					.map((index) => index + 1)
+					.join(", ")}).`,
+			});
+		}
+		// A user-disabled account that absorbed a fresh enabled re-login stays
+		// disabled (fail-closed) but is otherwise invisible to diagnostics (#171).
+		const disabledWithFreshCredential = storage
+			? findDisabledAccountsWithFreshCredential(storage.accounts)
+			: [];
+		if (disabledWithFreshCredential.length > 0) {
+			findings.push({
+				severity: "warning",
+				code: "disabled-account-fresh-credential",
+				summary: `${disabledWithFreshCredential.length} disabled account(s) hold a fresh login credential.`,
+				action: `A recent re-login landed on a disabled slot; re-enable it in oc-codex-multi-auth-accounts.json if intended (slots: ${disabledWithFreshCredential
+					.map((index) => index + 1)
+					.join(", ")}).`,
+			});
+		}
+		findings.push(...extraFindings);
+
+		return { storage, activeIndex, snapshots, runtime, summary, findings, nextAction };
+	}
+
 	return tool({
 		description: "Run beginner-friendly diagnostics with clear fixes.",
 		args: {
@@ -77,136 +161,90 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 		}: { deep?: boolean; fix?: boolean; format?: string } = {}) {
 			const ui = resolveUiRuntime();
 			const outputFormat = normalizeToolOutputFormat(format);
-			const storage = await loadAccounts();
-			const now = Date.now();
-			const activeIndex =
-				storage && storage.accounts.length > 0
-					? resolveActiveIndex(storage, "codex")
-					: 0;
-			const snapshots = storage
-				? toBeginnerAccountSnapshots(storage, activeIndex, now)
-				: [];
-			const runtime = getBeginnerRuntimeSnapshot();
-			const summary = summarizeBeginnerAccounts(snapshots, now);
-			const findings = buildBeginnerDoctorFindings({
-				accounts: snapshots,
-				now,
-				runtime,
-			});
-			const nextAction = recommendBeginnerNextAction({
-				accounts: snapshots,
-				now,
-				runtime,
-			});
-
-			// Surface disabled token-source duplicates that shadow an enabled,
-			// org-backed account by email (issue #171). These appear when a
-			// re-login mints a token-source entry instead of updating the org
-			// account; harmless for rotation but they pollute diagnostics. We flag
-			// rather than auto-remove because the only link between the two is
-			// email, and email-only merges must not blindly collapse multi-org
-			// accounts (#64).
-			const disabledTokenSourceDuplicates = storage
-				? findDisabledTokenSourceDuplicates(storage.accounts)
-				: [];
-			if (disabledTokenSourceDuplicates.length > 0) {
-				findings.push({
-					severity: "warning",
-					code: "disabled-token-source-duplicate",
-					summary: `${disabledTokenSourceDuplicates.length} disabled duplicate account entry(ies) shadow a real account.`,
-					action: `Remove the leftover entry(ies) with \`codex-remove\` (slots: ${disabledTokenSourceDuplicates
-						.map((index) => index + 1)
-						.join(", ")}).`,
-				});
-			}
-			// A user-disabled account that absorbed a fresh enabled re-login stays
-			// disabled (fail-closed) but is otherwise invisible to diagnostics (#171).
-			const disabledWithFreshCredential = storage
-				? findDisabledAccountsWithFreshCredential(storage.accounts)
-				: [];
-			if (disabledWithFreshCredential.length > 0) {
-				findings.push({
-					severity: "warning",
-					code: "disabled-account-fresh-credential",
-					summary: `${disabledWithFreshCredential.length} disabled account(s) hold a fresh login credential.`,
-					action: `A recent re-login landed on a disabled slot; re-enable it in oc-codex-multi-auth-accounts.json if intended (slots: ${disabledWithFreshCredential
-						.map((index) => index + 1)
-						.join(", ")}).`,
-				});
-			}
-			let routingVisibility: RoutingVisibilitySnapshot | null = null;
 			const appliedFixes: string[] = [];
 			const fixErrors: string[] = [];
+			const extraFindings: BeginnerDiagnosticFinding[] = [];
+			let routingVisibility: RoutingVisibilitySnapshot | null = null;
+			let diagnostics = await loadDiagnostics();
 
-			if (fix && storage && storage.accounts.length > 0) {
-				let changedByRefresh = false;
-				let refreshedCount = 0;
-				const refreshedAccounts: typeof storage.accounts = [];
+			if (fix && diagnostics.storage && diagnostics.storage.accounts.length > 0) {
+				const refreshResults: Array<{
+					index: number;
+					identity: RefreshAccountIdentity;
+				}> = [];
 				const reloginNeeded: number[] = [];
-				for (let accountIndex = 0; accountIndex < storage.accounts.length; accountIndex++) {
-					const account = storage.accounts[accountIndex];
-					if (!account) continue;
-					// Skip intentionally-disabled accounts: refreshing them is wrong
-					// (e.g. the disabled token-source duplicate would get a spurious
-					// "re-login" directive when its dead token fails, when the correct
-					// remedy is `codex-remove`), and stale-state must never be cleared
-					// on an entry the user disabled on purpose.
-					if (account.enabled === false) continue;
-					try {
-						const refreshResult = await queuedRefresh(account.refreshToken);
-						if (refreshResult.type === "success") {
-							account.refreshToken = refreshResult.refresh;
-							account.accessToken = refreshResult.access;
-							account.expiresAt = refreshResult.expires;
-							changedByRefresh = true;
-							refreshedCount += 1;
-							refreshedAccounts.push(account);
-						} else {
-							// A failed refresh (vs. a thrown error) means the stored
-							// credential is genuinely dead — re-login is required. Surface
-							// it explicitly so an all-dark pool with expired tokens does not
-							// fail silently (issue #171: "surface this state"). We do NOT
-							// clear stale state for these accounts: they really are blocked.
-							const detail =
-								refreshResult.message ?? refreshResult.reason ?? "token refresh failed";
-							reloginNeeded.push(accountIndex + 1);
-							fixErrors.push(
-								`Account ${accountIndex + 1}: ${detail} — run \`opencode auth login\` to re-authenticate.`,
-							);
-						}
-					} catch (error) {
+				let verificationFailures = 0;
+				const inputs = buildRefreshInputs(diagnostics.storage.accounts);
+
+				for (const input of inputs) {
+					if (!input) continue;
+					const outcome = await refreshAndPersistAccount(input);
+					if (outcome.status === "refreshed") {
+						refreshResults.push({
+							index: outcome.index,
+							identity: outcome.result.identity,
+						});
+					} else if (outcome.status === "skipped") {
+						// Skip intentionally-disabled accounts: refreshing them is wrong
+						// (e.g. the disabled token-source duplicate would get a spurious
+						// "re-login" directive when its dead token fails, when the correct
+						// remedy is `codex-remove`), and stale-state must never be cleared
+						// on an entry the user disabled on purpose.
+					} else {
+						verificationFailures += 1;
+						reloginNeeded.push(outcome.index + 1);
 						fixErrors.push(
-							error instanceof Error ? error.message : String(error),
+							`Account ${outcome.index + 1}: ${outcome.error} — run \`opencode auth login\` to re-authenticate.`,
 						);
 					}
 				}
 
-				// A successful refresh proves the credential is alive, so clear any
-				// stale cooldown / rate-limit state that would otherwise keep the
-				// recovered account out of rotation (issue #171). Without this, the
-				// auto-switch below finds no eligible account and the dead routing
-				// persists across restarts. The summary is computed here but only
-				// reported after saveAccounts succeeds, so we never tell the user a
-				// fix landed while the on-disk state still carries the stale block.
-				let staleSummary = { cooldownsCleared: 0, rateLimitKeysCleared: 0 };
-				if (refreshedAccounts.length > 0) {
-					staleSummary = clearRefreshedAccountsStaleState(refreshedAccounts);
-					if (staleSummary.cooldownsCleared > 0 || staleSummary.rateLimitKeysCleared > 0) {
-						changedByRefresh = true;
-					}
+				if (verificationFailures > 0) {
+					extraFindings.push({
+						severity: "error",
+						code: "refresh-verification-failed",
+						summary: `${verificationFailures} account(s) failed refresh-token verification.`,
+						action: `Re-authenticate the affected account(s) with \`opencode auth login\` (slots: ${reloginNeeded.join(", ")}).`,
+					});
 				}
 
-				if (changedByRefresh) {
+				if (refreshResults.length > 0) {
+					appliedFixes.push(
+						`Refreshed and persisted ${refreshResults.length} account token(s).`,
+					);
+
+					// A successful refresh proves the credential is alive, so clear any
+					// stale cooldown / rate-limit state that would otherwise keep the
+					// recovered account out of rotation (issue #171). Apply this to a
+					// fresh storage snapshot so non-credential state written by other
+					// processes is preserved.
 					try {
-						await saveAccounts(storage);
-						// Only report applied fixes once the write to disk has actually
-						// succeeded, otherwise a failed persist would still print
-						// "Cleared ..." and mislead the user into thinking it landed.
-						if (refreshedCount > 0) {
-							appliedFixes.push(
-								`Refreshed ${refreshedCount} account token(s).`,
-							);
-						}
+						const staleSummary = await withAccountStorageTransaction(
+							async (current, persist) => {
+								if (!current) {
+									throw new Error("Account storage is unavailable");
+								}
+								const refreshedRecords = [];
+								for (const refreshed of refreshResults) {
+									const idx = findAccountIndexByIdentity(
+										current.accounts,
+										refreshed.identity,
+									);
+									const record = idx >= 0 ? current.accounts[idx] : undefined;
+									if (record && record.enabled !== false) {
+										refreshedRecords.push(record);
+									}
+								}
+								const summary = clearRefreshedAccountsStaleState(refreshedRecords);
+								if (
+									summary.cooldownsCleared > 0 ||
+									summary.rateLimitKeysCleared > 0
+								) {
+									await persist(current);
+								}
+								return summary;
+							},
+						);
 						if (staleSummary.cooldownsCleared > 0) {
 							appliedFixes.push(
 								`Cleared cooldown on ${staleSummary.cooldownsCleared} recovered account(s).`,
@@ -219,18 +257,14 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 						}
 					} catch (error) {
 						fixErrors.push(
-							`Failed to persist refresh updates: ${
+							`Failed to persist stale-state repairs: ${
 								error instanceof Error ? error.message : String(error)
 							}`,
 						);
 					}
-				}
 
-				// Stale TUI quota cache can reference an account index/count that no
-				// longer matches the pool, making diagnostics misleading (#171).
-				// Only clear it when the repair actually changed account state, so a
-				// run where every refresh failed does not report a phantom fix.
-				if (changedByRefresh) {
+					// Stale TUI quota cache can reference an account index/count that no
+					// longer matches the pool, making diagnostics misleading (#171).
 					try {
 						await clearTuiQuotaSnapshot();
 						appliedFixes.push("Cleared stale TUI quota cache.");
@@ -245,9 +279,6 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 					}
 				}
 
-				// Surface a clear next step when one or more accounts could not be
-				// refreshed: the credential is dead and only re-login fixes it. Without
-				// this the user sees no eligible account but no cause (issue #171).
 				if (reloginNeeded.length > 0) {
 					// Re-login is a MANUAL action, not an applied fix — keep it in fixErrors
 					// so JSON consumers reading autoFix.appliedFixes are not misled.
@@ -272,15 +303,22 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 						});
 					const best = eligible[0];
 					if (best) {
-						const currentActive = resolveActiveIndex(storage, "codex");
-						if (best.index !== currentActive) {
-							storage.activeIndex = best.index;
-							storage.activeIndexByFamily =
-								storage.activeIndexByFamily ?? {};
-							for (const family of MODEL_FAMILIES) {
-								storage.activeIndexByFamily[family] = best.index;
-							}
-							await saveAccounts(storage);
+						const switched = await withAccountStorageTransaction(
+							async (current, persist) => {
+								if (!current) return false;
+								const currentActive = resolveActiveIndex(current, "codex");
+								if (best.index === currentActive) return false;
+								current.activeIndex = best.index;
+								current.activeIndexByFamily =
+									current.activeIndexByFamily ?? {};
+								for (const family of MODEL_FAMILIES) {
+									current.activeIndexByFamily[family] = best.index;
+								}
+								await persist(current);
+								return true;
+							},
+						);
+						if (switched) {
 							appliedFixes.push(
 								`Switched active account to ${best.index + 1} (best eligible).`,
 							);
@@ -304,7 +342,19 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 					accountManagerPromiseRef.current =
 						Promise.resolve(reloadedManager);
 				}
+
+				// The initial diagnostics snapshot was taken before token verification.
+				// Reload after fixes so the reported health never contradicts live
+				// refresh results (e.g. "8 healthy" alongside eight invalid tokens).
+				diagnostics = await loadDiagnostics(extraFindings);
+				if (verificationFailures > 0 && diagnostics.summary.healthy > 0) {
+					diagnostics.summary.healthy = Math.max(
+						0,
+						diagnostics.summary.healthy - verificationFailures,
+					);
+				}
 			}
+
 			if (deep) {
 				const managerForRouting =
 					cachedAccountManagerRef.current ??
@@ -322,8 +372,8 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 						Date.now(),
 					);
 				const routingActiveIndex =
-					storage && storage.accounts.length > 0
-						? resolveActiveIndex(storage, routingFamily)
+					diagnostics.storage && diagnostics.storage.accounts.length > 0
+						? resolveActiveIndex(diagnostics.storage, routingFamily)
 						: null;
 				routingVisibility = buildRoutingVisibilitySnapshot({
 					modelFamily: routingFamily,
@@ -335,6 +385,8 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 					selectionExplainability: routingExplainability,
 				});
 			}
+
+			const { runtime, summary, findings, nextAction } = diagnostics;
 			if (outputFormat === "json") {
 				return renderJsonOutput({
 					summary: {

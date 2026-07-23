@@ -74,6 +74,17 @@ describe("codex-refresh tool masking", () => {
 			activeIndex: 0,
 			accounts: [{ email: "user@example.com", refreshToken: "r1" }],
 		} as never);
+		vi.mocked(withAccountStorageTransaction).mockImplementation(
+			async (handler) =>
+				handler(
+					{
+						version: 3,
+						activeIndex: 0,
+						accounts: [{ email: "user@example.com", refreshToken: "r1" }],
+					} as never,
+					async () => {},
+				),
+		);
 
 		const tool = createCodexRefreshTool(buildCtx(true));
 		const output = (await tool.execute({}, {} as never)) as string;
@@ -88,6 +99,17 @@ describe("codex-refresh tool masking", () => {
 			activeIndex: 0,
 			accounts: [{ email: "user@example.com", refreshToken: "r1" }],
 		} as never);
+		vi.mocked(withAccountStorageTransaction).mockImplementation(
+			async (handler) =>
+				handler(
+					{
+						version: 3,
+						activeIndex: 0,
+						accounts: [{ email: "user@example.com", refreshToken: "r1" }],
+					} as never,
+					async () => {},
+				),
+		);
 
 		const tool = createCodexRefreshTool(buildCtx(false));
 		const output = (await tool.execute({}, {} as never)) as string;
@@ -225,14 +247,17 @@ describe("codex-refresh tool concurrency (lost-update regression)", () => {
 		);
 
 		const tool = createCodexRefreshTool(buildCtx(false));
-		await tool.execute({}, {} as never);
-
-		expect(persisted).toBeDefined();
-		const persistedAccount = persisted!.accounts[0]!;
+		const output = (await tool.execute({}, {} as never)) as string;
 
 		// The stale outcome (keyed on "old-refresh") must NOT overwrite the
-		// externally-rotated token -- we cannot know which chain is live.
-		expect(persistedAccount.refreshToken).toBe("externally-rotated-refresh");
-		expect(persistedAccount.tokenRotatedAt).toBe(999);
+		// externally-rotated token -- we cannot know which chain is live. The
+		// transaction rejects without persisting, and the tool reports a failure.
+		expect(persisted).toBeUndefined();
+		expect(concurrentStorage.accounts[0]?.refreshToken).toBe(
+			"externally-rotated-refresh",
+		);
+		expect(concurrentStorage.accounts[0]?.tokenRotatedAt).toBe(999);
+		expect(output).toContain("Refresh token changed concurrently");
+		expect(output).toContain("0 refreshed, 1 failed");
 	});
 });

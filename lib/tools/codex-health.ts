@@ -5,7 +5,7 @@
 
 import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
 import { loadAccounts } from "../storage.js";
-import { queuedRefresh } from "../refresh-queue.js";
+import { AccountManager } from "../accounts.js";
 import {
 	findDisabledAccountsWithFreshCredential,
 	findDisabledTokenSourceDuplicates,
@@ -13,6 +13,10 @@ import {
 } from "../accounts/stale-state.js";
 import { formatUiHeader, formatUiItem, paintUiText } from "../ui/format.js";
 import { normalizeToolOutputFormat, renderJsonOutput } from "../runtime.js";
+import {
+	buildRefreshInputs,
+	refreshAndPersistAccount,
+} from "./refresh-account.js";
 import type { ToolContext } from "./index.js";
 
 export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
@@ -22,6 +26,8 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 		resolveMaskEmail,
 		getStatusMarker,
 		buildJsonAccountIdentity,
+		cachedAccountManagerRef,
+		accountManagerPromiseRef,
 	} = ctx;
 	return tool({
 		description:
@@ -58,6 +64,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 						totalAccounts: 0,
 						healthyCount: 0,
 						unhealthyCount: 0,
+						skippedCount: 0,
 						accounts: [],
 					});
 				}
@@ -79,46 +86,46 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 
 			let healthyCount = 0;
 			let unhealthyCount = 0;
+			let skippedCount = 0;
+			const inputs = buildRefreshInputs(storage.accounts);
 
-			for (let i = 0; i < storage.accounts.length; i++) {
+			for (let i = 0; i < inputs.length; i++) {
+				const input = inputs[i];
 				const account = storage.accounts[i];
-				if (!account) continue;
+				if (!input || !account) continue;
 
 				const label = formatCommandAccountLabel(account, i);
 				const displayLabel = formatCommandAccountLabel(account, i, { maskEmail });
-				try {
-					const refreshResult = await queuedRefresh(account.refreshToken);
-					if (refreshResult.type === "success") {
-						jsonAccounts.push({
-							...buildJsonAccountIdentity(i, {
-								includeSensitive: includeSensitiveOutput,
-								account,
-								label,
-							}),
-							status: "healthy",
-						});
-						results.push(
-							`  ${getStatusMarker(ui, "ok")} ${displayLabel}: Healthy`,
-						);
-						healthyCount++;
-					} else {
-						jsonAccounts.push({
-							...buildJsonAccountIdentity(i, {
-								includeSensitive: includeSensitiveOutput,
-								account,
-								label,
-							}),
-							status: "unhealthy",
-							error: refreshResult.message ?? refreshResult.reason,
-						});
-						results.push(
-							`  ${getStatusMarker(ui, "error")} ${displayLabel}: Token refresh failed`,
-						);
-						unhealthyCount++;
-					}
-				} catch (error) {
-					const errorMsg =
-						error instanceof Error ? error.message : String(error);
+				const outcome = await refreshAndPersistAccount(input);
+
+				if (outcome.status === "refreshed") {
+					jsonAccounts.push({
+						...buildJsonAccountIdentity(i, {
+							includeSensitive: includeSensitiveOutput,
+							account,
+							label,
+						}),
+						status: "healthy",
+					});
+					results.push(
+						`  ${getStatusMarker(ui, "ok")} ${displayLabel}: Healthy`,
+					);
+					healthyCount++;
+				} else if (outcome.status === "skipped") {
+					jsonAccounts.push({
+						...buildJsonAccountIdentity(i, {
+							includeSensitive: includeSensitiveOutput,
+							account,
+							label,
+						}),
+						status: "skipped",
+						error: "Account is disabled",
+					});
+					results.push(
+						`  ${getStatusMarker(ui, "warning")} ${displayLabel}: Skipped (disabled)`,
+					);
+					skippedCount++;
+				} else {
 					jsonAccounts.push({
 						...buildJsonAccountIdentity(i, {
 							includeSensitive: includeSensitiveOutput,
@@ -126,23 +133,29 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 							label,
 						}),
 						status: "unhealthy",
-						error: errorMsg.slice(0, 120),
+						error: outcome.error,
 					});
 					results.push(
-						`  ${getStatusMarker(ui, "error")} ${displayLabel}: Error - ${errorMsg.slice(0, 120)}`,
+						`  ${getStatusMarker(ui, "error")} ${displayLabel}: ${outcome.error}`,
 					);
 					unhealthyCount++;
 				}
 			}
 
+			if (cachedAccountManagerRef.current) {
+				const reloadedManager = await AccountManager.loadFromDisk();
+				cachedAccountManagerRef.current = reloadedManager;
+				accountManagerPromiseRef.current = Promise.resolve(reloadedManager);
+			}
+
 			results.push("");
 			results.push(
-				`Summary: ${healthyCount} healthy, ${unhealthyCount} unhealthy`,
+				`Summary: ${healthyCount} healthy, ${unhealthyCount} unhealthy, ${skippedCount} skipped`,
 			);
 
 			// Surface recoverable stale state and disabled token-source duplicates
-			// (issue #171). codex-health is read-only, so it points the user at the
-			// repair (`codex-doctor --fix` / `codex-remove`) rather than mutating.
+			// (issue #171). Token verification is destructive to single-use refresh
+			// tokens, but this tool persists rotations before reporting health.
 			const staleRecoverable = findStaleRecoverableAccounts(storage.accounts);
 			const duplicateSlots = findDisabledTokenSourceDuplicates(storage.accounts);
 			const staleSlots = staleRecoverable.map((index) => index + 1);
@@ -170,6 +183,7 @@ export function createCodexHealthTool(ctx: ToolContext): ToolDefinition {
 					totalAccounts: storage.accounts.length,
 					healthyCount,
 					unhealthyCount,
+					skippedCount,
 					staleRecoverableSlots: staleSlots,
 					disabledDuplicateSlots: dupSlots,
 					disabledWithFreshCredentialSlots: absorbedSlots,
