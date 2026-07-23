@@ -1,7 +1,8 @@
 import http from "node:http";
+import { randomBytes } from "node:crypto";
 import type { OAuthServerInfo } from "../types.js";
 import { logError, logWarn } from "../logger.js";
-import { oauthSuccessHtml } from "../oauth-success.js";
+import { renderOAuthSuccessHtml } from "../oauth-success.js";
 import {
 	OAUTH_CALLBACK_BIND_HOSTS,
 	OAUTH_CALLBACK_BIND_URL,
@@ -53,12 +54,18 @@ export async function startLocalOAuthServer({ state }: { state: string }): Promi
 				res.end("Missing authorization code");
 				return;
 			}
+			const styleNonce = randomBytes(18).toString("base64");
 			res.statusCode = 200;
 			res.setHeader("Content-Type", "text/html; charset=utf-8");
+			res.setHeader("Cache-Control", "no-store");
+			res.setHeader("Referrer-Policy", "no-referrer");
 			res.setHeader("X-Frame-Options", "DENY");
 			res.setHeader("X-Content-Type-Options", "nosniff");
-			res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'none'");
-			res.end(oauthSuccessHtml);
+			res.setHeader(
+				"Content-Security-Policy",
+				`default-src 'none'; style-src 'nonce-${styleNonce}'; script-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+			);
+			res.end(renderOAuthSuccessHtml(styleNonce));
 			lastCode = code;
 			for (const server of allServers) {
 				server._lastCode = code;

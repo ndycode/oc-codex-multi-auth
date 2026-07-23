@@ -30,7 +30,24 @@ describe("OAuth Server Integration", () => {
 		const response = await fetch(callbackUrl);
 		expect(response.status).toBe(200);
 		expect(response.headers.get("content-type")).toContain("text/html");
-		expect(await response.text()).toContain("ACCESS GRANTED");
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+
+		const contentSecurityPolicy = response.headers.get("content-security-policy");
+		expect(contentSecurityPolicy).toContain("default-src 'none'");
+		expect(contentSecurityPolicy).toContain("script-src 'none'");
+		expect(contentSecurityPolicy).toContain("frame-ancestors 'none'");
+
+		const nonce = contentSecurityPolicy?.match(/style-src 'nonce-([^']+)'/)?.[1];
+		expect(nonce).toBeTruthy();
+
+		const body = await response.text();
+		expect(body).toContain(`<style nonce="${nonce}">`);
+		expect(body).toContain("Authentication complete");
+		expect(body).toContain("You can close this tab.");
+		expect(body).not.toContain("<script");
+		expect(body).not.toContain("fonts.googleapis.com");
+		expect(body).not.toMatch(/\\u[0-9a-f]{4}/i);
 
 		// Server should have captured the code
 		const result = await serverInfo.waitForCode(testState);

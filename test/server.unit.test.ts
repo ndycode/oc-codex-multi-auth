@@ -80,7 +80,7 @@ vi.mock('node:http', () => {
 });
 
 vi.mock('../lib/oauth-success.js', () => ({
-	oauthSuccessHtml: '<html>Success</html>',
+	renderOAuthSuccessHtml: () => '<html>Success</html>',
 }));
 
 vi.mock('../lib/logger.js', () => ({
@@ -216,11 +216,15 @@ describe('OAuth Server Unit Tests', () => {
 
 			expect(res.statusCode).toBe(200);
 			expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'text/html; charset=utf-8');
+			expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+			expect(res.setHeader).toHaveBeenCalledWith('Referrer-Policy', 'no-referrer');
 			expect(res.setHeader).toHaveBeenCalledWith('X-Frame-Options', 'DENY');
 			expect(res.setHeader).toHaveBeenCalledWith('X-Content-Type-Options', 'nosniff');
 			expect(res.setHeader).toHaveBeenCalledWith(
 				'Content-Security-Policy',
-				"default-src 'self'; script-src 'none'"
+				expect.stringMatching(
+					/^default-src 'none'; style-src 'nonce-[^']+'; script-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'$/
+				)
 			);
 			expect(res.end).toHaveBeenCalledWith('<html>Success</html>');
 		});
