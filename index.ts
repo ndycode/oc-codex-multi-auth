@@ -1471,13 +1471,9 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
                                 await saveAccounts(storage);
 								await clearPromptQuotaCache();
 
-                                // Reload manager from disk so we don't overwrite newer rotated
-                                // refresh tokens with stale in-memory state.
-                                if (cachedAccountManager) {
-                                        const reloadedManager = await AccountManager.loadFromDisk();
-                                        cachedAccountManager = reloadedManager;
-                                        accountManagerPromise = Promise.resolve(reloadedManager);
-                                }
+								// Reload manager from disk so we don't overwrite newer rotated
+								// refresh tokens with stale in-memory state.
+								await reloadCachedAccountManager();
 
                                 await showToast(`Switched to account ${index + 1}`, "info");
                         }

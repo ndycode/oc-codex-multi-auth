@@ -449,6 +449,8 @@ vi.mock("../lib/accounts.js", () => {
 		}
 
 		saveToDiskDebounced() {}
+		async flushPendingSave() {}
+		disposeShutdownHandler() {}
 		updateFromAuth() {}
 		clearAuthFailures() {}
 		incrementAuthFailures() { return 1; }
@@ -2178,6 +2180,9 @@ describe("OpenAIOAuthPlugin", () => {
 			vi.mocked(withAccountStorageTransaction).mockImplementation(
 				async (callback) => {
 					transactionCount += 1;
+					// Two refresh persists and one stale-state clear precede the
+					// auto-switch persist, so transaction 4 must resolve identity
+					// against the reordered storage snapshot.
 					if (transactionCount !== 4) {
 						return originalTransaction!(callback);
 					}
@@ -2200,6 +2205,7 @@ describe("OpenAIOAuthPlugin", () => {
 
 			expect(mockStorage.accounts[mockStorage.activeIndex]?.accountId).toBe("best");
 			expect(mockStorage.activeIndex).toBe(2);
+			expect(transactionCount).toBe(4);
 			vi.mocked(withAccountStorageTransaction).mockImplementation(originalTransaction);
 		});
 
@@ -6140,12 +6146,14 @@ describe("OpenAIOAuthPlugin event handler edge cases", () => {
 		});
 	});
 
-	it("reloads account manager from disk when handling account.select", async () => {
+	it("flushes and disposes the cached manager when handling account.select", async () => {
 		const mockClient = createMockClient();
 		const { OpenAIOAuthPlugin } = await import("../index.js");
 		const plugin = await OpenAIOAuthPlugin({ client: mockClient } as never) as unknown as PluginType;
 		const { AccountManager } = await import("../lib/accounts.js");
 		const loadFromDiskSpy = vi.spyOn(AccountManager, "loadFromDisk");
+		const flushSpy = vi.spyOn(AccountManager.prototype, "flushPendingSave");
+		const disposeSpy = vi.spyOn(AccountManager.prototype, "disposeShutdownHandler");
 
 		const getAuth = async () => ({
 			type: "oauth" as const,
@@ -6157,12 +6165,62 @@ describe("OpenAIOAuthPlugin event handler edge cases", () => {
 
 		await plugin.auth.loader(getAuth, { options: {}, models: {} });
 		loadFromDiskSpy.mockClear();
+		flushSpy.mockClear();
+		disposeSpy.mockClear();
 
 		await plugin.event({
 			event: { type: "account.select", properties: { index: 1 } },
 		});
 
+		expect(flushSpy).toHaveBeenCalledTimes(1);
 		expect(loadFromDiskSpy).toHaveBeenCalledTimes(1);
+		expect(disposeSpy).toHaveBeenCalledTimes(1);
+		expect(flushSpy.mock.invocationCallOrder[0]).toBeLessThan(
+			loadFromDiskSpy.mock.invocationCallOrder[0]!,
+		);
+		expect(loadFromDiskSpy.mock.invocationCallOrder[0]).toBeLessThan(
+			disposeSpy.mock.invocationCallOrder[0]!,
+		);
+	});
+
+	it("keeps the cached manager when an account.select reload fails", async () => {
+		const mockClient = createMockClient();
+		const { OpenAIOAuthPlugin } = await import("../index.js");
+		const plugin = await OpenAIOAuthPlugin({ client: mockClient } as never) as unknown as PluginType;
+		const { AccountManager } = await import("../lib/accounts.js");
+		const loadFromDiskSpy = vi.spyOn(AccountManager, "loadFromDisk");
+		const flushSpy = vi.spyOn(AccountManager.prototype, "flushPendingSave");
+		const disposeSpy = vi.spyOn(AccountManager.prototype, "disposeShutdownHandler");
+
+		const getAuth = async () => ({
+			type: "oauth" as const,
+			access: "access-token",
+			refresh: "refresh-token",
+			expires: Date.now() + 60_000,
+			multiAccount: true,
+		});
+
+		await plugin.auth.loader(getAuth, { options: {}, models: {} });
+		loadFromDiskSpy.mockClear();
+		flushSpy.mockClear();
+		disposeSpy.mockClear();
+		loadFromDiskSpy.mockRejectedValueOnce(new Error("reload failed"));
+
+		await plugin.event({
+			event: { type: "account.select", properties: { index: 1 } },
+		});
+
+		expect(flushSpy).toHaveBeenCalledTimes(1);
+		expect(loadFromDiskSpy).toHaveBeenCalledTimes(1);
+		expect(disposeSpy).not.toHaveBeenCalled();
+
+		await plugin.event({
+			event: { type: "account.select", properties: { index: 0 } },
+		});
+
+		expect(flushSpy).toHaveBeenCalledTimes(2);
+		expect(loadFromDiskSpy).toHaveBeenCalledTimes(2);
+		expect(disposeSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("handles openai.account.select with openai provider", async () => {
