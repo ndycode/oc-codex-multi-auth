@@ -79,6 +79,7 @@ import {
 	getPidOffsetEnabled,
 	getRotationStrategy,
 	getModelAccountPool,
+	getModelAccountPoolMode,
 	getFetchTimeoutMs,
 	getStreamStallTimeoutMs,
 	getCodexTuiV2,
@@ -488,7 +489,10 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				ui,
 				"Account pool",
 				formatRoutingValue(routing.accountPoolMode),
-				routing.accountPoolMode === "general-fallback" ? "warning" : "muted",
+				routing.accountPoolMode === "general-fallback" ||
+					routing.accountPoolMode === "strict-unavailable"
+					? "warning"
+					: "muted",
 			),
 		);
 		lines.push(
@@ -2037,6 +2041,9 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 						let restartAccountTraversalWithFallback = false;
 						let restartAccountTraversalAfterWorkspaceDeactivation = false;
 						const preferredAccountIds = getModelAccountPool(pluginConfig, model);
+						const accountPoolMode = getModelAccountPoolMode(pluginConfig, model);
+						const strictAccountPool =
+							preferredAccountIds.length > 0 && accountPoolMode === "strict";
 
 			while (attempted.size < Math.max(1, accountCount)) {
 				const selectionExplainability = accountManager.getSelectionExplainability(
@@ -2058,6 +2065,7 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 					fallbackTo,
 					fallbackReason,
 					configuredAccountPoolSize: preferredAccountIds.length,
+					accountPoolMode: strictAccountPool ? "strict" : undefined,
 				};
 				const account = accountManager.getAccountForStrategy(
 					rotationStrategy,
@@ -2065,6 +2073,8 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 					model,
 					{ pidOffsetEnabled },
 					preferredAccountIds,
+					accountPoolMode,
+					attempted,
 				);
 				if (!account || attempted.has(account.index)) {
 					break;
@@ -2084,7 +2094,9 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 									fallbackTo,
 					fallbackReason,
 					accountPoolMode:
-						preferredAccountIds.length === 0
+						strictAccountPool
+							? "strict"
+							: preferredAccountIds.length === 0
 							? "general"
 							: account.accountId !== undefined &&
 								preferredAccountIds.includes(account.accountId)
@@ -2996,6 +3008,46 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 						}
 						if (restartAccountTraversalAfterWorkspaceDeactivation) {
 							continue;
+						}
+
+						if (strictAccountPool) {
+							const poolWaitMs = accountManager.getMinWaitTimeForFamily(
+								modelFamily,
+								model,
+								preferredAccountIds,
+							);
+							const effectiveModel = model ?? requestedModel ?? "requested model";
+							const waitDetail =
+								poolWaitMs > 0
+									? ` Try again in ${formatWaitTime(poolWaitMs)}.`
+									: " Check the pooled accounts with `codex-health`.";
+							const message =
+								`Strict account pool unavailable for ${effectiveModel}. ` +
+								`None of its ${preferredAccountIds.length} configured account(s) is selectable.` +
+								waitDetail;
+							if (runtimeMetrics.lastSelectionSnapshot) {
+								runtimeMetrics.lastSelectionSnapshot = {
+									...runtimeMetrics.lastSelectionSnapshot,
+									accountPoolMode: "strict-unavailable",
+								};
+							}
+							runtimeMetrics.failedRequests++;
+							runtimeMetrics.lastError = message;
+							runtimeMetrics.lastErrorCategory = "strict-pool-unavailable";
+							return new Response(
+								JSON.stringify({
+									error: {
+										code: "strict_pool_unavailable",
+										message,
+									},
+								}),
+								{
+									status: poolWaitMs > 0 ? 429 : 503,
+									headers: {
+										"content-type": "application/json; charset=utf-8",
+									},
+								},
+							);
 						}
 
 										const waitMs = accountManager.getMinWaitTimeForFamily(modelFamily, model);

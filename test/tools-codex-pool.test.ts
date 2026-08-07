@@ -9,6 +9,9 @@ vi.mock("../lib/storage.js", () => ({
 }));
 
 vi.mock("../lib/config.js", () => ({
+	getModelAccountPoolMode: vi.fn((config, model) =>
+		config.modelAccountPoolModes?.[model] ?? "preferred",
+	),
 	loadPluginConfig: vi.fn(),
 	updateModelAccountPool: vi.fn(),
 }));
@@ -64,6 +67,7 @@ describe("codex-pool tool", () => {
 			modelAccountPools: {
 				"gpt-5.6-sol": ["account-one", "missing-account"],
 			},
+			modelAccountPoolModes: { "gpt-5.6-sol": "strict" },
 		});
 	});
 
@@ -75,6 +79,7 @@ describe("codex-pool tool", () => {
 		const parsed = JSON.parse(output as string) as {
 			pools: Array<{
 				configuredCount: number;
+				poolMode: string;
 				accounts: Array<Record<string, unknown>>;
 				unresolvedCount: number;
 				unresolvedAccountIds?: string[];
@@ -83,6 +88,7 @@ describe("codex-pool tool", () => {
 
 		expect(parsed.pools[0]).toMatchObject({
 			configuredCount: 2,
+			poolMode: "strict",
 			unresolvedCount: 1,
 		});
 		expect(parsed.pools[0]?.accounts[0]).toMatchObject({ index: 1 });
@@ -113,6 +119,8 @@ describe("codex-pool tool", () => {
 			model: "gpt-5.6-sol",
 			previousAccountIds: [],
 			accountIds: ["account-two", "account-one"],
+			previousPoolMode: "preferred",
+			poolMode: "preferred",
 			changed: true,
 			dryRun: false,
 		});
@@ -130,7 +138,7 @@ describe("codex-pool tool", () => {
 			"gpt-5.6-sol",
 			"set",
 			["account-two", "account-one"],
-			{ dryRun: undefined },
+			{ dryRun: undefined, poolMode: undefined },
 		);
 		expect(output).toContain("Restart OpenCode");
 	});
@@ -140,6 +148,8 @@ describe("codex-pool tool", () => {
 			model: "gpt-5.6-sol",
 			previousAccountIds: ["account-one"],
 			accountIds: ["account-one", "account-two"],
+			previousPoolMode: "preferred",
+			poolMode: "preferred",
 			changed: true,
 			dryRun: true,
 		});
@@ -158,7 +168,7 @@ describe("codex-pool tool", () => {
 			"gpt-5.6-sol",
 			"add",
 			["account-two"],
-			{ dryRun: true },
+			{ dryRun: true, poolMode: undefined },
 		);
 		expect(output).not.toContain("Restart OpenCode");
 	});
@@ -169,6 +179,8 @@ describe("codex-pool tool", () => {
 			model: "gpt-5.6-sol",
 			previousAccountIds: ["account-one"],
 			accountIds: [],
+			previousPoolMode: "strict",
+			poolMode: "preferred",
 			changed: true,
 			dryRun: false,
 		});
@@ -182,8 +194,37 @@ describe("codex-pool tool", () => {
 			"gpt-5.6-sol",
 			"clear",
 			[],
-			{ dryRun: undefined },
+			{ dryRun: undefined, poolMode: undefined },
 		);
+	});
+
+	it("switches an existing pool between preferred and strict", async () => {
+		vi.mocked(updateModelAccountPool).mockResolvedValue({
+			model: "gpt-5.6-sol",
+			previousAccountIds: ["account-one"],
+			accountIds: ["account-one"],
+			previousPoolMode: "preferred",
+			poolMode: "strict",
+			changed: true,
+			dryRun: false,
+		});
+
+		const output = await createCodexPoolTool(buildCtx()).execute(
+			{
+				action: "set-mode",
+				model: "gpt-5.6-sol",
+				poolMode: "strict",
+			},
+			{} as never,
+		);
+
+		expect(updateModelAccountPool).toHaveBeenCalledWith(
+			"gpt-5.6-sol",
+			"set-mode",
+			[],
+			{ dryRun: undefined, poolMode: "strict" },
+		);
+		expect(output).toContain("Pool mode: strict");
 	});
 
 	it("rejects invalid account numbers before writing", async () => {

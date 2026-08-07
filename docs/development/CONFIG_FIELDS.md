@@ -228,6 +228,7 @@ Defaults come from `lib/config.ts` / `lib/schemas.ts`. Environment overrides win
 | `fastSessionMaxInputItems` | `30` | `CODEX_AUTH_FAST_SESSION_MAX_INPUT_ITEMS` | Max input items kept in fast mode |
 | `rotationStrategy` | `hybrid` | `CODEX_AUTH_ROTATION_STRATEGY` | `hybrid`, `sticky`, or `round-robin` account selection |
 | `modelAccountPools` | `{}` | (file only) | Preferred stable account IDs per effective model |
+| `modelAccountPoolModes` | `{}` | (file only) | Per-model `preferred` or `strict` pool policy |
 | `retryProfile` | `balanced` | `CODEX_AUTH_RETRY_PROFILE` | `conservative` / `balanced` / `aggressive` |
 | `retryBudgetOverrides` | `{}` | (file only) | Per-class budget overrides |
 | `retryAllAccountsRateLimited` | `true` | `CODEX_AUTH_RETRY_ALL_RATE_LIMITED` | Wait/retry when every account is limited |
@@ -262,20 +263,24 @@ The plugin runtime config can map effective model IDs to preferred stable accoun
   "modelAccountPools": {
     "gpt-5.6-sol": ["org-example-account-id"],
     "gpt-5.5": ["org-another-account-id"]
+  },
+  "modelAccountPoolModes": {
+    "gpt-5.6-sol": "strict"
   }
 }
 ```
 
 The request pipeline resolves the pool after model normalization. All rotation
 strategies restrict selection to healthy accounts in the preferred pool while
-one is available. If the configured IDs are unknown or every preferred account
-is disabled, cooling down, rate-limited, or locally depleted, selection falls
-back to the general account pool. Empty lists and unmapped models use the
-general pool directly.
+one is available. `modelAccountPoolModes` defaults each mapping to `preferred`,
+which falls back to the general pool when the mapping is unavailable. A
+`strict` mapping never leaves its configured accounts and fails immediately.
+Empty lists and unmapped models use the general pool directly.
 
 `codex-pool` is the supported mutation surface. It accepts 1-based account
 numbers for `set`, `add`, and `remove`, but resolves and atomically persists
-only stable account IDs. `clear` removes a model mapping, and every mutation
+only stable account IDs. `set-mode` switches between `preferred` and `strict`,
+`clear` removes a model mapping and its mode, and every mutation
 supports a dry-run preview. Writes preserve unrelated raw config fields and
 refuse to replace malformed JSON or an invalid existing pool.
 

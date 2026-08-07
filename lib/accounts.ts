@@ -244,6 +244,8 @@ export class AccountManager {
 		model?: string | null,
 		options?: HybridSelectionOptions,
 		preferredAccountIds?: readonly string[],
+		poolMode: "preferred" | "strict" = "preferred",
+		excludedIndices?: ReadonlySet<number>,
 	): ManagedAccount | null {
 		switch (strategy) {
 			case "sticky":
@@ -251,12 +253,16 @@ export class AccountManager {
 					family,
 					model,
 					preferredAccountIds,
+					poolMode === "strict",
+					excludedIndices,
 				);
 			case "round-robin":
 				return this.rotation.getCurrentOrNextForFamily(
 					family,
 					model,
 					preferredAccountIds,
+					poolMode === "strict",
+					excludedIndices,
 				);
 			default:
 				return this.rotation.getCurrentOrNextForFamilyHybrid(
@@ -264,6 +270,8 @@ export class AccountManager {
 					model,
 					options,
 					preferredAccountIds,
+					poolMode === "strict",
+					excludedIndices,
 				);
 		}
 	}
@@ -366,8 +374,12 @@ export class AccountManager {
 		return this.rotation.getMinWaitTimeForFamily("codex");
 	}
 
-	getMinWaitTimeForFamily(family: ModelFamily, model?: string | null): number {
-		return this.rotation.getMinWaitTimeForFamily(family, model);
+	getMinWaitTimeForFamily(
+		family: ModelFamily,
+		model?: string | null,
+		accountIds?: readonly string[],
+	): number {
+		return this.rotation.getMinWaitTimeForFamily(family, model, accountIds);
 	}
 
 	// ----- persistence delegations -----

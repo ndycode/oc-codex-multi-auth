@@ -37,7 +37,7 @@ Registered from **24 per-file factories** under `lib/tools/` via `createToolRegi
 | `codex-label` | Set a stable display label for an account |
 | `codex-tag` | Set or clear account tags for grouping/filtering |
 | `codex-note` | Attach a private note to an account |
-| `codex-pool` | Manage `modelAccountPools` (preferred accounts per model) |
+| `codex-pool` | Manage model account pools and `preferred`/`strict` routing modes |
 | `codex-remove` | Remove a saved account (confirm required) |
 | `codex-refresh` | Refresh tokens / re-auth guidance for an account |
 
@@ -72,6 +72,7 @@ codex-pool
 codex-pool action="set" model="gpt-5.6-sol" accounts=[7,8]
 codex-pool action="add" model="gpt-5.6-sol" accounts=[9]
 codex-pool action="remove" model="gpt-5.6-sol" accounts=[7]
+codex-pool action="set-mode" model="gpt-5.6-sol" poolMode="strict"
 codex-pool action="clear" model="gpt-5.6-sol"
 codex-label index=2 label="plus-1"
 codex-tag index=2 tags="work,team-a"
@@ -104,7 +105,7 @@ Account indices are **1-based**. Destructive tools require an explicit confirm f
 | `codex-label` | `index?`, `label` (empty string clears) |
 | `codex-tag` | `index?`, `tags` (CSV; empty clears) |
 | `codex-note` | `index?`, `note` (empty clears) |
-| `codex-pool` | `action?` (`status` \| `set` \| `add` \| `remove` \| `clear`), `model?`, `accounts?` (1-based number array), `dryRun?`, `format?`, `includeSensitive?` |
+| `codex-pool` | `action?` (`status` \| `set` \| `add` \| `remove` \| `clear` \| `set-mode`), `model?`, `accounts?` (1-based number array), `poolMode?` (`preferred` \| `strict`), `dryRun?`, `format?`, `includeSensitive?` |
 | `codex-remove` | `index?`, `confirm` (must be `true` to delete) |
 | `codex-refresh` | _(none)_ |
 | `codex-health` | `format?`, `includeSensitive?` |
@@ -199,7 +200,7 @@ npx -y oc-codex-multi-auth@latest warm
 ## Related runtime concepts
 
 - **Rotation:** `rotationStrategy` = `hybrid` (default) | `sticky` | `round-robin` in `~/.opencode/openai-codex-auth-config.json` or `CODEX_AUTH_ROTATION_STRATEGY`.
-- **Model pools:** `modelAccountPools` + `codex-pool` prefer specific accounts per effective model ID, then fall back to the general pool.
+- **Model pools:** `modelAccountPools` + `codex-pool` route effective model IDs through specific accounts. `preferred` mode falls back to the general pool; `strict` mode never leaves its configured pool.
 - **Per-project accounts:** default `true` under `~/.opencode/projects/<project-key>/`.
 - **Stateless Codex contract:** `store: false` and `reasoning.encrypted_content`.
 - **GPT-5.6:** responses-lite path; client identity defaults to host/opencode for 5.6.

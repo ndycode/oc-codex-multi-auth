@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { AccountManager } from "../lib/accounts.js";
 import { resetTrackers } from "../lib/rotation.js";
-import { getModelAccountPool, getRotationStrategy } from "../lib/config.js";
+import {
+	getModelAccountPool,
+	getModelAccountPoolMode,
+	getRotationStrategy,
+} from "../lib/config.js";
 import type { PluginConfig } from "../lib/types.js";
 import type { AccountStorageV3 } from "../lib/storage.js";
 import type { ModelFamily } from "../lib/prompts/codex.js";
@@ -98,6 +102,14 @@ describe("model account pool config", () => {
 
 	it("returns an empty pool for unmapped models", () => {
 		expect(getModelAccountPool({ modelAccountPools: {} } as PluginConfig, "gpt-5.5")).toEqual([]);
+	});
+
+	it("defaults pool mode to preferred and resolves strict case-insensitively", () => {
+		const config = {
+			modelAccountPoolModes: { "GPT-5.6-SOL": "strict" },
+		} as PluginConfig;
+		expect(getModelAccountPoolMode(config, "gpt-5.6-sol")).toBe("strict");
+		expect(getModelAccountPoolMode(config, "gpt-5.6-terra")).toBe("preferred");
 	});
 });
 
@@ -223,6 +235,50 @@ describe("strategy dispatcher (#183)", () => {
 			);
 			expect(selected).not.toBeNull();
 			expect(selected?.accountId).not.toBe("account-id-2");
+		},
+	);
+
+	it.each(["sticky", "round-robin", "hybrid"] as const)(
+		"%s does not leave an unavailable strict pool",
+		(strategy) => {
+			manager.setAccountEnabled(1, false);
+			const selected = manager.getAccountForStrategy(
+				strategy,
+				FAMILY,
+				"gpt-5.6-sol",
+				undefined,
+				["account-id-2"],
+				"strict",
+			);
+			expect(selected).toBeNull();
+		},
+	);
+
+	it("does not leave a strict pool whose configured IDs are unknown", () => {
+		const selected = manager.getAccountForStrategy(
+			"sticky",
+			FAMILY,
+			"gpt-5.6-sol",
+			undefined,
+			["unknown-account-id"],
+			"strict",
+		);
+		expect(selected).toBeNull();
+	});
+
+	it.each(["sticky", "round-robin", "hybrid"] as const)(
+		"%s tries another strict-pool account after a request-local attempt",
+		(strategy) => {
+			const selected = manager.getAccountForStrategy(
+				strategy,
+				FAMILY,
+				"gpt-5.6-sol",
+				undefined,
+				["account-id-1", "account-id-2"],
+				"strict",
+				new Set([0]),
+			);
+			expect(selected?.accountId).toBe("account-id-2");
 		},
 	);
 

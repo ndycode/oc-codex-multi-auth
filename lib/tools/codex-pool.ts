@@ -2,7 +2,9 @@
 
 import { tool, type ToolDefinition } from "@opencode-ai/plugin/tool";
 import {
+	getModelAccountPoolMode,
 	loadPluginConfig,
+	type ModelAccountPoolMode,
 	updateModelAccountPool,
 	type ModelAccountPoolMutation,
 } from "../config.js";
@@ -17,6 +19,7 @@ type CodexPoolArgs = {
 	model?: string;
 	accounts?: number[];
 	dryRun?: boolean;
+	poolMode?: string;
 	format?: string;
 	includeSensitive?: boolean;
 };
@@ -27,12 +30,22 @@ function normalizePoolAction(action?: string): CodexPoolAction {
 		action === "set" ||
 		action === "add" ||
 		action === "remove" ||
-		action === "clear"
+		action === "clear" ||
+		action === "set-mode"
 	) {
 		return action;
 	}
 	throw new Error(
-		`Invalid action "${action}". Expected "status", "set", "add", "remove", or "clear".`,
+		`Invalid action "${action}". Expected "status", "set", "add", "remove", "clear", or "set-mode".`,
+	);
+}
+
+function normalizePoolMode(mode?: string): ModelAccountPoolMode | undefined {
+	const normalized = mode?.trim().toLowerCase();
+	if (!normalized) return undefined;
+	if (normalized === "preferred" || normalized === "strict") return normalized;
+	throw new Error(
+		`Invalid pool mode "${mode}". Expected "preferred" or "strict".`,
 	);
 }
 
@@ -81,8 +94,10 @@ function buildPoolSnapshot(
 	storage: AccountStorageV3 | null,
 	ctx: ToolContext,
 	includeSensitive: boolean,
+	poolMode: ModelAccountPoolMode,
 ): {
 	model: string;
+	poolMode: ModelAccountPoolMode;
 	configuredCount: number;
 	accounts: Record<string, unknown>[];
 	unresolvedCount: number;
@@ -114,6 +129,7 @@ function buildPoolSnapshot(
 
 	return {
 		model,
+		poolMode,
 		configuredCount: accountIds.length,
 		accounts,
 		unresolvedCount: unresolvedAccountIds.length,
@@ -130,7 +146,7 @@ function renderPoolStatusText(
 	const lines = ["Model account pools"];
 	const maskEmail = ctx.resolveMaskEmail();
 	for (const pool of pools) {
-		lines.push("", pool.model);
+		lines.push("", `${pool.model} [${pool.poolMode}]`);
 		for (const identity of pool.accounts) {
 			const index = identity.zeroBasedIndex;
 			if (typeof index !== "number") continue;
@@ -160,7 +176,7 @@ export function createCodexPoolTool(ctx: ToolContext): ToolDefinition {
 			action: tool.schema
 				.string()
 				.optional()
-				.describe('"status" (default), "set", "add", "remove", or "clear".'),
+				.describe('"status" (default), "set", "add", "remove", "clear", or "set-mode".'),
 			model: tool.schema
 				.string()
 				.optional()
@@ -173,6 +189,10 @@ export function createCodexPoolTool(ctx: ToolContext): ToolDefinition {
 				.boolean()
 				.optional()
 				.describe("Preview a mutation without changing configuration."),
+			poolMode: tool.schema
+				.string()
+				.optional()
+				.describe('Pool routing mode used by "set-mode": "preferred" or "strict".'),
 			format: tool.schema
 				.string()
 				.optional()
@@ -186,11 +206,13 @@ export function createCodexPoolTool(ctx: ToolContext): ToolDefinition {
 			const action = normalizePoolAction(args.action);
 			const format = normalizeToolOutputFormat(args.format);
 			const model = normalizeModel(args.model);
+			const poolMode = normalizePoolMode(args.poolMode);
 			const storage = await loadAccounts();
 			const includeSensitive = args.includeSensitive === true;
 
 			if (action === "status") {
-				const configuredPools = loadPluginConfig().modelAccountPools ?? {};
+				const config = loadPluginConfig();
+				const configuredPools = config.modelAccountPools ?? {};
 				const entries = Object.entries(configuredPools).filter(
 					([configuredModel]) =>
 						model === undefined || configuredModel.trim().toLowerCase() === model,
@@ -202,6 +224,7 @@ export function createCodexPoolTool(ctx: ToolContext): ToolDefinition {
 						storage,
 						ctx,
 						includeSensitive,
+						getModelAccountPoolMode(config, configuredModel),
 					),
 				);
 				if (format === "json") {
@@ -214,12 +237,19 @@ export function createCodexPoolTool(ctx: ToolContext): ToolDefinition {
 			}
 
 			if (!model) throw new Error(`Model is required for action "${action}".`);
+			if (action === "set-mode" && !poolMode) {
+				throw new Error('poolMode is required for action "set-mode".');
+			}
+			if (action !== "set-mode" && poolMode) {
+				throw new Error('poolMode is only valid for action "set-mode".');
+			}
 			const accountIds =
-				action === "clear"
+				action === "clear" || action === "set-mode"
 					? []
 					: resolveAccountIds(storage, args.accounts);
 			const result = await updateModelAccountPool(model, action, accountIds, {
 				dryRun: args.dryRun,
+				poolMode,
 			});
 			const pool = buildPoolSnapshot(
 				result.model,
@@ -227,6 +257,7 @@ export function createCodexPoolTool(ctx: ToolContext): ToolDefinition {
 				storage,
 				ctx,
 				includeSensitive,
+				result.poolMode,
 			);
 			const applied = result.changed && !result.dryRun;
 			const payload = {
@@ -237,6 +268,7 @@ export function createCodexPoolTool(ctx: ToolContext): ToolDefinition {
 				dryRun: result.dryRun,
 				restartRequired: applied,
 				previousConfiguredCount: result.previousAccountIds.length,
+				previousPoolMode: result.previousPoolMode,
 				pool,
 			};
 			if (format === "json") return renderJsonOutput(payload);
@@ -246,6 +278,7 @@ export function createCodexPoolTool(ctx: ToolContext): ToolDefinition {
 				`${verb} model account pool: ${result.model}`,
 				`Previous accounts: ${result.previousAccountIds.length}`,
 				`Current accounts: ${result.accountIds.length}`,
+				`Pool mode: ${result.poolMode}`,
 			];
 			if (applied) lines.push("Restart OpenCode to apply this routing change.");
 			return lines.join("\n");

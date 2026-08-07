@@ -179,6 +179,9 @@ advanced settings go in `~/.opencode/openai-codex-auth-config.json`:
   "modelAccountPools": {
     "gpt-5.6-sol": ["org-example-account-id"]
   },
+  "modelAccountPoolModes": {
+    "gpt-5.6-sol": "strict"
+  },
   "retryProfile": "balanced",
   "retryBudgetOverrides": {
     "network": 2,
@@ -231,6 +234,7 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `fastSessionMaxInputItems` | `30` | max input items kept when fast mode is applied |
 | `rotationStrategy` | `hybrid` | account selection strategy: `hybrid` (stick while healthy, else score-select), `sticky` (drain one account first), or `round-robin` |
 | `modelAccountPools` | `{}` | optional map of effective model IDs to preferred stable account IDs; selection uses the configured pool while it has a healthy account, then falls back to the general account pool |
+| `modelAccountPoolModes` | `{}` | optional per-model `preferred` or `strict` policy; omitted models default to `preferred` |
 | `retryProfile` | `balanced` | retry budget profile for request classes (`conservative`, `balanced`, `aggressive`) |
 | `retryBudgetOverrides` | `{}` | optional per-class budget overrides (`authRefresh`, `network`, `server`, `rateLimitShort`, `rateLimitGlobal`, `emptyResponse`) |
 | `perProjectAccounts` | `true` | each project gets its own account storage |
@@ -258,15 +262,19 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 
 Use `codex-pool action="set" model="gpt-5.6-sol" accounts=[7,8]` to manage a
 pool with 1-based account numbers while persisting stable IDs. The tool also
-supports `status` (default), `add`, `remove`, `clear`, `dryRun=true`, and JSON
+supports `status` (default), `add`, `remove`, `clear`, `set-mode`, `dryRun=true`, and JSON
 output. Restart OpenCode after an applied mutation. Because this config is
 global while account storage is per-project by default, references unavailable
 in the current project are reported but not automatically pruned.
 
 Model keys are matched case-insensitively after request model normalization.
-Empty lists, unmapped models, and pools with no selectable accounts use the
-general account pool. Routing diagnostics expose the resulting mode as
-`preferred`, `general`, or `general-fallback`.
+Empty lists and unmapped models use the general account pool. A `preferred`
+pool with no selectable account falls back to the general pool. A `strict`
+pool never leaves its configured accounts and immediately returns
+`strict_pool_unavailable` instead of entering the global wait loop. Switch an
+existing pool with `codex-pool action="set-mode" model="gpt-5.6-sol"
+poolMode="strict"`. Routing diagnostics expose `general`, `preferred`,
+`general-fallback`, `strict`, or `strict-unavailable`.
 
 ### Beginner Safe Mode Behavior
 

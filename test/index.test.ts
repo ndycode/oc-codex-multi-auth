@@ -135,6 +135,7 @@ vi.mock("../lib/config.js", () => ({
 	getPidOffsetEnabled: () => false,
 	getRotationStrategy: () => "hybrid",
 	getModelAccountPool: vi.fn(() => []),
+	getModelAccountPoolMode: vi.fn(() => "preferred"),
 	getFetchTimeoutMs: () => 60000,
 	getStreamStallTimeoutMs: () => 45000,
 	getCodexTuiV2: () => false,
@@ -421,7 +422,21 @@ vi.mock("../lib/accounts.js", () => {
 			return this.accounts[0] ?? null;
 		}
 
-		getAccountForStrategy() {
+		getAccountForStrategy(
+			_strategy?: string,
+			_family?: string,
+			_model?: string,
+			_options?: unknown,
+			preferredAccountIds: readonly string[] = [],
+			poolMode: "preferred" | "strict" = "preferred",
+		) {
+			const preferred = this.accounts.find(
+				(account) =>
+					account.accountId !== undefined &&
+					preferredAccountIds.includes(account.accountId),
+			);
+			if (preferred) return preferred;
+			if (poolMode === "strict" && preferredAccountIds.length > 0) return null;
 			return this.getCurrentOrNextForFamilyHybrid();
 		}
 
@@ -3573,14 +3588,16 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 	});
 
 	it.each([
-		{ pool: [], mode: "general", size: 0 },
-		{ pool: ["acc-1"], mode: "preferred", size: 1 },
-		{ pool: ["unavailable-account"], mode: "general-fallback", size: 1 },
+		{ pool: [], policy: "preferred", mode: "general", size: 0 },
+		{ pool: ["acc-1"], policy: "preferred", mode: "preferred", size: 1 },
+		{ pool: ["unavailable-account"], policy: "preferred", mode: "general-fallback", size: 1 },
+		{ pool: ["acc-1"], policy: "strict", mode: "strict", size: 1 },
 	] as const)(
 		"reports $mode account pool routing diagnostics",
-		async ({ pool, mode, size }) => {
+		async ({ pool, policy, mode, size }) => {
 			const configModule = await import("../lib/config.js");
 			vi.mocked(configModule.getModelAccountPool).mockReturnValueOnce([...pool]);
+			vi.mocked(configModule.getModelAccountPoolMode).mockReturnValueOnce(policy);
 			globalThis.fetch = vi.fn().mockResolvedValue(
 				new Response(JSON.stringify({ content: "test" }), { status: 200 }),
 			);
@@ -3604,6 +3621,38 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			});
 		},
 	);
+
+	it("fails immediately when a strict model pool has no selectable account", async () => {
+		const configModule = await import("../lib/config.js");
+		vi.mocked(configModule.getModelAccountPool).mockReturnValueOnce([
+			"unavailable-account",
+		]);
+		vi.mocked(configModule.getModelAccountPoolMode).mockReturnValueOnce("strict");
+		globalThis.fetch = vi.fn();
+
+		const { plugin, sdk } = await setupPlugin();
+		const response = await sdk.fetch!("https://api.openai.com/v1/chat", {
+			method: "POST",
+			body: JSON.stringify({ model: "gpt-5.1" }),
+		});
+		expect(configModule.getModelAccountPoolMode).toHaveBeenCalled();
+		expect(response).toBeInstanceOf(Response);
+		const body = (await response.json()) as {
+			error: { code: string; message: string };
+		};
+
+		expect(response.status).toBe(503);
+		expect(body.error).toMatchObject({
+			code: "strict_pool_unavailable",
+		});
+		expect(body.error.message).toContain("Strict account pool unavailable");
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+
+		const metrics = parseJsonOutput<{
+			routingVisibility: { accountPoolMode: string | null };
+		}>(await plugin.tool["codex-metrics"].execute({ format: "json" }));
+		expect(metrics.routingVisibility.accountPoolMode).toBe("strict-unavailable");
+	});
 
 	it("records TUI quota cache from successful Codex response headers", async () => {
 		const previousStateDir = process.env.OPENCODE_STATE_DIR;

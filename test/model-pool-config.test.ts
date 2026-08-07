@@ -87,8 +87,27 @@ describe("model account pool config mutation", () => {
 			model: ["one", "three"],
 		});
 
+		const modeResult = await updateModelAccountPool("model", "set-mode", [], {
+			poolMode: "strict",
+		});
+		expect(modeResult).toMatchObject({
+			previousPoolMode: "preferred",
+			poolMode: "strict",
+		});
+		expect((await readConfig()).modelAccountPoolModes).toEqual({
+			model: "strict",
+		});
+
 		await updateModelAccountPool("model", "clear");
-		expect(await readConfig()).not.toHaveProperty("modelAccountPools");
+		const cleared = await readConfig();
+		expect(cleared).not.toHaveProperty("modelAccountPools");
+		expect(cleared).not.toHaveProperty("modelAccountPoolModes");
+	});
+
+	it("rejects mode changes for models without a configured pool", async () => {
+		await expect(
+			updateModelAccountPool("missing", "set-mode", [], { poolMode: "strict" }),
+		).rejects.toThrow("No model account pool configured");
 	});
 
 	it("serializes concurrent mutations so updates are not lost", async () => {

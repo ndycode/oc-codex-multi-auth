@@ -26,6 +26,10 @@ export const PluginConfigSchema = z.object({
 		z.string().min(1),
 		z.array(z.string().min(1)),
 	).optional(),
+	modelAccountPoolModes: z.record(
+		z.string().min(1),
+		z.enum(["preferred", "strict"]),
+	).optional(),
 	fastSessionMaxInputItems: z.number().min(8).max(200).optional(),
 	retryProfile: z.enum(["conservative", "balanced", "aggressive"]).optional(),
 	retryBudgetOverrides: z.object({

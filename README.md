@@ -307,6 +307,10 @@ reordering accounts does not silently change a model's routing.
     "gpt-5.6-terra": [
       "org-another-account-id"
     ]
+  },
+  "modelAccountPoolModes": {
+    "gpt-5.6-sol": "strict",
+    "gpt-5.6-terra": "preferred"
   }
 }
 ```
@@ -323,6 +327,7 @@ codex-pool
 codex-pool action="set" model="gpt-5.6-sol" accounts=[7,8]
 codex-pool action="add" model="gpt-5.6-sol" accounts=[9]
 codex-pool action="remove" model="gpt-5.6-sol" accounts=[7]
+codex-pool action="set-mode" model="gpt-5.6-sol" poolMode="strict"
 codex-pool action="clear" model="gpt-5.6-sol"
 ```
 
@@ -334,11 +339,12 @@ the current project is reported but never automatically deleted.
 
 Routing behavior:
 
-- A mapped model uses only healthy, selectable accounts in its preferred pool.
+- A mapped model defaults to `preferred` mode and uses healthy, selectable accounts in its pool.
 - Existing rotation strategy, quota, cooldown, and token-health rules still apply within the preferred pool.
-- If every preferred account is unavailable, disabled, unknown, cooling down, or rate-limited, routing automatically falls back to the healthy general account pool.
+- In `preferred` mode, an unavailable pool falls back to the healthy general account pool.
+- In `strict` mode, routing never leaves the configured pool and immediately returns `strict_pool_unavailable` when no pooled account is selectable.
 - An unmapped model or an empty account list uses the general account pool directly.
-- `codex-status`, `codex-dashboard`, and routing diagnostics report the account-pool mode as `preferred`, `general`, or `general-fallback`.
+- `codex-status`, `codex-dashboard`, and routing diagnostics also report `strict` and `strict-unavailable` modes.
 
 Account IDs are local account metadata but should still be treated as private
 configuration. Do not publish a populated configuration file.

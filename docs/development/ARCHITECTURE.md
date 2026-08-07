@@ -153,7 +153,7 @@ High-level provider fetch flow:
 5. Normalize model aliases and fallback candidates (including GPT-5.6 Sol/Terra/Luna tiers).
 6. For GPT-5.6 models, apply the responses-lite reshape (`lib/request/helpers/responses-lite.ts`): tools move into `input` as `additional_tools`, instructions become a developer message, top-level `tools`/`instructions` are cleared for lite shape, image `detail` is stripped, and `x-openai-internal-codex-responses-lite: true` is set.
 7. Resolve client identity (`lib/request/helpers/client-identity.ts`): GPT-5.6 defaults to `originator: opencode`; other models default to `codex_cli_rs`. Override with `CODEX_AUTH_CLIENT_IDENTITY`.
-8. Resolve preferred accounts from `modelAccountPools` for the effective model; fall back to the general pool when the preferred pool is empty or unavailable.
+8. Resolve accounts and `preferred`/`strict` policy from `modelAccountPools` and `modelAccountPoolModes`; only preferred pools fall back to the general pool when unavailable.
 9. Resolve account/workspace selection with the configured `rotationStrategy` (default `hybrid` health scoring), cooldown, token bucket, and explicit `CODEX_AUTH_ACCOUNT_ID` constraints.
 10. Refresh tokens through the queued refresh path when needed.
 11. Attach OAuth/Codex headers and forward the request.

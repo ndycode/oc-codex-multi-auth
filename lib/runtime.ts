@@ -84,7 +84,12 @@ export type SelectionSnapshot = {
 	fallbackFrom: string | null;
 	fallbackTo: string | null;
 	fallbackReason: string | null;
-	accountPoolMode?: "general" | "preferred" | "general-fallback";
+	accountPoolMode?:
+		| "general"
+		| "preferred"
+		| "general-fallback"
+		| "strict"
+		| "strict-unavailable";
 	configuredAccountPoolSize?: number;
 };
 
@@ -115,7 +120,13 @@ export type RoutingVisibilitySnapshot = {
 	fallbackFrom: string | null;
 	fallbackTo: string | null;
 	fallbackReason: string | null;
-	accountPoolMode: "general" | "preferred" | "general-fallback" | null;
+	accountPoolMode:
+		| "general"
+		| "preferred"
+		| "general-fallback"
+		| "strict"
+		| "strict-unavailable"
+		| null;
 	configuredAccountPoolSize: number;
 	selectionExplainability: SerializedSelectionExplainability[];
 };

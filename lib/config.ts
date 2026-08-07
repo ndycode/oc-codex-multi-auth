@@ -29,12 +29,21 @@ const RETRY_PROFILES = new Set(["conservative", "balanced", "aggressive"]);
 
 export type UnsupportedCodexPolicy = "strict" | "fallback";
 
-export type ModelAccountPoolMutation = "set" | "add" | "remove" | "clear";
+export type ModelAccountPoolMode = "preferred" | "strict";
+
+export type ModelAccountPoolMutation =
+	| "set"
+	| "add"
+	| "remove"
+	| "clear"
+	| "set-mode";
 
 export interface ModelAccountPoolMutationResult {
 	model: string;
 	previousAccountIds: string[];
 	accountIds: string[];
+	previousPoolMode: ModelAccountPoolMode;
+	poolMode: ModelAccountPoolMode;
 	changed: boolean;
 	dryRun: boolean;
 }
@@ -164,7 +173,7 @@ export function updateModelAccountPool(
 	model: string,
 	mutation: ModelAccountPoolMutation,
 	accountIds: readonly string[] = [],
-	options: { dryRun?: boolean } = {},
+	options: { dryRun?: boolean; poolMode?: ModelAccountPoolMode } = {},
 ): Promise<ModelAccountPoolMutationResult> {
 	const pending = modelAccountPoolMutationQueue.then(async () => {
 		await fs.mkdir(dirname(CONFIG_PATH), { recursive: true, mode: 0o700 });
@@ -202,7 +211,7 @@ async function performModelAccountPoolMutation(
 	model: string,
 	mutation: ModelAccountPoolMutation,
 	accountIds: readonly string[],
-	options: { dryRun?: boolean },
+	options: { dryRun?: boolean; poolMode?: ModelAccountPoolMode },
 ): Promise<ModelAccountPoolMutationResult> {
 	const normalizedModel = model.trim().toLowerCase();
 	if (!normalizedModel) throw new Error("Model is required.");
@@ -221,6 +230,7 @@ async function performModelAccountPoolMutation(
 
 	const poolResult = PluginConfigSchema.safeParse({
 		modelAccountPools: rawConfig.modelAccountPools,
+		modelAccountPoolModes: rawConfig.modelAccountPoolModes,
 	});
 	if (!poolResult.success) {
 		throw new Error(
@@ -232,19 +242,35 @@ async function performModelAccountPoolMutation(
 	}
 
 	const pools = { ...(poolResult.data.modelAccountPools ?? {}) };
+	const poolModes = { ...(poolResult.data.modelAccountPoolModes ?? {}) };
 	const matchingKeys = Object.keys(pools).filter(
+		(key) => key.trim().toLowerCase() === normalizedModel,
+	);
+	const matchingModeKeys = Object.keys(poolModes).filter(
 		(key) => key.trim().toLowerCase() === normalizedModel,
 	);
 	const previousAccountIds = Array.from(
 		new Set(matchingKeys.flatMap((key) => pools[key] ?? [])),
 	);
 	for (const key of matchingKeys) delete pools[key];
+	const previousPoolMode = matchingModeKeys
+		.map((key) => poolModes[key])
+		.find((mode): mode is ModelAccountPoolMode => mode !== undefined) ?? "preferred";
+	for (const key of matchingModeKeys) delete poolModes[key];
+	if (mutation === "set-mode" && previousAccountIds.length === 0) {
+		throw new Error(`No model account pool configured for ${normalizedModel}.`);
+	}
+	if (mutation === "set-mode" && options.poolMode === undefined) {
+		throw new Error("poolMode is required for set-mode.");
+	}
 
 	const normalizedAccountIds = Array.from(
 		new Set(accountIds.map((id) => id.trim()).filter(Boolean)),
 	);
 	let nextAccountIds: string[];
-	if (mutation === "set") {
+	if (mutation === "set-mode") {
+		nextAccountIds = previousAccountIds;
+	} else if (mutation === "set") {
 		nextAccountIds = normalizedAccountIds;
 	} else if (mutation === "add") {
 		nextAccountIds = Array.from(
@@ -257,18 +283,34 @@ async function performModelAccountPoolMutation(
 		nextAccountIds = [];
 	}
 
-	if (nextAccountIds.length > 0) pools[normalizedModel] = nextAccountIds;
+	const nextPoolMode = mutation === "clear"
+		? "preferred"
+		: options.poolMode ?? previousPoolMode;
+	if (nextAccountIds.length > 0) {
+		pools[normalizedModel] = nextAccountIds;
+		if (nextPoolMode !== "preferred") {
+			poolModes[normalizedModel] = nextPoolMode;
+		}
+	}
 	const changed =
 		matchingKeys.length !== (nextAccountIds.length > 0 ? 1 : 0) ||
 		previousAccountIds.length !== nextAccountIds.length ||
 		previousAccountIds.some((id, index) => id !== nextAccountIds[index]) ||
-		(matchingKeys[0] !== undefined && matchingKeys[0] !== normalizedModel);
+		(matchingKeys[0] !== undefined && matchingKeys[0] !== normalizedModel) ||
+		matchingModeKeys.length !== (nextPoolMode !== "preferred" && nextAccountIds.length > 0 ? 1 : 0) ||
+		previousPoolMode !== nextPoolMode ||
+		(matchingModeKeys[0] !== undefined && matchingModeKeys[0] !== normalizedModel);
 
 	if (changed && options.dryRun !== true) {
 		if (Object.keys(pools).length > 0) {
 			rawConfig.modelAccountPools = pools;
 		} else {
 			delete rawConfig.modelAccountPools;
+		}
+		if (Object.keys(poolModes).length > 0) {
+			rawConfig.modelAccountPoolModes = poolModes;
+		} else {
+			delete rawConfig.modelAccountPoolModes;
 		}
 
 		const tempPath = `${CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
@@ -287,6 +329,8 @@ async function performModelAccountPoolMutation(
 		model: normalizedModel,
 		previousAccountIds,
 		accountIds: nextAccountIds,
+		previousPoolMode,
+		poolMode: nextPoolMode,
 		changed,
 		dryRun: options.dryRun === true,
 	};
@@ -536,6 +580,20 @@ export function getModelAccountPool(
 		}
 	}
 	return [];
+}
+
+export function getModelAccountPoolMode(
+	pluginConfig: PluginConfig,
+	model?: string | null,
+): ModelAccountPoolMode {
+	if (!model) return "preferred";
+	const normalizedModel = model.trim().toLowerCase();
+	for (const [configuredModel, mode] of Object.entries(
+		pluginConfig.modelAccountPoolModes ?? {},
+	)) {
+		if (configuredModel.trim().toLowerCase() === normalizedModel) return mode;
+	}
+	return "preferred";
 }
 
 export function getFastSessionMaxInputItems(pluginConfig: PluginConfig): number {
