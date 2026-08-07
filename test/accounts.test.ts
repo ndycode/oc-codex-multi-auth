@@ -894,6 +894,41 @@ describe("AccountManager", () => {
     expect(selected?.refreshToken).toBe("shared-refresh");
   });
 
+  it("falls back outside a preferred pool when its remaining account was attempted", () => {
+    const now = Date.now();
+    const stored = {
+      version: 3 as const,
+      activeIndex: 0,
+      accounts: [
+        {
+          refreshToken: "preferred-token",
+          accountId: "preferred-account",
+          addedAt: now,
+          lastUsed: now,
+        },
+        {
+          refreshToken: "general-token",
+          accountId: "general-account",
+          addedAt: now,
+          lastUsed: now,
+        },
+      ],
+    };
+
+    const manager = new AccountManager(undefined, stored);
+    const selected = manager.getAccountForStrategy(
+      "round-robin",
+      "codex",
+      undefined,
+      undefined,
+      ["preferred-account"],
+      "preferred",
+      new Set([0]),
+    );
+
+    expect(selected?.accountId).toBe("general-account");
+  });
+
   it("returns null and preserves min-wait behavior when all shared-token variants are blocked", () => {
     const now = Date.now();
     const stored = {

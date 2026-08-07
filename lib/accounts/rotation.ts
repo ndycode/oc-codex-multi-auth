@@ -58,16 +58,18 @@ export class AccountRotation {
 		family: ModelFamily,
 		model?: string | null,
 		strictPreferredPool = false,
+		excludedIndices?: ReadonlySet<number>,
 	): ReadonlySet<number> | null {
 		if (!accountIds?.length) return null;
 		const preferredIds = new Set(accountIds);
 		const indices = this.state.accounts
 			.filter(
 				(account) =>
-					account &&
-					account.accountId !== undefined &&
-					preferredIds.has(account.accountId) &&
-					this.isSelectable(account, family, model),
+				account &&
+				account.accountId !== undefined &&
+				preferredIds.has(account.accountId) &&
+				!excludedIndices?.has(account.index) &&
+				this.isSelectable(account, family, model),
 			)
 			.map((account) => account.index);
 		return indices.length > 0
@@ -98,6 +100,7 @@ export class AccountRotation {
 			family,
 			model,
 			strictPreferredPool,
+			excludedIndices,
 		);
 
 		const cursor = this.state.cursorByFamily[family];
@@ -154,6 +157,7 @@ export class AccountRotation {
 			family,
 			model,
 			strictPreferredPool,
+			excludedIndices,
 		);
 
 		const currentIndex = this.state.currentAccountIndexByFamily[family];
@@ -241,6 +245,7 @@ export class AccountRotation {
 			family,
 			model,
 			strictPreferredPool,
+			excludedIndices,
 		);
 
 		// Prefer the account we are already pinned to while it still has quota.
