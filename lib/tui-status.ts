@@ -1,4 +1,5 @@
 import type { Config } from "@opencode-ai/sdk/v2";
+import { maskEmailForDisplay } from "./account-display.js";
 import { getEffortSuffix } from "./request/helpers/effort-suffix.js";
 import { formatPlanType } from "./auth/plan-tier.js";
 
@@ -68,8 +69,8 @@ const STATUS_SEPARATOR = ` ${String.fromCharCode(183)} `;
 const WARNING_LIMIT_LEFT_PERCENT = 25;
 const DANGER_LIMIT_LEFT_PERCENT = 10;
 const MASKED_EMAIL = "*****";
-const EMAIL_PATTERN = /[^\s(),<>]+@[^\s(),<>]+/;
-const EMAIL_PATTERN_GLOBAL = /[^\s(),<>]+@[^\s(),<>]+/g;
+const EMAIL_PATTERN = /[^\s(),<>,;]+@[^\s(),<>,;]+/;
+const EMAIL_PATTERN_GLOBAL = /[^\s(),<>,;]+@[^\s(),<>,;]+/g;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -213,7 +214,9 @@ function formatAccountEmail(
 	maskEmail: boolean,
 ): string | undefined {
 	const trimmed = email?.trim() || undefined;
-	return trimmed ? `[${maskEmail ? MASKED_EMAIL : trimmed}]` : undefined;
+	if (!trimmed) return undefined;
+	const display = maskEmail ? maskEmailsInText(trimmed, true) : trimmed;
+	return display ? `[${display}]` : undefined;
 }
 
 function maskEmailsInText(
@@ -221,7 +224,10 @@ function maskEmailsInText(
 	maskEmail: boolean,
 ): string | undefined {
 	if (!value) return undefined;
-	return maskEmail ? value.replace(EMAIL_PATTERN_GLOBAL, MASKED_EMAIL) : value;
+	if (!maskEmail) return value;
+	return value.replace(EMAIL_PATTERN_GLOBAL, (match) =>
+		maskEmailForDisplay(match) ?? MASKED_EMAIL,
+	);
 }
 
 function formatQuotaLimit(
