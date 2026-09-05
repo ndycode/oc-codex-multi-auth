@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	formatPromptStatusText,
@@ -10,16 +10,17 @@ import {
 	type PromptStatusMessage,
 } from "../lib/tui-status.js";
 
+const sep = ` ${String.fromCharCode(183)} `;
+const quota: CompactQuotaStatus = {
+	type: "ready",
+	limits: [
+		{ label: "5h", leftPercent: 88 },
+		{ label: "7d", leftPercent: 83 },
+	],
+	stale: false,
+};
+
 describe("TUI prompt status helpers", () => {
-	const sep = ` ${String.fromCharCode(183)} `;
-	const quota: CompactQuotaStatus = {
-		type: "ready",
-		limits: [
-			{ label: "5h", leftPercent: 88 },
-			{ label: "7d", leftPercent: 83 },
-		],
-		stale: false,
-	};
 
 	it("formats prompt status text from supplied quota labels", () => {
 		expect(
@@ -333,5 +334,92 @@ describe("TUI prompt status helpers", () => {
 		};
 
 		expect(resolvePromptReasoningVariant({ config })).toBe("xhigh");
+	});
+});
+
+describe("formatResetTime day context", () => {
+	// Fake timers freeze both Date.now() and new Date() so the formatter's
+	// "now" and the fixed reset timestamps land on deterministic dates.
+	const now = new Date(2026, 8, 5, 12, 0); // 2026-09-05T12:00 local
+	// Expected labels are derived from the runtime's own Intl formatting so
+	// the assertions hold under any default locale.
+	const weekdayLabel = new Date(2026, 8, 8, 2, 25).toLocaleDateString(
+		undefined,
+		{ weekday: "short" },
+	);
+	const dateLabel = new Date(2026, 8, 15, 2, 25).toLocaleDateString(undefined, {
+		month: "short",
+		day: "2-digit",
+	});
+	const timeLabel = (h: number, m: number) =>
+		new Date(2026, 8, 5, h, m)
+			.toLocaleTimeString(undefined, {
+				hour: "2-digit",
+				minute: "2-digit",
+				hour12: false,
+			})
+			.replace(/^24/, "00");
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(now);
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("keeps time-only format for same-day resets", () => {
+		const out = formatPromptStatusText({
+			quota: {
+				...quota,
+				limits: [
+					{ label: "5h", leftPercent: 8, resetAtMs: new Date(2026, 8, 5, 18, 30).getTime() },
+				],
+			},
+			width: 120,
+		});
+		expect(out).toBe(`5h 8% resets ${timeLabel(18, 30)}`);
+	});
+
+	it("adds weekday for resets within the coming week", () => {
+		const out = formatPromptStatusText({
+			quota: {
+				...quota,
+				limits: [
+					{ label: "7d", leftPercent: 0, resetAtMs: new Date(2026, 8, 8, 2, 25).getTime() },
+				],
+			},
+			width: 120,
+		});
+		expect(out).toBe(`7d 0% resets ${weekdayLabel} ${timeLabel(2, 25)}`);
+	});
+
+	it("uses absolute date beyond a week", () => {
+		const out = formatPromptStatusText({
+			quota: {
+				...quota,
+				limits: [
+					{ label: "7d", leftPercent: 0, resetAtMs: new Date(2026, 8, 15, 2, 25).getTime() },
+				],
+			},
+			width: 120,
+		});
+		expect(out).toBe(`7d 0% resets ${dateLabel} ${timeLabel(2, 25)}`);
+	});
+
+	it("uses absolute date at exactly seven calendar days across DST (America/New_York)", () => {
+		// 2026-03-02 -> 2026-03-09 is seven calendar days but 167 hours in
+		// America/New_York; a millisecond division would misread it as six.
+		vi.setSystemTime(new Date(2026, 2, 2, 12, 0));
+		const reset = new Date(2026, 2, 9, 2, 25);
+		const expected = `${reset.toLocaleDateString(undefined, { month: "short", day: "2-digit" })} ${reset.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+		const out = formatPromptStatusText({
+			quota: {
+				...quota,
+				limits: [{ label: "7d", leftPercent: 0, resetAtMs: reset.getTime() }],
+			},
+			width: 120,
+		});
+		expect(out).toBe(`7d 0% resets ${expected}`);
 	});
 });

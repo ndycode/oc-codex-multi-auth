@@ -65,6 +65,7 @@ const variantSuffixes: ReasoningVariant[] = [
 	"none",
 ];
 const STATUS_SEPARATOR = ` ${String.fromCharCode(183)} `;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const WARNING_LIMIT_LEFT_PERCENT = 25;
 const DANGER_LIMIT_LEFT_PERCENT = 10;
 const MASKED_EMAIL = "*****";
@@ -301,12 +302,21 @@ function formatQuota(quota: CompactQuotaStatus): string | undefined {
 	return undefined;
 }
 
+/**
+ * Return the character budget for the prompt status line at a given terminal
+ * width. Budgets scale to about 54% of each tier's minimum width so the
+ * day-context reset labels and typical account hints fit; `undefined` or
+ * non-finite widths fall back to the 78-column tier budget.
+ */
 function maxStatusChars(width: number | undefined): number {
-	if (!width || !Number.isFinite(width)) return 32;
-	if (width >= 120) return 48;
-	if (width >= 96) return 40;
-	if (width >= 78) return 32;
-	if (width >= 60) return 22;
+	// Budgets are ~54% of each tier's minimum width (up from ~40%): the
+	// day-context reset labels and typical account hints no longer fit at
+	// 40%, which degraded informative candidates on mid-width terminals.
+	if (!width || !Number.isFinite(width)) return 42;
+	if (width >= 120) return 64;
+	if (width >= 96) return 52;
+	if (width >= 78) return 42;
+	if (width >= 60) return 32;
 	return 12;
 }
 
@@ -395,17 +405,59 @@ function formatReset(resetAtMs: number | undefined): string | undefined {
 	return `${time} on ${day}`;
 }
 
+/**
+ * Format a reset timestamp for the compact status line. Same-day resets keep
+ * the time only (`02:25`); resets within the coming week add the weekday
+ * (`Tue 02:25`); later resets use the absolute date (`Sep 15 02:25`). The
+ * time is always kept so short windows such as the 5h limit stay meaningful.
+ */
 function formatResetTime(resetAtMs: number | undefined): string | undefined {
 	if (!resetAtMs || !Number.isFinite(resetAtMs) || resetAtMs <= 0) {
 		return undefined;
 	}
 	const date = new Date(resetAtMs);
 	if (!Number.isFinite(date.getTime())) return undefined;
-	return date.toLocaleTimeString(undefined, {
+	const time = date.toLocaleTimeString(undefined, {
 		hour: "2-digit",
 		minute: "2-digit",
 		hour12: false,
 	});
+	const now = new Date();
+	const sameDay =
+		now.getFullYear() === date.getFullYear() &&
+		now.getMonth() === date.getMonth() &&
+		now.getDate() === date.getDate();
+	if (sameDay) return time;
+	// Compare calendar dates, not elapsed ms: a DST transition makes a
+	// seven-calendar-day gap span 167 or 169 hours, which a fixed 24h
+	// division would misclassify and repeat today's weekday.
+	const dayDiff = calendarDayDiff(now, date);
+	// Within a week each weekday occurs exactly once, so the weekday alone
+	// disambiguates weekly windows; beyond that the absolute date does.
+	if (dayDiff > 0 && dayDiff < 7) {
+		const weekday = date.toLocaleDateString(undefined, { weekday: "short" });
+		return `${weekday} ${time}`;
+	}
+	const day = date.toLocaleDateString(undefined, {
+		month: "short",
+		day: "2-digit",
+	});
+	return `${day} ${time}`;
+}
+
+/**
+ * Count calendar days between two dates, ignoring wall-clock length. Comparing
+ * UTC-normalized year/month/day makes the count immune to DST transitions,
+ * which make a seven-day gap span 167 or 169 hours.
+ */
+function calendarDayDiff(from: Date, to: Date): number {
+	const fromDay = Date.UTC(
+		from.getFullYear(),
+		from.getMonth(),
+		from.getDate(),
+	);
+	const toDay = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate());
+	return Math.round((toDay - fromDay) / MS_PER_DAY);
 }
 
 function formatUpdatedAge(fetchedAt: number | undefined, now: number): string {
