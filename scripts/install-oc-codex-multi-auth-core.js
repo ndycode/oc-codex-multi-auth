@@ -773,11 +773,15 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 	}
 	const { env = process.env } = options;
 	const storagePath = getStandaloneStoragePath(parsed, env);
+	const repairRequested = command === "doctor" && parsed.fix;
 	let storage = null;
 	let error = null;
+	if (parsed.configPath || !repairRequested) {
+		({ storage, error } = await readStandaloneStorage(storagePath));
+	}
 	const appliedFixes = [];
 	const fixErrors = [];
-	if (command === "doctor" && parsed.fix) {
+	if (repairRequested && !error) {
 		const previousKeychain = process.env.CODEX_KEYCHAIN;
 		try {
 			const loadDoctorRuntime = options.loadDoctorRuntime ?? (() => loadDistModules(
@@ -789,12 +793,10 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 			storageMod.setStoragePathDirect(storagePath);
 			shutdownMod.setShutdownOwnsProcess(true);
 			storage = await storageMod.loadAccounts();
-			if (!storage) throw new Error("Account storage is unavailable");
-			const repair = await repairMod.repairDoctorAccounts(storage.accounts);
+			const repair = await repairMod.repairDoctorAccounts(storage?.accounts ?? []);
 			appliedFixes.push(...repair.appliedFixes);
 			fixErrors.push(...repair.fixErrors);
-			storage = await storageMod.loadAccounts();
-			if (!storage) throw new Error("Account storage is unavailable");
+			storage = (await storageMod.loadAccounts()) ?? storage;
 		} catch {
 			fixErrors.push("Doctor repair could not complete. Check the selected storage file and installed runtime.");
 		} finally {
@@ -803,8 +805,6 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 				else process.env.CODEX_KEYCHAIN = previousKeychain;
 			}
 		}
-	} else {
-		({ storage, error } = await readStandaloneStorage(storagePath));
 	}
 	const accounts = summarizeStandaloneAccounts(storage, parsed.includeSensitive, parsed.tag);
 	const totalAccounts = Array.isArray(storage?.accounts) ? storage.accounts.length : 0;

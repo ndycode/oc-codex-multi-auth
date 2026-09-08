@@ -404,6 +404,69 @@ describe("standalone oc-codex-multi-auth CLI commands", () => {
 		expect(result).toMatchObject({ action: "doctor", exitCode: 0 });
 	});
 
+	it("doctor: recommends login without errors when the default runtime pool is empty", async () => {
+		// Given a fresh installation with no JSON file or runtime accounts.
+		vi.resetModules();
+		vi.stubEnv("CODEX_KEYCHAIN", "1");
+		tempHome = await createTempHome();
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected OAuth request"));
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+		const repairMod = await import("../lib/tools/doctor-repair.js");
+		const repairDoctorAccounts = vi.fn(repairMod.repairDoctorAccounts);
+		const loadAccounts = vi.fn().mockResolvedValue(null);
+
+		// When the real repair helper receives accounts from the injected empty backend.
+		const result = await runInstaller(["doctor", "--fix", "--json"], {
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			loadDoctorRuntime: async () => [
+				{ setStoragePathDirect: vi.fn(), loadAccounts },
+				{ repairDoctorAccounts },
+				{ setShutdownOwnsProcess: vi.fn() },
+			],
+		});
+
+		// Then null discovery and snapshot are successful, without OAuth requests.
+		expect(result.exitCode).toBe(0);
+		expect(repairDoctorAccounts).toHaveBeenCalledWith([]);
+		expect(loadAccounts).toHaveBeenCalledTimes(2);
+		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]))).toMatchObject({
+			totalAccounts: 0, accounts: [], fixApplied: false, fixErrors: [], error: null,
+			nextAction: "Run opencode auth login.",
+		});
+		expect(process.env.CODEX_KEYCHAIN).toBe("1");
+	});
+
+	it("doctor: reports malformed explicit JSON without attempting repair", async () => {
+		// Given an explicitly selected file that cannot be parsed as JSON.
+		vi.resetModules();
+		tempHome = await createTempHome();
+		const poolPath = join(tempHome, "malformed-pool.json");
+		await writeFile(poolPath, "{", "utf-8");
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+		const repairDoctorAccounts = vi.fn().mockResolvedValue({ appliedFixes: [], fixErrors: [] });
+		const loadDoctorRuntime = vi.fn(async () => [
+			{ setStoragePathDirect: vi.fn(), loadAccounts: async () => null },
+			{ repairDoctorAccounts },
+			{ setShutdownOwnsProcess: vi.fn() },
+		]);
+
+		// When repair is requested for the malformed file.
+		const result = await runInstaller(["doctor", "--fix", "--json", "--config-path", poolPath], {
+			loadDoctorRuntime,
+		});
+
+		// Then parsing fails before runtime discovery or repair can run.
+		expect(result.exitCode).toBe(1);
+		expect(loadDoctorRuntime).not.toHaveBeenCalled();
+		expect(repairDoctorAccounts).not.toHaveBeenCalled();
+		expect(JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]))).toMatchObject({
+			error: expect.any(String), message: "Storage could not be parsed.", fixApplied: false, fixErrors: [],
+		});
+	});
+
 	it.each(["discovery", "repair", "snapshot"])("doctor: redacts runtime %s failures without a JSON pool", async (stage) => {
 		// Given an injected backend that fails at one repair boundary.
 		vi.resetModules();
