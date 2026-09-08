@@ -440,6 +440,8 @@ function printStandaloneResult(command, payload, json) {
 		}
 	}
 	if (payload.error) console.log(`Error: ${payload.error}`);
+	for (const fix of payload.appliedFixes ?? []) console.log(`Fixed: ${fix}`);
+	for (const error of payload.fixErrors ?? []) console.log(`Repair failed: ${error}`);
 	if (payload.nextAction) console.log(`Next: ${payload.nextAction}`);
 }
 
@@ -771,7 +773,33 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 	}
 	const { env = process.env } = options;
 	const storagePath = getStandaloneStoragePath(parsed, env);
-	const { storage, error } = await readStandaloneStorage(storagePath);
+	let { storage, error } = await readStandaloneStorage(storagePath);
+	const appliedFixes = [];
+	const fixErrors = [];
+	if (command === "doctor" && parsed.fix && storage && !error) {
+		const previousKeychain = process.env.CODEX_KEYCHAIN;
+		try {
+			const loadDoctorRuntime = options.loadDoctorRuntime ?? (() => loadDistModules(
+				["storage.js", "tools/doctor-repair.js", "shutdown.js"], "doctor",
+			));
+			const [storageMod, repairMod, shutdownMod] = await loadDoctorRuntime();
+			// A CLI file selection must not read or replace the global keychain pool.
+			process.env.CODEX_KEYCHAIN = "0";
+			storageMod.setStoragePathDirect(storagePath);
+			shutdownMod.setShutdownOwnsProcess(true);
+			const current = await storageMod.loadAccounts();
+			if (!current) throw new Error("Account storage is unavailable");
+			const repair = await repairMod.repairDoctorAccounts(current.accounts);
+			appliedFixes.push(...repair.appliedFixes);
+			fixErrors.push(...repair.fixErrors);
+		} catch {
+			fixErrors.push("Doctor repair could not complete. Check the selected storage file and installed runtime.");
+		} finally {
+			if (previousKeychain === undefined) delete process.env.CODEX_KEYCHAIN;
+			else process.env.CODEX_KEYCHAIN = previousKeychain;
+		}
+		({ storage, error } = await readStandaloneStorage(storagePath));
+	}
 	const accounts = summarizeStandaloneAccounts(storage, parsed.includeSensitive, parsed.tag);
 	const totalAccounts = Array.isArray(storage?.accounts) ? storage.accounts.length : 0;
 	const payload = {
@@ -790,7 +818,11 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 	} else if (command === "doctor") {
 		payload.message = error ? "Storage could not be parsed." : totalAccounts > 0 ? "Local diagnostics completed." : "No accounts configured.";
 		payload.deep = parsed.deep;
-		payload.fixApplied = parsed.fix ? false : undefined;
+		payload.fixApplied = parsed.fix ? appliedFixes.length > 0 : undefined;
+		if (parsed.fix) {
+			payload.appliedFixes = appliedFixes;
+			payload.fixErrors = fixErrors;
+		}
 		payload.nextAction = totalAccounts > 0 ? "Run oc-codex-multi-auth health --json for scriptable checks." : "Run opencode auth login.";
 	} else if (command === "health") {
 		payload.healthyCount = accounts.filter((account) => account.enabled && account.hasRefreshToken).length;
@@ -799,7 +831,7 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 		payload.message = totalAccounts > 0 ? "Account storage loaded." : "No accounts configured.";
 	}
 	printStandaloneResult(command, payload, parsed.json);
-	return { exitCode: error ? 1 : 0, action: command, storagePath };
+	return { exitCode: error || fixErrors.length > 0 ? 1 : 0, action: command, storagePath };
 }
 
 // Top-level keys inside `provider.openai` that the installer owns absolutely.
