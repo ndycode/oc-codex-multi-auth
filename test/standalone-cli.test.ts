@@ -361,16 +361,21 @@ describe("standalone oc-codex-multi-auth CLI commands", () => {
 		expect(JSON.stringify(logSpy.mock.calls)).not.toMatch(/rotated-access-secret|rotated-refresh-secret|rt-warm|home-secret/);
 	});
 
-	it("doctor: preserves enabled keychain routing when repairing the default path", async () => {
-		// Given enabled keychain routing and an isolated default pool.
+	it("doctor: repairs and summarizes the default keychain pool when no JSON file exists", async () => {
+		// Given enabled keychain routing with accounts only in the injected backend.
 		vi.resetModules();
 		vi.stubEnv("CODEX_KEYCHAIN", "1");
 		tempHome = await createTempHome();
-		await seedPool(tempHome, [freshAccount()]);
-		vi.spyOn(console, "log").mockImplementation(() => {});
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
 		const keychainRouting: (string | undefined)[] = [];
-		const accounts = [freshAccount()];
+		const accounts = [freshAccount({ accountLabel: "Keychain account", rateLimitResetTimes: { codex: 123 } })];
+		let snapshot = { accounts };
+		const repairDoctorAccounts = vi.fn(async () => {
+			keychainRouting.push(process.env.CODEX_KEYCHAIN);
+			snapshot = { accounts: [freshAccount({ accountLabel: "Keychain account", rateLimitResetTimes: {} })] };
+			return { appliedFixes: ["Cleared stale rate-limit markers."], fixErrors: [] };
+		});
 
 		// When repair uses injected runtime seams, never the real keychain.
 		const result = await runInstaller(["doctor", "--fix", "--json"], {
@@ -378,20 +383,56 @@ describe("standalone oc-codex-multi-auth CLI commands", () => {
 			loadDoctorRuntime: async () => [
 				{ setStoragePathDirect: vi.fn(), loadAccounts: async () => {
 					keychainRouting.push(process.env.CODEX_KEYCHAIN);
-					return { accounts };
+					return snapshot;
 				} },
-				{ repairDoctorAccounts: async () => {
-					keychainRouting.push(process.env.CODEX_KEYCHAIN);
-					return { appliedFixes: [], fixErrors: [] };
-				} },
+				{ repairDoctorAccounts },
 				{ setShutdownOwnsProcess: vi.fn() },
 			],
 		});
 
-		// Then both loading and repair retain enabled keychain routing.
-		expect(keychainRouting).toEqual(["1", "1"]);
+		// Then repair runs and the summary uses the post-repair backend snapshot.
+		expect(repairDoctorAccounts).toHaveBeenCalledWith(accounts);
+		const output = JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]));
+		expect(output).toMatchObject({
+			totalAccounts: 1,
+			fixApplied: true,
+			accounts: [{ label: "Keychain account" }],
+		});
+		expect(output.accounts[0].rateLimitResetTimes).toEqual({});
+		expect(keychainRouting).toEqual(["1", "1", "1"]);
 		expect(process.env.CODEX_KEYCHAIN).toBe("1");
 		expect(result).toMatchObject({ action: "doctor", exitCode: 0 });
+	});
+
+	it.each(["discovery", "repair", "snapshot"])("doctor: redacts runtime %s failures without a JSON pool", async (stage) => {
+		// Given an injected backend that fails at one repair boundary.
+		vi.resetModules();
+		vi.stubEnv("CODEX_KEYCHAIN", "1");
+		tempHome = await createTempHome();
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+		const failure = new Error("upstream-private-token-text");
+		const loadAccounts = vi.fn().mockResolvedValue({ accounts: [freshAccount()] });
+		if (stage === "discovery") loadAccounts.mockRejectedValue(failure);
+		if (stage === "snapshot") loadAccounts.mockResolvedValueOnce({ accounts: [freshAccount()] }).mockRejectedValue(failure);
+		const repairDoctorAccounts = vi.fn().mockResolvedValue({ appliedFixes: [], fixErrors: [] });
+		if (stage === "repair") repairDoctorAccounts.mockRejectedValue(failure);
+
+		// When default-path repair runs without reading any real credentials.
+		const result = await runInstaller(["doctor", "--fix", "--json"], {
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			loadDoctorRuntime: async () => [
+				{ setStoragePathDirect: vi.fn(), loadAccounts },
+				{ repairDoctorAccounts },
+				{ setShutdownOwnsProcess: vi.fn() },
+			],
+		});
+
+		// Then failure is nonzero and redacted, with keychain routing preserved.
+		expect(result.exitCode).toBe(1);
+		expect(JSON.parse(String(logSpy.mock.calls.at(-1)?.[0])).fixErrors).toHaveLength(1);
+		expect(JSON.stringify(logSpy.mock.calls)).not.toContain(failure.message);
+		expect(process.env.CODEX_KEYCHAIN).toBe("1");
 	});
 
 	it("doctor: preserves failed and disabled accounts while reporting partial repair failure", async () => {
