@@ -784,7 +784,7 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 			));
 			const [storageMod, repairMod, shutdownMod] = await loadDoctorRuntime();
 			// A CLI file selection must not read or replace the global keychain pool.
-			process.env.CODEX_KEYCHAIN = "0";
+			if (parsed.configPath) process.env.CODEX_KEYCHAIN = "0";
 			storageMod.setStoragePathDirect(storagePath);
 			shutdownMod.setShutdownOwnsProcess(true);
 			const current = await storageMod.loadAccounts();
@@ -795,8 +795,10 @@ export async function runStandaloneCommand(command, argv = [], options = {}) {
 		} catch {
 			fixErrors.push("Doctor repair could not complete. Check the selected storage file and installed runtime.");
 		} finally {
-			if (previousKeychain === undefined) delete process.env.CODEX_KEYCHAIN;
-			else process.env.CODEX_KEYCHAIN = previousKeychain;
+			if (parsed.configPath) {
+				if (previousKeychain === undefined) delete process.env.CODEX_KEYCHAIN;
+				else process.env.CODEX_KEYCHAIN = previousKeychain;
+			}
 		}
 		({ storage, error } = await readStandaloneStorage(storagePath));
 	}

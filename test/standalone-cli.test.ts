@@ -361,6 +361,39 @@ describe("standalone oc-codex-multi-auth CLI commands", () => {
 		expect(JSON.stringify(logSpy.mock.calls)).not.toMatch(/rotated-access-secret|rotated-refresh-secret|rt-warm|home-secret/);
 	});
 
+	it("doctor: preserves enabled keychain routing when repairing the default path", async () => {
+		// Given enabled keychain routing and an isolated default pool.
+		vi.resetModules();
+		vi.stubEnv("CODEX_KEYCHAIN", "1");
+		tempHome = await createTempHome();
+		await seedPool(tempHome, [freshAccount()]);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+		const keychainRouting: (string | undefined)[] = [];
+		const accounts = [freshAccount()];
+
+		// When repair uses injected runtime seams, never the real keychain.
+		const result = await runInstaller(["doctor", "--fix", "--json"], {
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			loadDoctorRuntime: async () => [
+				{ setStoragePathDirect: vi.fn(), loadAccounts: async () => {
+					keychainRouting.push(process.env.CODEX_KEYCHAIN);
+					return { accounts };
+				} },
+				{ repairDoctorAccounts: async () => {
+					keychainRouting.push(process.env.CODEX_KEYCHAIN);
+					return { appliedFixes: [], fixErrors: [] };
+				} },
+				{ setShutdownOwnsProcess: vi.fn() },
+			],
+		});
+
+		// Then both loading and repair retain enabled keychain routing.
+		expect(keychainRouting).toEqual(["1", "1"]);
+		expect(process.env.CODEX_KEYCHAIN).toBe("1");
+		expect(result).toMatchObject({ action: "doctor", exitCode: 0 });
+	});
+
 	it("doctor: preserves failed and disabled accounts while reporting partial repair failure", async () => {
 		// Given one recoverable, one failing, and one intentionally disabled account.
 		vi.resetModules();
