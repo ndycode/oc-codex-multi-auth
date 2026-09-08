@@ -13,7 +13,6 @@ import {
 import { AccountManager } from "../accounts.js";
 import { MODEL_FAMILIES } from "../prompts/codex.js";
 import {
-	clearRefreshedAccountsStaleState,
 	findDisabledAccountsWithFreshCredential,
 	findDisabledTokenSourceDuplicates,
 	findConflictingBusinessMemberCredentials,
@@ -39,11 +38,10 @@ import {
 	type RoutingVisibilitySnapshot,
 } from "../runtime.js";
 import {
-	buildRefreshInputs,
 	findAccountIndexByIdentity,
-	refreshAndPersistAccount,
 	type RefreshAccountIdentity,
 } from "./refresh-account.js";
+import { repairDoctorAccounts } from "./doctor-repair.js";
 import type { ToolContext } from "./index.js";
 
 interface DoctorDiagnostics {
@@ -192,36 +190,10 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 			let diagnostics = await loadDiagnostics();
 
 			if (fix && diagnostics.storage && diagnostics.storage.accounts.length > 0) {
-				const refreshResults: Array<{
-					index: number;
-					identity: RefreshAccountIdentity;
-				}> = [];
-				const reloginNeeded: number[] = [];
-				const verificationFailureIdentities: RefreshAccountIdentity[] = [];
-				const inputs = buildRefreshInputs(diagnostics.storage.accounts);
-
-				for (const input of inputs) {
-					if (!input) continue;
-					const outcome = await refreshAndPersistAccount(input);
-					if (outcome.status === "refreshed") {
-						refreshResults.push({
-							index: outcome.index,
-							identity: outcome.result.identity,
-						});
-					} else if (outcome.status === "skipped") {
-						// Skip intentionally-disabled accounts: refreshing them is wrong
-						// (e.g. the disabled token-source duplicate would get a spurious
-						// "re-login" directive when its dead token fails, when the correct
-						// remedy is `codex-remove`), and stale-state must never be cleared
-						// on an entry the user disabled on purpose.
-					} else {
-						verificationFailureIdentities.push(outcome.identity);
-						reloginNeeded.push(outcome.index + 1);
-						fixErrors.push(
-							`Account ${outcome.index + 1}: ${outcome.error} — run \`opencode auth login\` to re-authenticate.`,
-						);
-					}
-				}
+				const repair = await repairDoctorAccounts(diagnostics.storage.accounts);
+				const { reloginNeeded, verificationFailureIdentities } = repair;
+				appliedFixes.push(...repair.appliedFixes);
+				fixErrors.push(...repair.fixErrors);
 
 				if (verificationFailureIdentities.length > 0) {
 					extraFindings.push({
@@ -232,61 +204,7 @@ export function createCodexDoctorTool(ctx: ToolContext): ToolDefinition {
 					});
 				}
 
-				if (refreshResults.length > 0) {
-					appliedFixes.push(
-						`Refreshed and persisted ${refreshResults.length} account token(s).`,
-					);
-
-					// A successful refresh proves the credential is alive, so clear any
-					// stale cooldown / rate-limit state that would otherwise keep the
-					// recovered account out of rotation (issue #171). Apply this to a
-					// fresh storage snapshot so non-credential state written by other
-					// processes is preserved.
-					try {
-						const staleSummary = await withAccountStorageTransaction(
-							async (current, persist) => {
-								if (!current) {
-									throw new Error("Account storage is unavailable");
-								}
-								const refreshedRecords = [];
-								for (const refreshed of refreshResults) {
-									const idx = findAccountIndexByIdentity(
-										current.accounts,
-										refreshed.identity,
-									);
-									const record = idx >= 0 ? current.accounts[idx] : undefined;
-									if (record && record.enabled !== false) {
-										refreshedRecords.push(record);
-									}
-								}
-								const summary = clearRefreshedAccountsStaleState(refreshedRecords);
-								if (
-									summary.cooldownsCleared > 0 ||
-									summary.rateLimitKeysCleared > 0
-								) {
-									await persist(current);
-								}
-								return summary;
-							},
-						);
-						if (staleSummary.cooldownsCleared > 0) {
-							appliedFixes.push(
-								`Cleared cooldown on ${staleSummary.cooldownsCleared} recovered account(s).`,
-							);
-						}
-						if (staleSummary.rateLimitKeysCleared > 0) {
-							appliedFixes.push(
-								`Cleared ${staleSummary.rateLimitKeysCleared} stale rate-limit marker(s).`,
-							);
-						}
-					} catch (error) {
-						fixErrors.push(
-							`Failed to persist stale-state repairs: ${
-								error instanceof Error ? error.message : String(error)
-							}`,
-						);
-					}
-
+				if (repair.refreshedCount > 0) {
 					// Stale TUI quota cache can reference an account index/count that no
 					// longer matches the pool, making diagnostics misleading (#171).
 					try {
