@@ -1189,6 +1189,30 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				return `resets in ${formatWaitTime(remaining)}`;
 		};
 
+		// Account-wide subscription-quota exhaustion is a DIFFERENT block from the
+		// per-family rate limits above: it lives on its own field and is reported
+		// with its own label so a spent weekly quota is never shown as a transient
+		// 429 ("rate limit").
+		const getQuotaExhaustedUntil = (
+				account: { quotaExhaustedUntil?: number },
+				now: number,
+		): number | null => {
+				const until = account.quotaExhaustedUntil;
+				if (typeof until !== "number" || !Number.isFinite(until) || until <= now) {
+						return null;
+				}
+				return until;
+		};
+
+		const formatQuotaExhaustionEntry = (
+				account: { quotaExhaustedUntil?: number },
+				now: number,
+		): string | null => {
+				const until = getQuotaExhaustedUntil(account, now);
+				if (until === null) return null;
+				return `quota exhausted, resets in ${formatWaitTime(until - now)}`;
+		};
+
 		const applyUiRuntimeFromConfig = (
 			pluginConfig: ReturnType<typeof loadPluginConfig>,
 		): UiRuntimeOptions => {
@@ -1811,6 +1835,8 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 			resolveActiveIndex,
 			getRateLimitResetTimeForFamily,
 			formatRateLimitEntry,
+			getQuotaExhaustedUntil,
+			formatQuotaExhaustionEntry,
 			buildJsonAccountIdentity,
 			buildRoutingVisibilitySnapshot,
 			appendRoutingVisibilityText,

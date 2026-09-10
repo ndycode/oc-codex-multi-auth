@@ -31,6 +31,7 @@ export function createCodexStatusTool(ctx: ToolContext): ToolDefinition {
 		formatCommandAccountLabel,
 		resolveMaskEmail,
 		formatRateLimitEntry,
+		formatQuotaExhaustionEntry,
 		getRateLimitResetTimeForFamily,
 		buildJsonAccountIdentity,
 		buildRoutingVisibilitySnapshot,
@@ -146,6 +147,7 @@ export function createCodexStatusTool(ctx: ToolContext): ToolDefinition {
 						planType: account.planType ?? null,
 						plan: formatPlanType(account.planType) ?? null,
 						rateLimit: formatRateLimitEntry(account, now) ?? null,
+						quotaExhausted: formatQuotaExhaustionEntry(account, now) ?? null,
 						cooldown: formatCooldown(account, now) ?? null,
 						lastUsedAgeMs:
 							typeof account.lastUsed === "number" && account.lastUsed > 0
@@ -212,8 +214,12 @@ export function createCodexStatusTool(ctx: ToolContext): ToolDefinition {
 					if (account.enabled === false)
 						badges.push(formatUiBadge(ui, "disabled", "danger"));
 					const rateLimit = formatRateLimitEntry(account, now) ?? "none";
+					const quotaExhausted = formatQuotaExhaustionEntry(account, now) ?? "none";
 					const cooldown = formatCooldown(account, now) ?? "none";
 					if (rateLimit !== "none")
+						badges.push(formatUiBadge(ui, "rate-limited", "warning"));
+					if (quotaExhausted !== "none")
+						badges.push(formatUiBadge(ui, "quota-exhausted", "warning"));
 						badges.push(formatUiBadge(ui, "rate-limited", "warning"));
 					if (cooldown !== "none")
 						badges.push(formatUiBadge(ui, "cooldown", "warning"));
@@ -227,6 +233,9 @@ export function createCodexStatusTool(ctx: ToolContext): ToolDefinition {
 					);
 					lines.push(
 						`  ${formatUiKeyValue(ui, "rate limit", rateLimit, rateLimit === "none" ? "muted" : "warning")}`,
+					);
+					lines.push(
+						`  ${formatUiKeyValue(ui, "quota", quotaExhausted, quotaExhausted === "none" ? "muted" : "warning")}`,
 					);
 					lines.push(
 						`  ${formatUiKeyValue(ui, "cooldown", cooldown, cooldown === "none" ? "muted" : "warning")}`,

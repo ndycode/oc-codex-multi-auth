@@ -417,6 +417,7 @@ function summarizeStandaloneAccounts(storage, includeSensitive, tag) {
 				tags: Array.isArray(account?.accountTags) ? account.accountTags : [],
 				note: account?.accountNote,
 				rateLimitResetTimes: account?.rateLimitResetTimes ?? {},
+				quotaExhaustedUntil: account?.quotaExhaustedUntil,
 			};
 		});
 }
@@ -660,6 +661,7 @@ export async function runLimitsCommand(parsed, options = {}) {
 			label: account.accountLabel ?? `Account ${index + 1}`,
 			email: maskValue(account.email, parsed.includeSensitive),
 			rateLimitResetTimes: account.rateLimitResetTimes ?? {},
+			quotaExhaustedUntil: account.quotaExhaustedUntil,
 		};
 		try {
 			const { accessToken } = await usageMod.ensureCodexUsageAccessToken({ storage, account });

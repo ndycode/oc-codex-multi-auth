@@ -314,6 +314,7 @@ const mockStorage = {
 		coolingDownUntil?: number;
 		cooldownReason?: string;
 		rateLimitResetTimes?: Record<string, number>;
+		quotaExhaustedUntil?: number;
 		lastSwitchReason?: string;
 	}>,
 	activeIndex: 0,
@@ -1783,10 +1784,11 @@ describe("OpenAIOAuthPlugin", () => {
 
 			await plugin.tool["codex-limits"].execute();
 
-			expect(mockStorage.accounts[0]?.rateLimitResetTimes).toMatchObject({
-				codex: weeklyResetAt * 1000,
-				"gpt-5.1": weeklyResetAt * 1000,
-			});
+			// The account-wide subscription-quota fact now lands on its own field
+			// instead of being forged into a per-family rate-limit block for every
+			// model, so a spent weekly quota is not mislabeled as a transient 429.
+			expect(mockStorage.accounts[0]?.quotaExhaustedUntil).toBe(weeklyResetAt * 1000);
+			expect(mockStorage.accounts[0]?.rateLimitResetTimes ?? {}).toEqual({});
 		});
 
 		it("returns json output for usage windows", async () => {

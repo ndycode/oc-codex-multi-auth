@@ -26,6 +26,7 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 		formatCommandAccountLabel,
 		resolveMaskEmail,
 		formatRateLimitEntry,
+		formatQuotaExhaustionEntry,
 		buildJsonAccountIdentity,
 	} = ctx;
 	return tool({
@@ -165,11 +166,13 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 					storagePath: storePath,
 					accounts: filteredEntries.map(({ account, index }) => {
 						const rateLimit = formatRateLimitEntry(account, now);
+						const quotaExhausted = formatQuotaExhaustionEntry(account, now);
 						const cooldown = formatCooldown(account, now);
 						const statuses: string[] = [];
 						if (index === activeIndex) statuses.push("active");
 						if (account.enabled === false) statuses.push("disabled");
 						if (rateLimit) statuses.push("rate-limited");
+						if (quotaExhausted) statuses.push("quota-exhausted");
 						if (cooldown) statuses.push("cooldown");
 						if (statuses.length === 0) statuses.push("ok");
 						return {
@@ -182,6 +185,7 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 							planType: account.planType ?? null,
 							plan: formatPlanType(account.planType) ?? null,
 							rateLimit: rateLimit ?? null,
+							quotaExhausted: quotaExhausted ?? null,
 							cooldown: cooldown ?? null,
 							tags: Array.isArray(account.accountTags)
 								? [...account.accountTags]
@@ -213,7 +217,11 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 					if (account.enabled === false)
 						badges.push(formatUiBadge(ui, "disabled", "danger"));
 					const rateLimit = formatRateLimitEntry(account, now);
+					const quotaExhausted = formatQuotaExhaustionEntry(account, now);
 					if (rateLimit)
+						badges.push(formatUiBadge(ui, "rate-limited", "warning"));
+					if (quotaExhausted)
+						badges.push(formatUiBadge(ui, "quota-exhausted", "warning"));
 						badges.push(formatUiBadge(ui, "rate-limited", "warning"));
 					if (
 						typeof account.coolingDownUntil === "number" &&
@@ -233,6 +241,11 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 					if (rateLimit) {
 						lines.push(
 							`  ${paintUiText(ui, `rate limit: ${rateLimit}`, "muted")}`,
+						);
+					}
+					if (quotaExhausted) {
+						lines.push(
+							`  ${paintUiText(ui, `quota: ${quotaExhausted}`, "muted")}`,
 						);
 					}
 				});
@@ -293,8 +306,10 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 				const label = formatCommandAccountLabel(account, index, { maskEmail });
 				const statuses: string[] = [];
 				const rateLimit = formatRateLimitEntry(account, now);
+				const quotaExhausted = formatQuotaExhaustionEntry(account, now);
 				if (index === activeIndex) statuses.push("active");
 				if (rateLimit) statuses.push("rate-limited");
+				if (quotaExhausted) statuses.push("quota-exhausted");
 				if (
 					typeof account.coolingDownUntil === "number" &&
 					account.coolingDownUntil > now

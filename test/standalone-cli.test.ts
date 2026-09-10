@@ -760,10 +760,10 @@ describe("standalone oc-codex-multi-auth CLI commands", () => {
 				"utf-8",
 			),
 		);
-		expect(stored.accounts[0]?.rateLimitResetTimes).toMatchObject({
-			codex: weeklyResetAt * 1000,
-			"gpt-5.6-terra": weeklyResetAt * 1000,
-		});
+		// The shared subscription quota is ONE account-wide fact, so it is stored
+		// once and must not be forged into a per-family rate-limit block.
+		expect(stored.accounts[0]?.quotaExhaustedUntil).toBe(weeklyResetAt * 1000);
+		expect(stored.accounts[0]?.rateLimitResetTimes ?? {}).toEqual({});
 	});
 
 	it("limits: renders the windows in text output rather than a bare account list (#209)", async () => {
