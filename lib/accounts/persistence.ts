@@ -78,6 +78,7 @@ export class AccountPersistence {
 					Object.keys(account.rateLimitResetTimes).length > 0
 						? { ...account.rateLimitResetTimes }
 						: undefined,
+				quotaExhaustedUntil: account.quotaExhaustedUntil,
 				coolingDownUntil: account.coolingDownUntil,
 				cooldownReason: account.cooldownReason,
 			})),
@@ -167,6 +168,16 @@ export class AccountPersistence {
 					merged.cooldownReason = mine.cooldownReason;
 				}
 
+				// Account-wide quota exhaustion is monotonic like the per-family
+				// blocks: keep whichever side's stamp runs longer.
+				if (
+					typeof mine.quotaExhaustedUntil === "number" &&
+					mine.quotaExhaustedUntil > now &&
+					mine.quotaExhaustedUntil > (record.quotaExhaustedUntil ?? 0)
+				) {
+					merged.quotaExhaustedUntil = mine.quotaExhaustedUntil;
+				}
+
 				if (typeof mine.lastUsed === "number" && mine.lastUsed > (record.lastUsed ?? 0)) {
 					merged.lastUsed = mine.lastUsed;
 					merged.lastSwitchReason = mine.lastSwitchReason ?? record.lastSwitchReason;
@@ -210,6 +221,21 @@ export class AccountPersistence {
 		for (const mine of outgoing.accounts) {
 			if (!mine) continue;
 			const theirs = diskByIdentity.get(getWorkspaceIdentityKey(mine));
+
+			// Adopt a longer on-disk quota-exhaustion stamp for the same reason the
+			// per-family blocks below are adopted (#218): a second process may have
+			// recorded a week-long block after this one loaded. Handled before the
+			// `theirResets` guard so a disk record carrying only a quota stamp is
+			// not skipped.
+			const theirQuota = theirs?.quotaExhaustedUntil;
+			if (
+				typeof theirQuota === "number" &&
+				Number.isFinite(theirQuota) &&
+				theirQuota > now &&
+				theirQuota > (mine.quotaExhaustedUntil ?? 0)
+			) {
+				mine.quotaExhaustedUntil = theirQuota;
+			}
 			const theirResets = theirs?.rateLimitResetTimes;
 			if (!theirResets) continue;
 
