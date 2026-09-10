@@ -10,7 +10,6 @@ import {
 	createUsageRequestTimeoutError,
 } from "./error-sentinels.js";
 import { logWarn } from "./logger.js";
-import { MODEL_FAMILIES } from "./prompts/codex.js";
 import {
 	isQuotaWindowExhausted,
 	MAX_QUOTA_RESET_HORIZON_MS,
@@ -363,11 +362,19 @@ export function getUsageQuotaExhaustedResetAtMs(
 }
 
 /**
- * Persist a base block for every model family on stored entries sharing the
- * queried usage quota. Rotation tracks each family independently, whereas the
- * `/wham/usage` primary/secondary subscription quota is shared by all models.
- * Writing every base key ensures the next round-robin selection cannot use a
- * different model family to spend an already-exhausted account's Credits.
+ * Persist the account-wide subscription-quota exhaustion stamp on stored
+ * entries sharing the queried usage quota. Rotation tracks each model family
+ * independently in `rateLimitResetTimes`, whereas the `/wham/usage`
+ * primary/secondary subscription quota is shared by all models — so it is
+ * recorded ONCE, on the dedicated `quotaExhaustedUntil` field, rather than
+ * forged into a per-family rate-limit block for every model. Read sites treat
+ * an active stamp as a blocking condition reported separately from a transient
+ * 429.
+ *
+ * The stored value is kept at its monotonic maximum, with the same validity
+ * guards as {@link AccountRotation.markQuotaExhausted}: finite, strictly in the
+ * future, and within {@link MAX_QUOTA_RESET_HORIZON_MS} so an absurd stamp
+ * cannot strand the account.
  *
  * This uses a storage transaction rather than saving the caller's usage
  * snapshot: usage inspection can refresh a single-use token, while another
@@ -380,29 +387,27 @@ export async function persistUsageQuotaExhaustion(
 	const usageKey = getUsageAccountDedupeKey(account);
 	if (!usageKey) return false;
 
+	if (!Number.isFinite(resetAtMs)) return false;
+	const resetAt = Math.floor(resetAtMs);
+	const now = Date.now();
+	if (resetAt <= now) return false;
+	if (resetAt - now > MAX_QUOTA_RESET_HORIZON_MS) return false;
+
 	return withAccountStorageTransaction(async (current, persist) => {
 		if (!current) return false;
 		let changed = false;
 		for (const storedAccount of current.accounts) {
 			if (getUsageAccountDedupeKey(storedAccount) !== usageKey) continue;
-			const rateLimitResetTimes = { ...(storedAccount.rateLimitResetTimes ?? {}) };
-			let accountChanged = false;
-			for (const family of MODEL_FAMILIES) {
-				const existingResetAtMs = rateLimitResetTimes[family];
-				if (
-					typeof existingResetAtMs === "number" &&
-					Number.isFinite(existingResetAtMs) &&
-					existingResetAtMs >= resetAtMs
-				) {
-					continue;
-				}
-				rateLimitResetTimes[family] = resetAtMs;
-				accountChanged = true;
+			const existing = storedAccount.quotaExhaustedUntil;
+			if (
+				typeof existing === "number" &&
+				Number.isFinite(existing) &&
+				existing >= resetAt
+			) {
+				continue;
 			}
-			if (accountChanged) {
-				storedAccount.rateLimitResetTimes = rateLimitResetTimes;
-				changed = true;
-			}
+			storedAccount.quotaExhaustedUntil = resetAt;
+			changed = true;
 		}
 		if (changed) await persist(current);
 		return changed;

@@ -18,7 +18,6 @@ import {
 	type UsagePayload,
 } from "../lib/codex-usage.js";
 import { loadAccounts, saveAccounts, type AccountStorageV3 } from "../lib/storage.js";
-import { MODEL_FAMILIES } from "../lib/prompts/codex.js";
 import { setStoragePathDirect } from "../lib/storage/state.js";
 
 describe("codex usage helpers", () => {
@@ -139,7 +138,7 @@ describe("codex usage helpers", () => {
 		).toBeUndefined();
 	});
 
-	it("persists a quota block for every model family without shortening a longer block", async () => {
+	it("persists an account-wide quota-exhaustion stamp without stamping per-family rate limits", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "usage-quota-persist-"));
 		try {
 			setStoragePathDirect(join(directory, "accounts.json"));
@@ -156,11 +155,11 @@ describe("codex usage helpers", () => {
 			expect(await persistUsageQuotaExhaustion(account, resetAtMs - 60_000)).toBe(false);
 
 			const persisted = await loadAccounts();
-			expect(persisted?.accounts[0]?.rateLimitResetTimes).toEqual(
-				expect.objectContaining(
-					Object.fromEntries(MODEL_FAMILIES.map((family) => [family, resetAtMs])),
-				),
-			);
+			// The account-wide subscription-quota fact lands on its own field, kept
+			// at the monotonic maximum reset stamp.
+			expect(persisted?.accounts[0]?.quotaExhaustedUntil).toBe(resetAtMs);
+			// It no longer forges a per-family rate-limit block for every model.
+			expect(persisted?.accounts[0]?.rateLimitResetTimes ?? {}).toEqual({});
 		} finally {
 			setStoragePathDirect(null);
 			await rm(directory, { recursive: true, force: true });
