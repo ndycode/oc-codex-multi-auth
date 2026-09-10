@@ -20,8 +20,10 @@ import { MAX_QUOTA_RESET_HORIZON_MS } from "../quota-windows.js";
 import type { CooldownReason } from "../storage.js";
 import { nowMs } from "../utils.js";
 import {
+	clearExpiredQuotaExhaustion,
 	clearExpiredRateLimits,
 	getQuotaKey,
+	isQuotaExhausted,
 	isRateLimitedForFamily,
 	type RateLimitReason,
 } from "./rate-limits.js";
@@ -49,6 +51,8 @@ export class AccountRotation {
 	): boolean {
 		if (account.enabled === false) return false;
 		clearExpiredRateLimits(account);
+		clearExpiredQuotaExhaustion(account);
+		if (isQuotaExhausted(account)) return false;
 		if (isRateLimitedForFamily(account, family, model)) return false;
 		if (this.state.isAccountCoolingDown(account)) return false;
 		const quotaKey = model ? `${family}:${model}` : family;
@@ -557,6 +561,16 @@ export class AccountRotation {
 
 			if (typeof account.coolingDownUntil === "number") {
 				waitTimes.push(Math.max(0, account.coolingDownUntil - now));
+			}
+
+			// An account whose shared subscription quota is spent is blocked
+			// account-wide until the stamp resets; surface that wait so a
+			// quota-exhausted-only pool waits instead of returning 0 (503).
+			if (
+				typeof account.quotaExhaustedUntil === "number" &&
+				account.quotaExhaustedUntil > now
+			) {
+				waitTimes.push(account.quotaExhaustedUntil - now);
 			}
 
 			// An account blocked only by a depleted local token bucket becomes

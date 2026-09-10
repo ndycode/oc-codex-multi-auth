@@ -6,7 +6,7 @@ import {
 	getTokenTracker,
 	type AccountWithMetrics,
 } from "./rotation.js";
-import { clearExpiredRateLimits, isRateLimitedForFamily } from "./accounts/rate-limits.js";
+import { clearExpiredQuotaExhaustion, clearExpiredRateLimits, isQuotaExhausted, isRateLimitedForFamily } from "./accounts/rate-limits.js";
 
 const log = createLogger("parallel-probe");
 
@@ -48,9 +48,11 @@ export function getTopCandidates(
 
 	for (const account of accounts) {
 		clearExpiredRateLimits(account);
+		clearExpiredQuotaExhaustion(account);
 		const isRateLimited = isRateLimitedForFamily(account, modelFamily, model);
 		const isCoolingDown = account.coolingDownUntil !== undefined && account.coolingDownUntil > Date.now();
-		const isAvailable = !isRateLimited && !isCoolingDown;
+		const isQuotaBlocked = isQuotaExhausted(account);
+		const isAvailable = !isRateLimited && !isCoolingDown && !isQuotaBlocked;
 
 		accountsWithMetrics.push({
 			index: account.index,

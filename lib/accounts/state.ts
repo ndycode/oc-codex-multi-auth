@@ -12,8 +12,10 @@ import type { AccountIdSource, OAuthAuthDetails } from "../types.js";
 import { nowMs } from "../utils.js";
 import {
 	clampNonNegativeInt,
+	clearExpiredQuotaExhaustion,
 	clearExpiredRateLimits,
 	getQuotaKey,
+	isQuotaExhausted,
 	isRateLimitedForFamily,
 	type RateLimitReason,
 } from "./rate-limits.js";
@@ -54,6 +56,7 @@ export interface ManagedAccount {
 	lastSwitchReason?: "rate-limit" | "initial" | "rotation";
 	lastRateLimitReason?: RateLimitReason;
 	rateLimitResetTimes: RateLimitStateV3;
+	quotaExhaustedUntil?: number;
 	coolingDownUntil?: number;
 	cooldownReason?: CooldownReason;
 }
@@ -67,6 +70,7 @@ export interface AccountSelectionExplainability {
 	healthScore: number;
 	tokensAvailable: number;
 	rateLimitedUntil?: number;
+	quotaExhaustedUntil?: number;
 	coolingDownUntil?: number;
 	cooldownReason?: CooldownReason;
 	lastUsed: number;
@@ -385,6 +389,7 @@ export class AccountState {
 						lastUsed: clampNonNegativeInt(account.lastUsed, 0),
 						lastSwitchReason: account.lastSwitchReason,
 						rateLimitResetTimes: account.rateLimitResetTimes ?? {},
+						quotaExhaustedUntil: account.quotaExhaustedUntil,
 						coolingDownUntil: account.coolingDownUntil,
 						cooldownReason: account.cooldownReason,
 					};
@@ -527,6 +532,7 @@ export class AccountState {
 
 		return this.accounts.map((account) => {
 			clearExpiredRateLimits(account);
+			clearExpiredQuotaExhaustion(account);
 			const enabled = account.enabled !== false;
 			const reasons: string[] = [];
 			let rateLimitedUntil: number | undefined;
@@ -550,8 +556,13 @@ export class AccountState {
 					? account.coolingDownUntil
 					: undefined;
 
+			const quotaExhaustedUntil = isQuotaExhausted(account, now)
+				? account.quotaExhaustedUntil
+				: undefined;
+
 			if (!enabled) reasons.push("disabled");
 			if (rateLimitedUntil !== undefined) reasons.push("rate-limited");
+			if (quotaExhaustedUntil !== undefined) reasons.push("quota-exhausted");
 			if (coolingDownUntil !== undefined) {
 				reasons.push(
 					account.cooldownReason ? `cooldown:${account.cooldownReason}` : "cooldown",
@@ -564,6 +575,7 @@ export class AccountState {
 			const eligible =
 				enabled &&
 				rateLimitedUntil === undefined &&
+				quotaExhaustedUntil === undefined &&
 				coolingDownUntil === undefined &&
 				tokensAvailable >= 1;
 			if (reasons.length === 0) reasons.push("eligible");
@@ -577,6 +589,7 @@ export class AccountState {
 				healthScore: healthTracker.getScore(account.index, quotaKey),
 				tokensAvailable,
 				rateLimitedUntil,
+				quotaExhaustedUntil,
 				coolingDownUntil,
 				cooldownReason: coolingDownUntil !== undefined ? account.cooldownReason : undefined,
 				lastUsed: account.lastUsed,
@@ -834,6 +847,8 @@ export class AccountState {
 	): boolean {
 		if (account.enabled === false) return false;
 		clearExpiredRateLimits(account);
+		clearExpiredQuotaExhaustion(account);
+		if (isQuotaExhausted(account)) return false;
 		if (isRateLimitedForFamily(account, family, model)) return false;
 		if (this.isAccountCoolingDown(account)) return false;
 		return true;
