@@ -134,6 +134,12 @@ export interface AccountMetadataV3 {
 	lastSwitchReason?: "rate-limit" | "initial" | "rotation";
 	rateLimitResetTimes?: RateLimitStateV3;
 	coolingDownUntil?: number;
+	/**
+	 * Ms epoch until which this account's shared subscription quota (the
+	 * `/wham/usage` primary/secondary window) is spent. Account-wide, distinct
+	 * from the per-family/per-model blocks in `rateLimitResetTimes`.
+	 */
+	quotaExhaustedUntil?: number;
 	cooldownReason?: CooldownReason;
 }
 

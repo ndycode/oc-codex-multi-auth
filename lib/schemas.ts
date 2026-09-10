@@ -146,6 +146,7 @@ export const AccountMetadataV3Schema = z.object({
 	lastSwitchReason: SwitchReasonSchema.optional(),
 	rateLimitResetTimes: RateLimitStateV3Schema.optional(),
 	coolingDownUntil: z.number().optional(),
+	quotaExhaustedUntil: z.number().optional(),
 	cooldownReason: CooldownReasonSchema.optional(),
 });
 

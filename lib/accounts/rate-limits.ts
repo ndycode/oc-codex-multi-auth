@@ -53,6 +53,43 @@ export function clearExpiredRateLimits(entity: RateLimitedEntity): void {
 	}
 }
 
+export interface QuotaExhaustibleEntity {
+	/** Ms epoch until which this account's shared subscription quota is spent. */
+	quotaExhaustedUntil?: number;
+}
+
+/**
+ * Whether an account's shared subscription quota is currently spent.
+ *
+ * This is an ACCOUNT-WIDE block sourced from the `/wham/usage`
+ * primary/secondary window, deliberately distinct from the per-family /
+ * per-model transient blocks tracked in {@link RateLimitState}. Read sites
+ * report it separately so a 30-second 429 is never conflated with a week-long
+ * subscription-quota exhaustion.
+ */
+export function isQuotaExhausted(
+	entity: QuotaExhaustibleEntity,
+	now: number = nowMs(),
+): boolean {
+	const until = entity.quotaExhaustedUntil;
+	return typeof until === "number" && Number.isFinite(until) && now < until;
+}
+
+/**
+ * Drop an elapsed (or non-finite) quota-exhaustion stamp so it does not leak
+ * into snapshots or persistence, mirroring {@link clearExpiredRateLimits} for
+ * the per-family map.
+ */
+export function clearExpiredQuotaExhaustion(
+	entity: QuotaExhaustibleEntity,
+	now: number = nowMs(),
+): void {
+	const until = entity.quotaExhaustedUntil;
+	if (until !== undefined && (!Number.isFinite(until) || now >= until)) {
+		delete entity.quotaExhaustedUntil;
+	}
+}
+
 export function isRateLimitedForQuotaKey(entity: RateLimitedEntity, key: QuotaKey): boolean {
 	const resetTime = entity.rateLimitResetTimes[key];
 	return resetTime !== undefined && nowMs() < resetTime;
