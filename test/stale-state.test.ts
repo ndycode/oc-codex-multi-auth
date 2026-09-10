@@ -59,8 +59,19 @@ describe("clearRefreshedAccountStaleState", () => {
 	it("is a no-op for a clean account", () => {
 		const account: StaleStateAccount = {};
 		const result = clearRefreshedAccountStaleState(account);
-		expect(result).toEqual({ clearedCooldown: false, clearedRateLimitKeys: 0 });
+		expect(result).toEqual({ clearedCooldown: false, clearedRateLimitKeys: 0, clearedQuotaExhaustion: false });
 		expect(account).toEqual({});
+	});
+
+	it("clears an active account-wide quota-exhaustion stamp and counts it", () => {
+		const account: StaleStateAccount = {
+			quotaExhaustedUntil: Date.now() + 7 * 24 * 60 * 60 * 1000,
+		};
+
+		const result = clearRefreshedAccountStaleState(account);
+
+		expect(result.clearedQuotaExhaustion).toBe(true);
+		expect(account.quotaExhaustedUntil).toBeUndefined();
 	});
 
 	it("aggregates across multiple accounts", () => {
@@ -191,6 +202,11 @@ describe("findStaleRecoverableAccounts", () => {
 
 	it("flags an account blocked by a future rate-limit reset", () => {
 		const accounts = [{ enabled: true, rateLimitResetTimes: { "gpt-5.4": FUTURE } }];
+		expect(findStaleRecoverableAccounts(accounts, NOW)).toEqual([0]);
+	});
+
+	it("flags an account blocked only by a future quota-exhaustion stamp", () => {
+		const accounts = [{ enabled: true, quotaExhaustedUntil: FUTURE }];
 		expect(findStaleRecoverableAccounts(accounts, NOW)).toEqual([0]);
 	});
 

@@ -33,6 +33,7 @@ export interface StaleStateAccount {
 	coolingDownUntil?: number;
 	cooldownReason?: string;
 	rateLimitResetTimes?: Record<string, number | undefined>;
+	quotaExhaustedUntil?: number;
 }
 
 export interface ClearedStaleState {
@@ -40,6 +41,8 @@ export interface ClearedStaleState {
 	clearedCooldown: boolean;
 	/** Number of rate-limit reset entries removed. */
 	clearedRateLimitKeys: number;
+	/** True when an active account-wide quota-exhaustion stamp was cleared. */
+	clearedQuotaExhaustion: boolean;
 }
 
 /**
@@ -67,6 +70,12 @@ export function clearRefreshedAccountStaleState(
 		delete account.cooldownReason;
 	}
 
+	const hadActiveQuotaExhaustion =
+		typeof account.quotaExhaustedUntil === "number" && account.quotaExhaustedUntil > now;
+	if (account.quotaExhaustedUntil !== undefined) {
+		delete account.quotaExhaustedUntil;
+	}
+
 	let clearedRateLimitKeys = 0;
 	if (account.rateLimitResetTimes) {
 		clearedRateLimitKeys = Object.keys(account.rateLimitResetTimes).length;
@@ -78,6 +87,7 @@ export function clearRefreshedAccountStaleState(
 	return {
 		clearedCooldown: hadActiveCooldown,
 		clearedRateLimitKeys,
+		clearedQuotaExhaustion: hadActiveQuotaExhaustion,
 	};
 }
 
@@ -86,6 +96,8 @@ export interface StaleStateRepairSummary {
 	cooldownsCleared: number;
 	/** Total rate-limit reset entries removed across all accounts. */
 	rateLimitKeysCleared: number;
+	/** Accounts that had an active quota-exhaustion stamp cleared. */
+	quotaExhaustionsCleared: number;
 }
 
 /**
@@ -98,12 +110,14 @@ export function clearRefreshedAccountsStaleState(
 ): StaleStateRepairSummary {
 	let cooldownsCleared = 0;
 	let rateLimitKeysCleared = 0;
+	let quotaExhaustionsCleared = 0;
 	for (const account of accounts) {
 		const cleared = clearRefreshedAccountStaleState(account);
 		if (cleared.clearedCooldown) cooldownsCleared += 1;
 		rateLimitKeysCleared += cleared.clearedRateLimitKeys;
+		if (cleared.clearedQuotaExhaustion) quotaExhaustionsCleared += 1;
 	}
-	return { cooldownsCleared, rateLimitKeysCleared };
+	return { cooldownsCleared, rateLimitKeysCleared, quotaExhaustionsCleared };
 }
 
 /**
@@ -224,6 +238,7 @@ export interface StaleStateScanAccount {
 	coolingDownUntil?: number;
 	cooldownReason?: string;
 	rateLimitResetTimes?: Record<string, number | undefined>;
+	quotaExhaustedUntil?: number;
 }
 
 /**
@@ -252,6 +267,9 @@ export function findStaleRecoverableAccounts(
 		const hasFutureCooldown =
 			typeof account.coolingDownUntil === "number" && account.coolingDownUntil > now;
 
+		const hasFutureQuotaExhaustion =
+			typeof account.quotaExhaustedUntil === "number" && account.quotaExhaustedUntil > now;
+
 		let hasFutureRateLimit = false;
 		if (account.rateLimitResetTimes) {
 			for (const reset of Object.values(account.rateLimitResetTimes)) {
@@ -262,7 +280,7 @@ export function findStaleRecoverableAccounts(
 			}
 		}
 
-		if (hasFutureCooldown || hasFutureRateLimit) {
+		if (hasFutureCooldown || hasFutureRateLimit || hasFutureQuotaExhaustion) {
 			blocked.push(i);
 		}
 	}

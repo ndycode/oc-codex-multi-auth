@@ -10,7 +10,7 @@ import {
 export async function repairDoctorAccounts(accounts: AccountMetadataV3[]) {
 	const refreshedAccounts: {
 		readonly identity: RefreshAccountIdentity;
-		readonly staleState: Pick<AccountMetadataV3, "coolingDownUntil" | "cooldownReason" | "rateLimitResetTimes">;
+		readonly staleState: Pick<AccountMetadataV3, "coolingDownUntil" | "cooldownReason" | "rateLimitResetTimes" | "quotaExhaustedUntil">;
 	}[] = [];
 	const verificationFailureIdentities: RefreshAccountIdentity[] = [];
 	const reloginNeeded: number[] = [];
@@ -24,6 +24,7 @@ export async function repairDoctorAccounts(accounts: AccountMetadataV3[]) {
 			coolingDownUntil: account.coolingDownUntil,
 			cooldownReason: account.cooldownReason,
 			rateLimitResetTimes: { ...account.rateLimitResetTimes },
+			quotaExhaustedUntil: account.quotaExhaustedUntil,
 		};
 		const outcome = await refreshAndPersistAccount(input);
 		switch (outcome.status) {
@@ -61,6 +62,7 @@ export async function repairDoctorAccounts(accounts: AccountMetadataV3[]) {
 					// A concurrent health update is newer evidence than this repair's snapshot.
 					const stateUnchanged = record.coolingDownUntil === staleState.coolingDownUntil &&
 						record.cooldownReason === staleState.cooldownReason &&
+						record.quotaExhaustedUntil === staleState.quotaExhaustedUntil &&
 						Object.keys({ ...record.rateLimitResetTimes, ...staleState.rateLimitResetTimes }).every(
 							(key) => record.rateLimitResetTimes?.[key] === staleState.rateLimitResetTimes?.[key],
 						);
@@ -68,6 +70,7 @@ export async function repairDoctorAccounts(accounts: AccountMetadataV3[]) {
 				}
 				const hasStaleState = refreshedRecords.some((record) =>
 					record.coolingDownUntil !== undefined || record.cooldownReason !== undefined ||
+					record.quotaExhaustedUntil !== undefined ||
 					Object.keys(record.rateLimitResetTimes ?? {}).length > 0,
 				);
 				const summary = clearRefreshedAccountsStaleState(refreshedRecords);
@@ -79,6 +82,9 @@ export async function repairDoctorAccounts(accounts: AccountMetadataV3[]) {
 			}
 			if (staleSummary.rateLimitKeysCleared > 0) {
 				appliedFixes.push(`Cleared ${staleSummary.rateLimitKeysCleared} stale rate-limit marker(s).`);
+			}
+			if (staleSummary.quotaExhaustionsCleared > 0) {
+				appliedFixes.push(`Cleared quota-exhaustion state on ${staleSummary.quotaExhaustionsCleared} recovered account(s).`);
 			}
 		} catch {
 			fixErrors.push("Failed to persist stale-state repairs.");
