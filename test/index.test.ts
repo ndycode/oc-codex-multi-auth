@@ -293,6 +293,8 @@ vi.mock("../lib/request/rate-limit-backoff.js", () => ({
 		isInvalidatedAuthTokenError: vi.fn((_errorBody: unknown, status?: number) => status === 401),
 	getUnsupportedCodexModelInfo: vi.fn(() => ({ isUnsupported: false })),
 	resolveUnsupportedCodexFallbackModel: vi.fn(() => undefined),
+	isDefaultAutoFallbackModel: vi.fn(() => false),
+	pickFallbackChainTarget: vi.fn(() => undefined),
 	shouldFallbackToGpt52OnUnsupportedGpt53: vi.fn(() => false),
 	handleSuccessResponse: vi.fn(async (response: Response) => response),
 }));
@@ -4872,6 +4874,82 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("degrades to the next chain model when every account is blocked for the requested one", async () => {
+		// Given a pool that is fully blocked for the requested default selector,
+		// while the next chain model is servable right now.
+		const fetchHelpers = await import("../lib/request/fetch-helpers.js");
+		const { AccountManager } = await import("../lib/accounts.js");
+
+		const account = {
+			index: 0,
+			accountId: "acc-1",
+			email: "user@example.com",
+			refreshToken: "refresh-1",
+		};
+		let askedModel = "";
+		const selectable = () => (askedModel === "gpt-5.5" ? account : null);
+		const customManager = {
+			getAccountCount: () => 1,
+			getSelectionExplainability: (_family: string, model?: string | null) => {
+				askedModel = String(model ?? "");
+				return [];
+			},
+			getCurrentOrNextForFamilyHybrid: selectable,
+			getAccountForStrategy: selectable,
+			// Only the fallback model is servable; the requested one is blocked.
+			getMinWaitTimeForFamily: vi.fn((_family: string, model?: string | null) =>
+				model === "gpt-5.5" ? 0 : 600_000,
+			),
+			toAuthDetails: () => ({
+				type: "oauth" as const,
+				access: "access-1",
+				refresh: account.refreshToken,
+				expires: Date.now() + 60_000,
+			}),
+			hasRefreshToken: () => true,
+			saveToDiskDebounced: vi.fn(),
+			updateFromAuth: vi.fn(),
+			clearAuthFailures: vi.fn(),
+			incrementAuthFailures: vi.fn(() => 1),
+			markAccountCoolingDown: vi.fn(),
+			markRateLimitedWithReason: vi.fn(),
+			recordRateLimit: vi.fn(),
+			consumeToken: vi.fn(() => true),
+			refundToken: vi.fn(),
+			markSwitched: vi.fn(),
+			removeAccount: vi.fn(() => false),
+			removeAccountsWithSameRefreshToken: vi.fn(() => 0),
+			recordFailure: vi.fn(),
+			recordSuccess: vi.fn(),
+			shouldShowAccountToast: vi.fn(() => false),
+			markToastShown: vi.fn(),
+			setActiveIndex: vi.fn(() => account),
+			getAccountsSnapshot: vi.fn(() => [account]),
+		};
+		vi.spyOn(AccountManager, "loadFromDisk").mockResolvedValue(customManager as never);
+		vi.mocked(fetchHelpers.isDefaultAutoFallbackModel).mockReturnValue(true);
+		vi.mocked(fetchHelpers.pickFallbackChainTarget).mockReturnValue("gpt-5.5");
+		vi.mocked(fetchHelpers.createCodexHeaders).mockImplementation(() => new Headers());
+		globalThis.fetch = vi
+			.fn()
+			.mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), { status: 200 }));
+
+		// When the request asks for the blocked model.
+		const { sdk } = await setupPlugin();
+		const response = await sdk.fetch!("https://api.openai.com/v1/chat", {
+			method: "POST",
+			body: JSON.stringify({ model: "gpt-5.6-sol" }),
+		});
+
+		// Then it is served on the fallback model instead of waiting out the block.
+		expect(response.status).toBe(200);
+		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+		const sent = JSON.parse(
+			String(vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.body),
+		);
+		expect(sent.model).toBe("gpt-5.5");
 	});
 
 	it("cools down the account when grouped auth removal removes zero entries", async () => {

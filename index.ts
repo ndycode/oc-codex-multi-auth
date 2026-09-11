@@ -165,6 +165,8 @@ import {
 	createAbortError,
 	getUnsupportedCodexModelInfo,
 	resolveUnsupportedCodexFallbackModel,
+	isDefaultAutoFallbackModel,
+	pickFallbackChainTarget,
         refreshAndUpdateToken,
         rewriteUrlForCodex,
 	shouldRefreshToken,
@@ -2318,6 +2320,103 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 								attemptedUnsupportedFallbackModels.add(model);
 							}
 
+							// Degrading the model mid-request touches several coupled pieces:
+							// the attempted-model set, the routing snapshot, the model's own
+							// instructions, the reasoning clamp (only the 5.6 tiers accept
+							// `max`, so an un-clamped sol -> gpt-5.5 hop turns a graceful
+							// fallback into a hard 400) and the per-model body shape. Both the
+							// entitlement fallback and the quota fallback go through here so
+							// the two can never drift apart on any of them.
+							const applyModelFallback = async (
+								previousModel: string,
+								target: string,
+								reason: string,
+							): Promise<void> => {
+								attemptedUnsupportedFallbackModels.add(previousModel);
+								attemptedUnsupportedFallbackModels.add(target);
+
+								model = target;
+								modelFamily = getModelFamily(model);
+								quotaKey = `${modelFamily}:${model}`;
+								fallbackApplied = true;
+								fallbackFrom = previousModel;
+								fallbackTo = model;
+								fallbackReason = reason;
+								const fallbackInstructions = await getCodexInstructions(model);
+
+								if (transformedBody && typeof transformedBody === "object") {
+									transformedBody = {
+										...transformedBody,
+										model,
+										instructions: fallbackInstructions,
+										input: upsertBackendModelIdentityMessage(
+											transformedBody.input,
+											model,
+										),
+									};
+								} else {
+									let fallbackBody: Record<string, unknown> = {
+										model,
+										instructions: fallbackInstructions,
+									};
+									if (requestInit?.body && typeof requestInit.body === "string") {
+										try {
+											const parsed = JSON.parse(requestInit.body) as Record<string, unknown>;
+											fallbackBody = {
+												...parsed,
+												model,
+												instructions: fallbackInstructions,
+											};
+											if (Array.isArray(fallbackBody.input)) {
+												fallbackBody.input = upsertBackendModelIdentityMessage(
+													fallbackBody.input,
+													model,
+												);
+											}
+										} catch {
+											// Keep minimal fallback body if parsing fails.
+										}
+									}
+									transformedBody = fallbackBody as RequestBody;
+								}
+
+								const clampedReasoning = clampReasoningForModel(
+									transformedBody.reasoning,
+									model,
+								);
+								if (clampedReasoning !== transformedBody.reasoning) {
+									transformedBody = {
+										...transformedBody,
+										reasoning: clampedReasoning,
+									};
+								}
+
+								requestInit = {
+									...(requestInit ?? {}),
+									body: JSON.stringify(shapeBodyForModel(transformedBody)),
+								};
+								if (runtimeMetrics.lastSelectionSnapshot) {
+									runtimeMetrics.lastSelectionSnapshot = {
+										...runtimeMetrics.lastSelectionSnapshot,
+										family: modelFamily,
+										model: model ?? null,
+										requestedModel,
+										effectiveModel: model ?? null,
+										quotaKey,
+										fallbackApplied,
+										fallbackFrom,
+										fallbackTo,
+										fallbackReason,
+									};
+								}
+							};
+
+							// A degraded model must not degrade again without bound, even if a
+							// custom chain is cyclic. The attempted set already prevents
+							// revisiting a model; this caps the total hops per request.
+							const MAX_QUOTA_FALLBACK_SWITCHES = 3;
+							let quotaFallbackSwitches = 0;
+
 							while (true) {
 						let accountCount = accountManager.getAccountCount();
 						const attempted = new Set<number>();
@@ -2921,92 +3020,12 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 			if (fallbackModel) {
 				const previousModel = model ?? "gpt-5-codex";
 				const previousModelFamily = modelFamily;
-				attemptedUnsupportedFallbackModels.add(previousModel);
-				attemptedUnsupportedFallbackModels.add(fallbackModel);
 				accountManager.refundToken(account, previousModelFamily, previousModel);
-
-				model = fallbackModel;
-				modelFamily = getModelFamily(model);
-				quotaKey = `${modelFamily}:${model}`;
-				fallbackApplied = true;
-				fallbackFrom = previousModel;
-				fallbackTo = model;
-				fallbackReason = "fallback-unsupported-model-entitlement";
-				const fallbackInstructions = await getCodexInstructions(model);
-
-				if (transformedBody && typeof transformedBody === "object") {
-					transformedBody = {
-						...transformedBody,
-						model,
-						instructions: fallbackInstructions,
-						input: upsertBackendModelIdentityMessage(
-							transformedBody.input,
-							model,
-						),
-					};
-				} else {
-					let fallbackBody: Record<string, unknown> = {
-						model,
-						instructions: fallbackInstructions,
-					};
-					if (requestInit?.body && typeof requestInit.body === "string") {
-						try {
-							const parsed = JSON.parse(requestInit.body) as Record<string, unknown>;
-							fallbackBody = {
-								...parsed,
-								model,
-								instructions: fallbackInstructions,
-							};
-							if (Array.isArray(fallbackBody.input)) {
-								fallbackBody.input = upsertBackendModelIdentityMessage(
-									fallbackBody.input,
-									model,
-								);
-							}
-						} catch {
-							// Keep minimal fallback body if parsing fails.
-						}
-					}
-					transformedBody = fallbackBody as RequestBody;
-				}
-
-				// The carried-over reasoning effort was clamped for the ORIGINAL
-				// model; the fallback target may not accept it (`max` exists only
-				// on the 5.6 tiers, so a sol -> gpt-5.5 hop must degrade it or the
-				// graceful fallback turns into a hard 400).
-				const clampedReasoning = clampReasoningForModel(
-					transformedBody.reasoning,
-					model,
+				await applyModelFallback(
+					previousModel,
+					fallbackModel,
+					"fallback-unsupported-model-entitlement",
 				);
-				if (clampedReasoning !== transformedBody.reasoning) {
-					transformedBody = {
-						...transformedBody,
-						reasoning: clampedReasoning,
-					};
-				}
-
-				// Shape for whichever model this attempt targets. A 5.6 -> 5.5 fallback
-				// must go out in the classic shape, and a 5.6 -> 5.6 hop must re-fold
-				// the new model's instructions into `input` rather than leaving them
-				// at the top level.
-				requestInit = {
-					...(requestInit ?? {}),
-					body: JSON.stringify(shapeBodyForModel(transformedBody)),
-				};
-				if (runtimeMetrics.lastSelectionSnapshot) {
-					runtimeMetrics.lastSelectionSnapshot = {
-						...runtimeMetrics.lastSelectionSnapshot,
-						family: modelFamily,
-						model: model ?? null,
-						requestedModel,
-						effectiveModel: model ?? null,
-						quotaKey,
-						fallbackApplied,
-						fallbackFrom,
-						fallbackTo,
-						fallbackReason,
-					};
-				}
 				runtimeMetrics.lastError = `Model fallback: ${previousModel} -> ${model}`;
 				runtimeMetrics.lastErrorCategory = "model-fallback";
 				logWarn(
@@ -3473,6 +3492,74 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 										(account) =>
 											!fetchedAccountKeys.has(getAccountDiagnosticsKey(account)),
 									).length;
+
+								// Every account is blocked for this model. Before waiting out a
+								// block that can run for days (`retryAllAccountsMaxRetries`
+								// defaults to Infinity), degrade to the next chain model that is
+								// actually usable right now. Gated exactly like the entitlement
+								// auto-fallback -- same default-selector entry models, same
+								// opt-out env vars -- so a directly chosen model is never
+								// silently swapped. An account-wide quota block fails this test
+								// on every candidate, so it correctly falls through to the wait.
+								if (
+									waitMs > 0 &&
+									count > 0 &&
+									model &&
+									quotaFallbackSwitches < MAX_QUOTA_FALLBACK_SWITCHES &&
+									isDefaultAutoFallbackModel(
+										model,
+										attemptedUnsupportedFallbackModels,
+									)
+								) {
+									const rejected = new Set<string>();
+									let usableFallback: string | undefined;
+									while (true) {
+										const candidate = pickFallbackChainTarget({
+											currentModel: model,
+											attemptedModels: new Set([
+												...attemptedUnsupportedFallbackModels,
+												...rejected,
+											]),
+											customChain: unsupportedCodexFallbackChain,
+											fallbackToGpt52OnUnsupportedGpt53,
+										});
+										if (!candidate) break;
+										// Only degrade to a model some account can serve NOW,
+										// otherwise the hop just moves the same block sideways.
+										if (
+											accountManager.getMinWaitTimeForFamily(
+												getModelFamily(candidate),
+												candidate,
+											) === 0
+										) {
+											usableFallback = candidate;
+											break;
+										}
+										rejected.add(candidate);
+									}
+
+									if (usableFallback) {
+										const previousModel = model;
+										quotaFallbackSwitches++;
+										await applyModelFallback(
+											previousModel,
+											usableFallback,
+											"fallback-quota-exhausted",
+										);
+										runtimeMetrics.lastError = `Model fallback: ${previousModel} -> ${model}`;
+										runtimeMetrics.lastErrorCategory = "model-fallback";
+										logWarn(
+											`All ${count} account(s) are rate-limited or out of quota for ${previousModel}. Falling back to ${model}.`,
+											{
+												requestedModel: previousModel,
+												effectiveModel: model,
+												fallbackApplied: true,
+												fallbackReason: "fallback-quota-exhausted",
+											},
+										);
+										continue;
+									}
+								}
 
 								if (
 									retryAllAccountsRateLimited &&

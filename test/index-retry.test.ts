@@ -58,6 +58,8 @@ vi.mock("../lib/request/fetch-helpers.js", () => ({
 	},
 	isInvalidatedAuthTokenError: (_errorBody: unknown, status?: number) => status === 401,
 	resolveUnsupportedCodexFallbackModel: () => undefined,
+	isDefaultAutoFallbackModel: () => false,
+	pickFallbackChainTarget: () => undefined,
 	getUnsupportedCodexModelInfo: () => ({
 		isUnsupported: false,
 		unsupportedModel: undefined,
