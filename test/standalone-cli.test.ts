@@ -1,7 +1,17 @@
+/// <reference lib="es2022.array" />
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Exercise the shipped import boundary with source implementations, not stale dist.
+async function loadSourceDoctorRuntime() {
+	return Promise.all([
+		import("../lib/storage.js"),
+		import("../lib/tools/doctor-repair.js"),
+		import("../lib/shutdown.js"),
+	]);
+}
 
 async function createTempHome() {
 	return mkdtemp(join(tmpdir(), "oc-codex-standalone-"));
@@ -31,6 +41,7 @@ describe("standalone oc-codex-multi-auth CLI commands", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		vi.unstubAllEnvs();
 		if (tempHome) {
 			await rm(tempHome, { recursive: true, force: true });
 			tempHome = null;
@@ -311,6 +322,236 @@ describe("standalone oc-codex-multi-auth CLI commands", () => {
 		...over,
 	});
 
+	it.each(["acct_warm", undefined])("doctor: repairs stale state and persists rotated credentials only in --config-path (%s)", async (accountId) => {
+		// Given a selected pool distinct from both the home pool and runtime default.
+		vi.resetModules();
+		vi.stubEnv("CODEX_KEYCHAIN", "1");
+		tempHome = await createTempHome();
+		await seedPool(tempHome, [freshAccount({ refreshToken: "home-secret" })]);
+		const homePath = join(tempHome, ".opencode", "oc-codex-multi-auth-accounts.json");
+		const homeBefore = await readFile(homePath, "utf-8");
+		const poolPath = join(tempHome, "selected-pool.json");
+		const resetAt = Date.now() + 86_400_000;
+		await writeFile(poolPath, JSON.stringify({ version: 3, activeIndex: 0, accounts: [
+			freshAccount({ accountId, coolingDownUntil: resetAt, cooldownReason: "auth-failure", rateLimitResetTimes: { codex: resetAt } }),
+		] }));
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+			access_token: "rotated-access-secret", refresh_token: "rotated-refresh-secret", expires_in: 3600,
+		}), { status: 200 }));
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+
+		// When explicitly repairing this pool, even an unexpired token is verified.
+		const result = await runInstaller(["doctor", "--fix", "--json", "--config-path", poolPath], {
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			loadDoctorRuntime: loadSourceDoctorRuntime,
+		});
+
+		// Then the repair is durable, reported, and confined to the selected file.
+		const stored = JSON.parse(await readFile(poolPath, "utf-8"));
+		expect.soft(stored.accounts[0].rateLimitResetTimes).toEqual({});
+		expect.soft(JSON.parse(String(logSpy.mock.calls.at(-1)?.[0])).fixApplied).toBe(true);
+		expect(stored.accounts[0]).toMatchObject({ accessToken: "rotated-access-secret", refreshToken: "rotated-refresh-secret" });
+		expect(stored.accounts[0].coolingDownUntil).toBeUndefined();
+		expect(stored.accounts[0].cooldownReason).toBeUndefined();
+		expect(result).toMatchObject({ action: "doctor", exitCode: 0, storagePath: poolPath });
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(String(fetchSpy.mock.calls[0]?.[1]?.body)).toContain("rt-warm");
+		expect(await readFile(homePath, "utf-8")).toBe(homeBefore);
+		expect(JSON.stringify(logSpy.mock.calls)).not.toMatch(/rotated-access-secret|rotated-refresh-secret|rt-warm|home-secret/);
+	});
+
+	it("doctor: repairs and summarizes the default keychain pool when no JSON file exists", async () => {
+		// Given enabled keychain routing with accounts only in the injected backend.
+		vi.resetModules();
+		vi.stubEnv("CODEX_KEYCHAIN", "1");
+		tempHome = await createTempHome();
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+		const keychainRouting: (string | undefined)[] = [];
+		const accounts = [freshAccount({ accountLabel: "Keychain account", rateLimitResetTimes: { codex: 123 } })];
+		let snapshot = { accounts };
+		const repairDoctorAccounts = vi.fn(async () => {
+			keychainRouting.push(process.env.CODEX_KEYCHAIN);
+			snapshot = { accounts: [freshAccount({ accountLabel: "Keychain account", rateLimitResetTimes: {} })] };
+			return { appliedFixes: ["Cleared stale rate-limit markers."], fixErrors: [] };
+		});
+
+		// When repair uses injected runtime seams, never the real keychain.
+		const result = await runInstaller(["doctor", "--fix", "--json"], {
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			loadDoctorRuntime: async () => [
+				{ setStoragePathDirect: vi.fn(), loadAccounts: async () => {
+					keychainRouting.push(process.env.CODEX_KEYCHAIN);
+					return snapshot;
+				} },
+				{ repairDoctorAccounts },
+				{ setShutdownOwnsProcess: vi.fn() },
+			],
+		});
+
+		// Then repair runs and the summary uses the post-repair backend snapshot.
+		expect(repairDoctorAccounts).toHaveBeenCalledWith(accounts);
+		const output = JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]));
+		expect(output).toMatchObject({
+			totalAccounts: 1,
+			fixApplied: true,
+			accounts: [{ label: "Keychain account" }],
+		});
+		expect(output.accounts[0].rateLimitResetTimes).toEqual({});
+		expect(keychainRouting).toEqual(["1", "1", "1"]);
+		expect(process.env.CODEX_KEYCHAIN).toBe("1");
+		expect(result).toMatchObject({ action: "doctor", exitCode: 0 });
+	});
+
+	it("doctor: recommends login without errors when the default runtime pool is empty", async () => {
+		// Given a fresh installation with no JSON file or runtime accounts.
+		vi.resetModules();
+		vi.stubEnv("CODEX_KEYCHAIN", "1");
+		tempHome = await createTempHome();
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected OAuth request"));
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+		const repairMod = await import("../lib/tools/doctor-repair.js");
+		const repairDoctorAccounts = vi.fn(repairMod.repairDoctorAccounts);
+		const loadAccounts = vi.fn().mockResolvedValue(null);
+
+		// When the real repair helper receives accounts from the injected empty backend.
+		const result = await runInstaller(["doctor", "--fix", "--json"], {
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			loadDoctorRuntime: async () => [
+				{ setStoragePathDirect: vi.fn(), loadAccounts },
+				{ repairDoctorAccounts },
+				{ setShutdownOwnsProcess: vi.fn() },
+			],
+		});
+
+		// Then null discovery and snapshot are successful, without OAuth requests.
+		expect(result.exitCode).toBe(0);
+		expect(repairDoctorAccounts).toHaveBeenCalledWith([]);
+		expect(loadAccounts).toHaveBeenCalledTimes(2);
+		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]))).toMatchObject({
+			totalAccounts: 0, accounts: [], fixApplied: false, fixErrors: [], error: null,
+			nextAction: "Run opencode auth login.",
+		});
+		expect(process.env.CODEX_KEYCHAIN).toBe("1");
+	});
+
+	it("doctor: reports malformed explicit JSON without attempting repair", async () => {
+		// Given an explicitly selected file that cannot be parsed as JSON.
+		vi.resetModules();
+		tempHome = await createTempHome();
+		const poolPath = join(tempHome, "malformed-pool.json");
+		await writeFile(poolPath, "{", "utf-8");
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+		const repairDoctorAccounts = vi.fn().mockResolvedValue({ appliedFixes: [], fixErrors: [] });
+		const loadDoctorRuntime = vi.fn(async () => [
+			{ setStoragePathDirect: vi.fn(), loadAccounts: async () => null },
+			{ repairDoctorAccounts },
+			{ setShutdownOwnsProcess: vi.fn() },
+		]);
+
+		// When repair is requested for the malformed file.
+		const result = await runInstaller(["doctor", "--fix", "--json", "--config-path", poolPath], {
+			loadDoctorRuntime,
+		});
+
+		// Then parsing fails before runtime discovery or repair can run.
+		expect(result.exitCode).toBe(1);
+		expect(loadDoctorRuntime).not.toHaveBeenCalled();
+		expect(repairDoctorAccounts).not.toHaveBeenCalled();
+		expect(JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]))).toMatchObject({
+			error: expect.any(String), message: "Storage could not be parsed.", fixApplied: false, fixErrors: [],
+		});
+	});
+
+	it.each(["discovery", "repair", "snapshot"])("doctor: redacts runtime %s failures without a JSON pool", async (stage) => {
+		// Given an injected backend that fails at one repair boundary.
+		vi.resetModules();
+		vi.stubEnv("CODEX_KEYCHAIN", "1");
+		tempHome = await createTempHome();
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+		const failure = new Error("upstream-private-token-text");
+		const loadAccounts = vi.fn().mockResolvedValue({ accounts: [freshAccount()] });
+		if (stage === "discovery") loadAccounts.mockRejectedValue(failure);
+		if (stage === "snapshot") loadAccounts.mockResolvedValueOnce({ accounts: [freshAccount()] }).mockRejectedValue(failure);
+		const repairDoctorAccounts = vi.fn().mockResolvedValue({ appliedFixes: [], fixErrors: [] });
+		if (stage === "repair") repairDoctorAccounts.mockRejectedValue(failure);
+
+		// When default-path repair runs without reading any real credentials.
+		const result = await runInstaller(["doctor", "--fix", "--json"], {
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			loadDoctorRuntime: async () => [
+				{ setStoragePathDirect: vi.fn(), loadAccounts },
+				{ repairDoctorAccounts },
+				{ setShutdownOwnsProcess: vi.fn() },
+			],
+		});
+
+		// Then failure is nonzero and redacted, with keychain routing preserved.
+		expect(result.exitCode).toBe(1);
+		expect(JSON.parse(String(logSpy.mock.calls.at(-1)?.[0])).fixErrors).toHaveLength(1);
+		expect(JSON.stringify(logSpy.mock.calls)).not.toContain(failure.message);
+		expect(process.env.CODEX_KEYCHAIN).toBe("1");
+	});
+
+	it("doctor: preserves failed and disabled accounts while reporting partial repair failure", async () => {
+		// Given one recoverable, one failing, and one intentionally disabled account.
+		vi.resetModules();
+		tempHome = await createTempHome();
+		const poolPath = join(tempHome, "selected-pool.json");
+		const stale = { coolingDownUntil: Date.now() + 86_400_000, cooldownReason: "auth-failure", rateLimitResetTimes: { codex: Date.now() + 86_400_000 } };
+		const failed = freshAccount({ ...stale, accountId: "acct_failed", refreshToken: "failed-refresh-secret" });
+		const disabled = freshAccount({ ...stale, accountId: "acct_disabled", refreshToken: "disabled-refresh-secret", enabled: false });
+		await writeFile(poolPath, JSON.stringify({ version: 3, activeIndex: 0, accounts: [freshAccount(stale), failed, disabled] }));
+		const fetchSpy = vi.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(new Response(JSON.stringify({ access_token: "rotated-access-secret", refresh_token: "rotated-refresh-secret", expires_in: 3600 })))
+			.mockRejectedValueOnce(new Error("failed-refresh-secret at-warm access_token=upstream-access-secret"));
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+
+		// When repair encounters a refresh failure, it continues but exits nonzero.
+		const result = await runInstaller(["doctor", "--fix", "--json", "--config-path", poolPath], {
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			loadDoctorRuntime: loadSourceDoctorRuntime,
+		});
+
+		// Then only the verified account loses stale state and no secret is reported.
+		expect(result).toMatchObject({ exitCode: 1 });
+		const stored = JSON.parse(await readFile(poolPath, "utf-8"));
+		expect(stored.accounts[0].rateLimitResetTimes).toEqual({});
+		expect(stored.accounts[1]).toMatchObject(failed);
+		expect(stored.accounts[2]).toMatchObject(disabled);
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		const output = JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]));
+		expect(output.fixApplied).toBe(true);
+		expect(output.fixErrors).toEqual([expect.stringContaining("Account 2")]);
+		expect(JSON.stringify(output)).not.toMatch(/failed-refresh-secret|at-warm|upstream-access-secret|rotated-access-secret|rotated-refresh-secret|disabled-refresh-secret/);
+	});
+
+	it("doctor: remains read-only without --fix", async () => {
+		// Given a stale pool that would require verification to repair.
+		vi.resetModules();
+		tempHome = await createTempHome();
+		await seedPool(tempHome, [freshAccount({ rateLimitResetTimes: { codex: Date.now() + 86_400_000 } })]);
+		const poolPath = join(tempHome, ".opencode", "oc-codex-multi-auth-accounts.json");
+		const before = await readFile(poolPath, "utf-8");
+		const fetchSpy = vi.spyOn(globalThis, "fetch");
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const { runInstaller } = await import("../scripts/install-oc-codex-multi-auth-core.js");
+
+		// When only diagnostics are requested.
+		await runInstaller(["doctor", "--json", "--config-path", poolPath]);
+
+		// Then neither credentials nor storage are touched.
+		expect(fetchSpy).not.toHaveBeenCalled();
+		expect(await readFile(poolPath, "utf-8")).toBe(before);
+	});
+
 	it("warm: empty pool reports 0/0/0 and exits 0 (no network)", async () => {
 		vi.resetModules();
 		tempHome = await createTempHome();
@@ -519,10 +760,10 @@ describe("standalone oc-codex-multi-auth CLI commands", () => {
 				"utf-8",
 			),
 		);
-		expect(stored.accounts[0]?.rateLimitResetTimes).toMatchObject({
-			codex: weeklyResetAt * 1000,
-			"gpt-5.6-terra": weeklyResetAt * 1000,
-		});
+		// The shared subscription quota is ONE account-wide fact, so it is stored
+		// once and must not be forged into a per-family rate-limit block.
+		expect(stored.accounts[0]?.quotaExhaustedUntil).toBe(weeklyResetAt * 1000);
+		expect(stored.accounts[0]?.rateLimitResetTimes ?? {}).toEqual({});
 	});
 
 	it("limits: renders the windows in text output rather than a bare account list (#209)", async () => {

@@ -180,7 +180,7 @@ Choose only one of `--plugin-only`, `--modern`, `--full`, or `--legacy`. Use `up
 | `--json` | Machine-readable JSON output |
 | `--include-sensitive` | Include sensitive identity fields in JSON where applicable |
 | `--deep` | Deeper diagnostics (used with `doctor`; implied by `diag`) |
-| `--fix` | Request fix application where supported (may be a no-op for some safe CLI paths) |
+| `--fix` | With `doctor`, refresh enabled accounts and clear stale cooldown and rate-limit markers only after successful verification. Exit nonzero if any repair fails. |
 | `--tag <tag>` | Filter accounts by tag when listing |
 | `--config-path <path>` | Point at a specific accounts storage path |
 | `--help` / `-h` | Print usage |
@@ -192,8 +192,11 @@ oc-codex-multi-auth status --json
 oc-codex-multi-auth list --tag work
 oc-codex-multi-auth warm --json
 oc-codex-multi-auth doctor --deep
+oc-codex-multi-auth doctor --fix --config-path ./accounts.json
 npx -y oc-codex-multi-auth@latest warm
 ```
+
+For `doctor --fix`, an explicit `--config-path` repairs only the selected JSON pool and bypasses keychain routing. Without `--config-path`, repair preserves enabled keychain routing.
 
 ---
 

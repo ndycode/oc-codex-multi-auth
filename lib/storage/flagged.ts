@@ -142,6 +142,8 @@ function normalizeFlaggedStorage(data: unknown): FlaggedAccountStorageV1 {
       rateLimitResetTimes,
       coolingDownUntil:
         typeof rawAccount.coolingDownUntil === "number" ? rawAccount.coolingDownUntil : undefined,
+      quotaExhaustedUntil:
+        typeof rawAccount.quotaExhaustedUntil === "number" ? rawAccount.quotaExhaustedUntil : undefined,
       cooldownReason,
       flaggedAt,
       flaggedReason: typeof rawAccount.flaggedReason === "string" ? rawAccount.flaggedReason : undefined,

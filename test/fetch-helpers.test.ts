@@ -15,6 +15,8 @@ import {
     createEntitlementErrorResponse,
 	getUnsupportedCodexModelInfo,
 	resolveUnsupportedCodexFallbackModel,
+	isDefaultAutoFallbackModel,
+	pickFallbackChainTarget,
 	extractUnsupportedCodexModelFromText,
 	shouldFallbackToGpt52OnUnsupportedGpt53,
 } from '../lib/request/fetch-helpers.js';
@@ -2046,5 +2048,73 @@ describe("quota header authority (issues #16/#17 vs #218)", () => {
 		const { quotaHeadersAuthoritative } = await handleErrorResponse(response);
 
 		expect(quotaHeadersAuthoritative).toBeFalsy();
+	});
+});
+
+
+describe("fallback chain reuse for non-entitlement degradation", () => {
+	afterEach(() => {
+		delete process.env.CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK;
+	});
+
+	it("walks the chain without needing an entitlement error body", () => {
+		// Given a default selector that owns a chain row.
+		// When the caller degrades for a reason other than a 400.
+		const target = pickFallbackChainTarget({ currentModel: "gpt-5.6-sol" });
+		// Then it still returns the next chain model.
+		expect(target).toBeTruthy();
+		expect(target).not.toBe("gpt-5.6-sol");
+	});
+
+	it("never returns a model already attempted, so a caller cannot cycle", () => {
+		const first = pickFallbackChainTarget({ currentModel: "gpt-5.6-sol" });
+		const second = pickFallbackChainTarget({
+			currentModel: "gpt-5.6-sol",
+			attemptedModels: ["gpt-5.6-sol", String(first)],
+		});
+		expect(second).not.toBe(first);
+		expect(second).not.toBe("gpt-5.6-sol");
+	});
+
+	it("exhausts to undefined once every chain target was attempted", () => {
+		const attempted = new Set<string>(["gpt-5.6-sol"]);
+		// Bounded walk: each pass must consume one target or stop.
+		for (let i = 0; i < 20; i += 1) {
+			const next = pickFallbackChainTarget({
+				currentModel: "gpt-5.6-sol",
+				attemptedModels: attempted,
+			});
+			if (!next) break;
+			expect(attempted.has(next)).toBe(false);
+			attempted.add(next);
+		}
+		expect(
+			pickFallbackChainTarget({
+				currentModel: "gpt-5.6-sol",
+				attemptedModels: attempted,
+			}),
+		).toBeUndefined();
+	});
+
+	it("treats a chainless model as non-degradable", () => {
+		expect(
+			pickFallbackChainTarget({ currentModel: "definitely-not-a-model" }),
+		).toBeUndefined();
+	});
+
+	it("survives a model id naming an Object.prototype member", () => {
+		expect(pickFallbackChainTarget({ currentModel: "constructor" })).toBeUndefined();
+		expect(pickFallbackChainTarget({ currentModel: "__proto__" })).toBeUndefined();
+	});
+
+	it("gates degradation on the default selector entry models", () => {
+		expect(isDefaultAutoFallbackModel("gpt-5.6-sol")).toBe(true);
+		// A directly chosen, non-entry model must never be swapped silently.
+		expect(isDefaultAutoFallbackModel("gpt-5.1")).toBe(false);
+	});
+
+	it("honours the same opt-out env var as the entitlement auto-fallback", () => {
+		process.env.CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK = "1";
+		expect(isDefaultAutoFallbackModel("gpt-5.6-sol")).toBe(false);
 	});
 });

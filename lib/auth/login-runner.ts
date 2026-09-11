@@ -43,6 +43,7 @@ type MergeableAccountRecord = {
 	lastSwitchReason?: string;
 	rateLimitResetTimes?: Record<string, number | undefined>;
 	coolingDownUntil?: number;
+	quotaExhaustedUntil?: number;
 	cooldownReason?: string;
 	tokenRotatedAt?: number;
 };
@@ -107,6 +108,20 @@ export function mergeStoredAccountPair<T extends MergeableAccountRecord>(
 	);
 	const mergedCoolingDownUntil =
 		mergedCoolingDownUntilValue > 0 ? mergedCoolingDownUntilValue : undefined;
+	const targetQuotaExhaustedUntil =
+		typeof target.quotaExhaustedUntil === "number" && Number.isFinite(target.quotaExhaustedUntil)
+			? target.quotaExhaustedUntil
+			: 0;
+	const sourceQuotaExhaustedUntil =
+		typeof source.quotaExhaustedUntil === "number" && Number.isFinite(source.quotaExhaustedUntil)
+			? source.quotaExhaustedUntil
+			: 0;
+	const mergedQuotaExhaustedUntilValue = Math.max(
+		targetQuotaExhaustedUntil,
+		sourceQuotaExhaustedUntil,
+	);
+	const mergedQuotaExhaustedUntil =
+		mergedQuotaExhaustedUntilValue > 0 ? mergedQuotaExhaustedUntilValue : undefined;
 	const mergedCooldownReason = (() => {
 		if (mergedCoolingDownUntilValue <= 0) {
 			return target.cooldownReason ?? source.cooldownReason;
@@ -152,6 +167,7 @@ export function mergeStoredAccountPair<T extends MergeableAccountRecord>(
 		lastSwitchReason: target.lastSwitchReason ?? source.lastSwitchReason,
 		rateLimitResetTimes: mergedRateLimitResetTimes,
 		coolingDownUntil: mergedCoolingDownUntil,
+		quotaExhaustedUntil: mergedQuotaExhaustedUntil,
 		cooldownReason: mergedCooldownReason,
 	};
 }

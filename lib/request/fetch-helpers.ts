@@ -406,6 +406,85 @@ export function getUnsupportedCodexModelInfo(
 	};
 }
 
+/**
+ * Whether the default auto-fallback (the one that does NOT require
+ * `unsupportedCodexPolicy: "fallback"`) currently applies to `currentModel`.
+ *
+ * Exported so a caller degrading for a reason OTHER than an entitlement 400 —
+ * notably a fully quota-blocked pool — gates on exactly the same entry models
+ * and opt-out env vars instead of inventing a second policy.
+ */
+export function isDefaultAutoFallbackModel(
+	currentModel: string,
+	attemptedModels?: Iterable<string>,
+): boolean {
+	const attempted = new Set<string>();
+	for (const model of attemptedModels ?? []) {
+		const normalized = canonicalizeModelName(model);
+		if (normalized) attempted.add(normalized);
+	}
+	const entryModel = resolveAutoFallbackEntryModel(
+		canonicalizeModelName(currentModel) ?? currentModel,
+		attempted,
+	);
+	const optOutEnv = entryModel
+		? DEFAULT_AUTO_FALLBACK_ENTRY_OPT_OUT_ENV[entryModel]
+		: undefined;
+	return !!optOutEnv && process.env[optOutEnv] !== "1";
+}
+
+export interface PickFallbackChainTargetOptions {
+	currentModel: string;
+	attemptedModels?: Iterable<string>;
+	customChain?: Record<string, string[]>;
+	fallbackToGpt52OnUnsupportedGpt53?: boolean;
+}
+
+/**
+ * Walk the fallback chain and return the next model worth trying.
+ *
+ * This is the single chain-walking policy: both the entitlement fallback and
+ * the quota/rate-limit fallback go through it, so the two can never drift.
+ * It decides only what comes NEXT in the chain — whether degrading is allowed
+ * at all is the caller's gate.
+ */
+export function pickFallbackChainTarget(
+	options: PickFallbackChainTargetOptions,
+): string | undefined {
+	const currentModel = canonicalizeModelName(options.currentModel);
+	if (!currentModel) return undefined;
+
+	const attempted = new Set<string>();
+	for (const model of options.attemptedModels ?? []) {
+		const normalized = canonicalizeModelName(model);
+		if (normalized) attempted.add(normalized);
+	}
+
+	const chain = normalizeFallbackChain(options.customChain);
+	const targets = chain[currentModel] ?? [];
+	// `Array.isArray`, not just a length check. `currentModel` comes from the
+	// caller's `body.model`, so it can be any `Object.prototype` member name. On
+	// a plain object `chain["constructor"]` returns the Object constructor: a
+	// truthy non-array whose `.length` is 1, so an emptiness check passes it
+	// through and the `for...of` below throws `targets is not iterable` inside
+	// the request path. The chain is null-prototype now as well; this guard also
+	// covers a `customChain` value that is not an array.
+	if (!Array.isArray(targets) || targets.length === 0) return undefined;
+
+	for (const target of targets) {
+		if (!options.fallbackToGpt52OnUnsupportedGpt53 &&
+			currentModel === "gpt-5.3-codex" &&
+			target === "gpt-5.2-codex") {
+			continue;
+		}
+		if (target === currentModel) continue;
+		if (attempted.has(target)) continue;
+		return target;
+	}
+
+	return undefined;
+}
+
 export function resolveUnsupportedCodexFallbackModel(
 	options: ResolveUnsupportedCodexFallbackOptions,
 ): string | undefined {
@@ -444,29 +523,12 @@ export function resolveUnsupportedCodexFallbackModel(
 		return undefined;
 	}
 
-	const chain = normalizeFallbackChain(options.customChain);
-	const targets = chain[currentModel] ?? [];
-	// `Array.isArray`, not just a length check. `currentModel` comes from the
-	// caller's `body.model`, so it can be any `Object.prototype` member name. On
-	// a plain object `chain["constructor"]` returns the Object constructor: a
-	// truthy non-array whose `.length` is 1, so an emptiness check passes it
-	// through and the `for...of` below throws `targets is not iterable` inside
-	// the request path. The chain is null-prototype now as well; this guard also
-	// covers a `customChain` value that is not an array.
-	if (!Array.isArray(targets) || targets.length === 0) return undefined;
-
-	for (const target of targets) {
-		if (!options.fallbackToGpt52OnUnsupportedGpt53 &&
-			currentModel === "gpt-5.3-codex" &&
-			target === "gpt-5.2-codex") {
-			continue;
-		}
-		if (target === currentModel) continue;
-		if (attempted.has(target)) continue;
-		return target;
-	}
-
-	return undefined;
+	return pickFallbackChainTarget({
+		currentModel,
+		attemptedModels: attempted,
+		customChain: options.customChain,
+		fallbackToGpt52OnUnsupportedGpt53: options.fallbackToGpt52OnUnsupportedGpt53,
+	});
 }
 
 /**

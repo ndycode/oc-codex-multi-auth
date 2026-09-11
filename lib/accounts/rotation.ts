@@ -20,8 +20,10 @@ import { MAX_QUOTA_RESET_HORIZON_MS } from "../quota-windows.js";
 import type { CooldownReason } from "../storage.js";
 import { nowMs } from "../utils.js";
 import {
+	clearExpiredQuotaExhaustion,
 	clearExpiredRateLimits,
 	getQuotaKey,
+	isQuotaExhausted,
 	isRateLimitedForFamily,
 	type RateLimitReason,
 } from "./rate-limits.js";
@@ -49,6 +51,8 @@ export class AccountRotation {
 	): boolean {
 		if (account.enabled === false) return false;
 		clearExpiredRateLimits(account);
+		clearExpiredQuotaExhaustion(account);
+		if (isQuotaExhausted(account)) return false;
 		if (isRateLimitedForFamily(account, family, model)) return false;
 		if (this.state.isAccountCoolingDown(account)) return false;
 		const quotaKey = model ? `${family}:${model}` : family;
@@ -441,31 +445,21 @@ export class AccountRotation {
 	 * Block an account until a quota window the backend reported as fully spent
 	 * resets (issue #218).
 	 *
-	 * Differs from {@link markRateLimitedWithReason} in taking an ABSOLUTE reset
-	 * stamp, so a week-long weekly-quota block is never rebuilt from a capped or
-	 * backed-off retry delay. Like every writer it goes through
-	 * {@link extendRateLimitReset}, so it neither shortens an existing block nor
-	 * can be shortened by a later one.
-	 *
-	 * The block rides on the same persisted `rateLimitResetTimes` map as server
-	 * 429s, so it survives restarts and is shared with other processes through
-	 * the accounts file, and it expires on its own via `clearExpiredRateLimits`.
-	 *
-	 * Because that write is monotonic and persisted, it is also unforgiving: a
-	 * reset stamp further out than any real window would strand the account for
-	 * as long as it claims, with nothing in the product able to walk it back. The
-	 * upper bound below is the same guard `parseQuotaResetAtMs` applies to the
-	 * headers, repeated here because this is the method that makes a block
-	 * permanent — the lower bound on the next line has always been checked for
-	 * the same reason.
+	 * Primary/secondary subscription windows are account-wide, irrespective of
+	 * the request's family/model. Keep their absolute reset monotonically in
+	 * `quotaExhaustedUntil`, persisted separately from transient server 429s and
+	 * expired by `clearExpiredQuotaExhaustion`. Legacy family/model arguments
+	 * remain accepted, but cannot narrow the subscription block's scope.
+	 * Reject implausible timestamps using the parser's horizon guard so a bad
+	 * header cannot strand an account indefinitely.
 	 *
 	 * @returns true when a new (or longer) block was written.
 	 */
 	markQuotaExhausted(
 		account: ManagedAccount,
 		resetAtMs: number,
-		family: ModelFamily,
-		model?: string | null,
+		_family: ModelFamily,
+		_model?: string | null,
 	): boolean {
 		if (!Number.isFinite(resetAtMs)) return false;
 		const resetAt = Math.floor(resetAtMs);
@@ -473,13 +467,13 @@ export class AccountRotation {
 		if (resetAt <= now) return false;
 		if (resetAt - now > MAX_QUOTA_RESET_HORIZON_MS) return false;
 
-		let changed = false;
-		for (const key of this.getBlockedQuotaKeys(family, model)) {
-			if (this.extendRateLimitReset(account, key, resetAt)) changed = true;
+		const existing = account.quotaExhaustedUntil;
+		if (typeof existing === "number" && Number.isFinite(existing) && existing >= resetAt) {
+			return false;
 		}
-
-		if (changed) account.lastRateLimitReason = "quota";
-		return changed;
+		account.quotaExhaustedUntil = resetAt;
+		account.lastRateLimitReason = "quota";
+		return true;
 	}
 
 	markAccountCoolingDown(
@@ -557,6 +551,16 @@ export class AccountRotation {
 
 			if (typeof account.coolingDownUntil === "number") {
 				waitTimes.push(Math.max(0, account.coolingDownUntil - now));
+			}
+
+			// An account whose shared subscription quota is spent is blocked
+			// account-wide until the stamp resets; surface that wait so a
+			// quota-exhausted-only pool waits instead of returning 0 (503).
+			if (
+				typeof account.quotaExhaustedUntil === "number" &&
+				account.quotaExhaustedUntil > now
+			) {
+				waitTimes.push(account.quotaExhaustedUntil - now);
 			}
 
 			// An account blocked only by a depleted local token bucket becomes

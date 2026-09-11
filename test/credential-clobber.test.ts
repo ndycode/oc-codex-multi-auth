@@ -186,6 +186,25 @@ describe("AccountPersistence rate-limit merge (multi-process clobber guard)", ()
 		).toBeUndefined();
 	});
 
+	it("keeps a longer on-disk quota-exhaustion stamp instead of clobbering it", async () => {
+		// A shorter in-memory quota block must not pull a longer on-disk one
+		// forward, mirroring the per-family rate-limit monotonic merge (#218).
+		const state = makeState([
+			makeStoredAccount({ quotaExhaustedUntil: Date.now() + 30_000 }),
+		]);
+		const persistence = new AccountPersistence(state);
+
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount({ quotaExhaustedUntil: WEEKLY_RESET })],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+
+		expect(persistedStorage()?.accounts[0]?.quotaExhaustedUntil).toBe(WEEKLY_RESET);
+	});
+
 	// Documents a known limitation rather than desired behavior. A record with
 	// neither organizationId nor accountId is identified by its refresh token
 	// (lib/storage/identity.ts), so once another process rotates that token

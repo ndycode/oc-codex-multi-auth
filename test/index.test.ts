@@ -225,7 +225,8 @@ vi.mock("../lib/context-overflow.js", () => ({
 	handleContextOverflow: vi.fn(async () => ({ handled: false })),
 }));
 
-vi.mock("../lib/rotation.js", () => ({
+vi.mock("../lib/rotation.js", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/rotation.js")>(),
 	addJitter: (ms: number) => ms,
 }));
 
@@ -236,14 +237,14 @@ vi.mock("../lib/ui/select.js", () => ({
 	select: vi.fn(async () => null),
 }));
 
-vi.mock("../lib/prompts/codex.js", () => ({
+vi.mock("../lib/prompts/codex.js", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/prompts/codex.js")>(),
 	getModelFamily: (model: string) => {
 		if (model.includes("codex-max")) return "codex-max";
 		if (model.includes("codex")) return "codex";
 		return "gpt-5.1";
 	},
 	getCodexInstructions: vi.fn(async () => "test instructions"),
-	MODEL_FAMILIES: ["codex-max", "codex", "gpt-5.1"] as const,
 	prewarmCodexInstructions: vi.fn(),
 }));
 
@@ -293,6 +294,8 @@ vi.mock("../lib/request/rate-limit-backoff.js", () => ({
 		isInvalidatedAuthTokenError: vi.fn((_errorBody: unknown, status?: number) => status === 401),
 	getUnsupportedCodexModelInfo: vi.fn(() => ({ isUnsupported: false })),
 	resolveUnsupportedCodexFallbackModel: vi.fn(() => undefined),
+	isDefaultAutoFallbackModel: vi.fn(() => false),
+	pickFallbackChainTarget: vi.fn(() => undefined),
 	shouldFallbackToGpt52OnUnsupportedGpt53: vi.fn(() => false),
 	handleSuccessResponse: vi.fn(async (response: Response) => response),
 }));
@@ -314,6 +317,7 @@ const mockStorage = {
 		coolingDownUntil?: number;
 		cooldownReason?: string;
 		rateLimitResetTimes?: Record<string, number>;
+		quotaExhaustedUntil?: number;
 		lastSwitchReason?: string;
 	}>,
 	activeIndex: 0,
@@ -1614,6 +1618,27 @@ describe("OpenAIOAuthPlugin", () => {
 		});
 	});
 
+	describe.each(["codex-list", "codex-status"] as const)("%s quota badges", (toolName) => {
+		it.each([
+			{ state: "clean", rate: false, quota: false },
+			{ state: "transient-only", rate: true, quota: false },
+			{ state: "quota-only", rate: false, quota: true },
+		])("renders exactly the $state badges", async ({ rate, quota }) => {
+			const config = await import("../lib/config.js");
+			vi.spyOn(config, "getCodexTuiV2").mockReturnValue(true);
+			mockStorage.accounts = [{
+				accountId: "acc-1", refreshToken: "refresh-1",
+				rateLimitResetTimes: rate ? { codex: Date.now() + 60_000 } : {},
+				quotaExhaustedUntil: quota ? Date.now() + 600_000 : undefined,
+			}];
+			const output = await plugin.tool[toolName].execute();
+			const accountLine = output.split("\n").find((line) => line.includes("Account 1") && line.includes(toolName === "codex-list" ? "current" : "active"));
+			expect(accountLine).toBeDefined();
+			expect(accountLine?.match(/rate-limited/g) ?? []).toHaveLength(rate ? 1 : 0);
+			expect(accountLine?.match(/quota-exhausted/g) ?? []).toHaveLength(quota ? 1 : 0);
+		});
+	});
+
 	describe("codex-status tool", () => {
 		it("returns error when no accounts", async () => {
 			mockStorage.accounts = [];
@@ -1783,10 +1808,11 @@ describe("OpenAIOAuthPlugin", () => {
 
 			await plugin.tool["codex-limits"].execute();
 
-			expect(mockStorage.accounts[0]?.rateLimitResetTimes).toMatchObject({
-				codex: weeklyResetAt * 1000,
-				"gpt-5.1": weeklyResetAt * 1000,
-			});
+			// The account-wide subscription-quota fact now lands on its own field
+			// instead of being forged into a per-family rate-limit block for every
+			// model, so a spent weekly quota is not mislabeled as a transient 429.
+			expect(mockStorage.accounts[0]?.quotaExhaustedUntil).toBe(weeklyResetAt * 1000);
+			expect(mockStorage.accounts[0]?.rateLimitResetTimes ?? {}).toEqual({});
 		});
 
 		it("returns json output for usage windows", async () => {
@@ -4870,6 +4896,201 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	describe("quota fallback safety with real account eligibility", () => {
+		const entryModel = "gpt-5.6-sol";
+		const makeManager = async (accounts: import("../lib/storage.js").AccountMetadataV3[]) => {
+			const prompts = await import("../lib/prompts/codex.js");
+			const realPrompts = await vi.importActual<typeof prompts>("../lib/prompts/codex.js");
+			vi.spyOn(prompts, "getModelFamily").mockImplementation(realPrompts.getModelFamily);
+			const actual = await vi.importActual<typeof import("../lib/accounts.js")>("../lib/accounts.js");
+			const { AccountManager, resolveRequestAccountId } = await import("../lib/accounts.js");
+			vi.mocked(resolveRequestAccountId).mockImplementation((storedId) => storedId);
+			const manager = new actual.AccountManager(undefined, { version: 3, activeIndex: 0, accounts });
+			vi.spyOn(AccountManager, "loadFromDisk").mockResolvedValue(manager);
+			vi.spyOn(manager, "saveToDiskDebounced").mockImplementation(() => {});
+			const fetchHelpers = await import("../lib/request/fetch-helpers.js");
+			const realHelpers = await vi.importActual<typeof fetchHelpers>("../lib/request/fetch-helpers.js");
+			vi.mocked(fetchHelpers.transformRequestForCodex).mockImplementation(async (init) => ({
+				updatedInit: init, body: JSON.parse(String(init?.body)),
+			}));
+			vi.mocked(fetchHelpers.isDefaultAutoFallbackModel).mockImplementation(realHelpers.isDefaultAutoFallbackModel);
+			vi.mocked(fetchHelpers.pickFallbackChainTarget).mockImplementation(realHelpers.pickFallbackChainTarget);
+			vi.mocked(fetchHelpers.handleErrorResponse).mockImplementation(realHelpers.handleErrorResponse);
+			vi.mocked(fetchHelpers.createCodexHeaders).mockImplementation((_init, accountId) => new Headers({ "x-test-account": accountId }));
+			const quotaCache = await import("../lib/tui-quota-cache.js");
+			vi.spyOn(quotaCache, "writeTuiQuotaSnapshot").mockResolvedValue(undefined);
+			globalThis.fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ content: "ok" })));
+			return manager;
+		};
+		const accountRecord = (accountId = "acc-1") => ({
+			accountId, refreshToken: `refresh-${accountId}`, accessToken: "access-test",
+			expiresAt: Date.now() + 3_600_000, addedAt: 1, lastUsed: 1,
+		});
+		const send = async (sdk: Awaited<ReturnType<typeof setupPlugin>>["sdk"], model = entryModel) => {
+			if (!sdk.fetch) throw new Error("Missing plugin fetch");
+			return sdk.fetch("https://api.openai.com/v1/chat", {
+				method: "POST", body: JSON.stringify({ model }),
+			});
+		};
+
+		beforeEach(async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-09-11T00:00:00Z"));
+			const { resetTrackers } = await import("../lib/rotation.js");
+			resetTrackers();
+		});
+		afterEach(async () => {
+			vi.useRealTimers();
+			vi.unstubAllEnvs();
+			const { resetTrackers } = await import("../lib/rotation.js");
+			resetTrackers();
+		});
+
+		it.each([200, 429])("persists authoritative %i shared quota and never falls back into the spent account", async (status) => {
+			const manager = await makeManager([accountRecord()]);
+			const resetAt = Date.now() + 604_800_000;
+			vi.mocked(globalThis.fetch).mockImplementationOnce(async () => new Response(
+				JSON.stringify(status === 429 ? { error: { code: "usage_limit_reached" } } : { content: "ok" }),
+				{ status, headers: { "x-codex-secondary-used-percent": "100", "x-codex-secondary-reset-at": String(resetAt) } },
+			));
+			const { sdk } = await setupPlugin();
+			expect((await send(sdk)).status).toBe(status);
+			expect((await send(sdk, "gpt-5.6-terra")).status).toBe(429);
+			expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+			expect(manager.getAccountsSnapshot()[0]?.quotaExhaustedUntil).toBe(resetAt);
+			expect(manager.getAccountsSnapshot()[0]?.rateLimitResetTimes).toEqual({});
+			expect(manager.getSelectionExplainability(entryModel, entryModel)[0]?.reasons).toContain("quota-exhausted");
+			expect(manager.getSelectionExplainability(entryModel, entryModel)[0]?.reasons).not.toContain("rate-limited");
+			expect(manager.saveToDiskDebounced).toHaveBeenCalled();
+			await manager.saveToDisk();
+			expect(mockStorage.accounts[0]?.quotaExhaustedUntil).toBe(resetAt);
+		});
+
+		it.each(["token-bucket", "cooldown"])("does not downgrade for %s-only blocking", async (block) => {
+			const manager = await makeManager([accountRecord()]);
+			const account = manager.getCurrentAccount();
+			if (!account) throw new Error("Missing test account");
+			if (block === "cooldown") manager.markAccountCoolingDown(account, 600_000, "auth-failure");
+			else {
+				const { getTokenTracker } = await import("../lib/rotation.js");
+				getTokenTracker().drain(account.index, `${entryModel}:${entryModel}`, 100);
+			}
+			const config = await import("../lib/config.js");
+			vi.spyOn(config, "getRetryAllAccountsRateLimited").mockReturnValue(false);
+			vi.spyOn(config, "getRotationStrategy").mockReturnValue("sticky");
+			const { sdk } = await setupPlugin();
+			expect((await send(sdk)).status).toBe(429);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
+			const helpers = await import("../lib/request/fetch-helpers.js");
+			expect(helpers.pickFallbackChainTarget).not.toHaveBeenCalled();
+		});
+
+		it.each(["blocked", "unresolved", "disabled"])("skips a %s strict target and serves a subsequent eligible strict candidate", async (state) => {
+			await makeManager([
+				{ ...accountRecord(), rateLimitResetTimes: { [`${entryModel}:${entryModel}`]: Date.now() + 600_000, "gpt-5.6-terra:gpt-5.6-terra": Date.now() + 600_000 } },
+				{ ...accountRecord("acc-2"), rateLimitResetTimes: { [`${entryModel}:${entryModel}`]: Date.now() + 600_000 } },
+				{ ...accountRecord("disabled"), enabled: false },
+			]);
+			const config = await import("../lib/config.js");
+			vi.spyOn(config, "getRotationStrategy").mockReturnValue("sticky");
+			vi.mocked(config.getModelAccountPool).mockImplementation((_config, model) => model === "gpt-5.6-terra"
+				? [state === "blocked" ? "acc-1" : state === "unresolved" ? "missing" : "disabled"]
+				: model === "gpt-5.6-luna" ? ["acc-2"] : []);
+			vi.mocked(config.getModelAccountPoolMode).mockReturnValue("strict");
+			const { sdk } = await setupPlugin();
+			expect((await send(sdk)).status).toBe(200);
+			expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+			const init = vi.mocked(globalThis.fetch).mock.calls[0]?.[1];
+			expect(JSON.parse(String(init?.body)).model).toBe("gpt-5.6-luna");
+			expect(new Headers(init?.headers).get("x-test-account")).toBe("acc-2");
+		});
+
+		it.each([undefined, "CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK"])("preserves genuine model fallback and opt-out %s", async (optOut) => {
+			await makeManager([{ ...accountRecord(), rateLimitResetTimes: { [`${entryModel}:${entryModel}`]: Date.now() + 600_000 } }]);
+			if (optOut) vi.stubEnv(optOut, "1");
+			const { sdk } = await setupPlugin();
+			expect((await send(sdk)).status).toBe(optOut ? 429 : 200);
+			expect(globalThis.fetch).toHaveBeenCalledTimes(optOut ? 0 : 1);
+			if (!optOut) expect(JSON.parse(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.body)).model).toBe("gpt-5.6-terra");
+		});
+	});
+
+	it("degrades to the next chain model when every account is blocked for the requested one", async () => {
+		// Given a pool that is fully blocked for the requested default selector,
+		// while the next chain model is servable right now.
+		const fetchHelpers = await import("../lib/request/fetch-helpers.js");
+		const { AccountManager } = await import("../lib/accounts.js");
+
+		const account = {
+			index: 0,
+			accountId: "acc-1",
+			email: "user@example.com",
+			refreshToken: "refresh-1",
+		};
+		let askedModel = "";
+		const selectable = () => (askedModel === "gpt-5.5" ? account : null);
+		const customManager = {
+			getAccountCount: () => 1,
+			getSelectionExplainability: (_family: string, model?: string | null) => {
+				askedModel = String(model ?? "");
+				return [{ index: 0, enabled: true, eligible: model === "gpt-5.5", reasons: model === "gpt-5.5" ? ["eligible"] : ["rate-limited"], rateLimitedUntil: model === "gpt-5.5" ? undefined : Date.now() + 600_000 }];
+			},
+			getCurrentOrNextForFamilyHybrid: selectable,
+			getAccountForStrategy: selectable,
+			// Only the fallback model is servable; the requested one is blocked.
+			getMinWaitTimeForFamily: vi.fn((_family: string, model?: string | null) =>
+				model === "gpt-5.5" ? 0 : 600_000,
+			),
+			toAuthDetails: () => ({
+				type: "oauth" as const,
+				access: "access-1",
+				refresh: account.refreshToken,
+				expires: Date.now() + 60_000,
+			}),
+			hasRefreshToken: () => true,
+			saveToDiskDebounced: vi.fn(),
+			updateFromAuth: vi.fn(),
+			clearAuthFailures: vi.fn(),
+			incrementAuthFailures: vi.fn(() => 1),
+			markAccountCoolingDown: vi.fn(),
+			markRateLimitedWithReason: vi.fn(),
+			recordRateLimit: vi.fn(),
+			consumeToken: vi.fn(() => true),
+			refundToken: vi.fn(),
+			markSwitched: vi.fn(),
+			removeAccount: vi.fn(() => false),
+			removeAccountsWithSameRefreshToken: vi.fn(() => 0),
+			recordFailure: vi.fn(),
+			recordSuccess: vi.fn(),
+			shouldShowAccountToast: vi.fn(() => false),
+			markToastShown: vi.fn(),
+			setActiveIndex: vi.fn(() => account),
+			getAccountsSnapshot: vi.fn(() => [account]),
+		};
+		vi.spyOn(AccountManager, "loadFromDisk").mockResolvedValue(customManager as never);
+		vi.mocked(fetchHelpers.isDefaultAutoFallbackModel).mockReturnValue(true);
+		vi.mocked(fetchHelpers.pickFallbackChainTarget).mockReturnValue("gpt-5.5");
+		vi.mocked(fetchHelpers.createCodexHeaders).mockImplementation(() => new Headers());
+		globalThis.fetch = vi
+			.fn()
+			.mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), { status: 200 }));
+
+		// When the request asks for the blocked model.
+		const { sdk } = await setupPlugin();
+		const response = await sdk.fetch!("https://api.openai.com/v1/chat", {
+			method: "POST",
+			body: JSON.stringify({ model: "gpt-5.6-sol" }),
+		});
+
+		// Then it is served on the fallback model instead of waiting out the block.
+		expect(response.status).toBe(200);
+		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+		const sent = JSON.parse(
+			String(vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.body),
+		);
+		expect(sent.model).toBe("gpt-5.5");
 	});
 
 	it("cools down the account when grouped auth removal removes zero entries", async () => {

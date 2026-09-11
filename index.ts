@@ -165,6 +165,8 @@ import {
 	createAbortError,
 	getUnsupportedCodexModelInfo,
 	resolveUnsupportedCodexFallbackModel,
+	isDefaultAutoFallbackModel,
+	pickFallbackChainTarget,
         refreshAndUpdateToken,
         rewriteUrlForCodex,
 	shouldRefreshToken,
@@ -841,8 +843,8 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 		 * served request and on a refused one alike, so the moment an account hits
 		 * 0% left we can record it instead of rediscovering it with a failed request
 		 * on every subsequent prompt. The block lands on the persisted
-		 * `rateLimitResetTimes` map, so it is remembered across restarts and shared
-		 * with other processes, and it clears itself once the window rolls over.
+		 * account-wide `quotaExhaustedUntil` field, so it is remembered across
+		 * restarts and clears itself once the window rolls over.
 		 *
 		 * Call this only for responses whose headers are authoritative: one the
 		 * backend served, or one it refused for a confirmed usage limit. Every other
@@ -873,7 +875,7 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				account.lastSwitchReason = "rate-limit";
 				manager.saveToDiskDebounced();
 				logWarn(
-					`Account ${account.index + 1} (${account.email ?? "unknown"}) has no ${family} quota left; skipping it for ${formatWaitTime(resetAtMs - Date.now())}.`,
+					`Account ${account.index + 1} has no shared subscription quota left; skipping it for ${formatWaitTime(resetAtMs - Date.now())}.`,
 				);
 				return true;
 			} catch (error) {
@@ -1187,6 +1189,30 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				const remaining = resetAt - now;
 				if (remaining <= 0) return null;
 				return `resets in ${formatWaitTime(remaining)}`;
+		};
+
+		// Account-wide subscription-quota exhaustion is a DIFFERENT block from the
+		// per-family rate limits above: it lives on its own field and is reported
+		// with its own label so a spent weekly quota is never shown as a transient
+		// 429 ("rate limit").
+		const getQuotaExhaustedUntil = (
+				account: { quotaExhaustedUntil?: number },
+				now: number,
+		): number | null => {
+				const until = account.quotaExhaustedUntil;
+				if (typeof until !== "number" || !Number.isFinite(until) || until <= now) {
+						return null;
+				}
+				return until;
+		};
+
+		const formatQuotaExhaustionEntry = (
+				account: { quotaExhaustedUntil?: number },
+				now: number,
+		): string | null => {
+				const until = getQuotaExhaustedUntil(account, now);
+				if (until === null) return null;
+				return `quota exhausted, resets in ${formatWaitTime(until - now)}`;
 		};
 
 		const applyUiRuntimeFromConfig = (
@@ -1811,6 +1837,8 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 			resolveActiveIndex,
 			getRateLimitResetTimeForFamily,
 			formatRateLimitEntry,
+			getQuotaExhaustedUntil,
+			formatQuotaExhaustionEntry,
 			buildJsonAccountIdentity,
 			buildRoutingVisibilitySnapshot,
 			appendRoutingVisibilityText,
@@ -2292,6 +2320,103 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 								attemptedUnsupportedFallbackModels.add(model);
 							}
 
+							// Degrading the model mid-request touches several coupled pieces:
+							// the attempted-model set, the routing snapshot, the model's own
+							// instructions, the reasoning clamp (only the 5.6 tiers accept
+							// `max`, so an un-clamped sol -> gpt-5.5 hop turns a graceful
+							// fallback into a hard 400) and the per-model body shape. Both the
+							// entitlement fallback and the quota fallback go through here so
+							// the two can never drift apart on any of them.
+							const applyModelFallback = async (
+								previousModel: string,
+								target: string,
+								reason: string,
+							): Promise<void> => {
+								attemptedUnsupportedFallbackModels.add(previousModel);
+								attemptedUnsupportedFallbackModels.add(target);
+
+								model = target;
+								modelFamily = getModelFamily(model);
+								quotaKey = `${modelFamily}:${model}`;
+								fallbackApplied = true;
+								fallbackFrom = previousModel;
+								fallbackTo = model;
+								fallbackReason = reason;
+								const fallbackInstructions = await getCodexInstructions(model);
+
+								if (transformedBody && typeof transformedBody === "object") {
+									transformedBody = {
+										...transformedBody,
+										model,
+										instructions: fallbackInstructions,
+										input: upsertBackendModelIdentityMessage(
+											transformedBody.input,
+											model,
+										),
+									};
+								} else {
+									let fallbackBody: Record<string, unknown> = {
+										model,
+										instructions: fallbackInstructions,
+									};
+									if (requestInit?.body && typeof requestInit.body === "string") {
+										try {
+											const parsed = JSON.parse(requestInit.body) as Record<string, unknown>;
+											fallbackBody = {
+												...parsed,
+												model,
+												instructions: fallbackInstructions,
+											};
+											if (Array.isArray(fallbackBody.input)) {
+												fallbackBody.input = upsertBackendModelIdentityMessage(
+													fallbackBody.input,
+													model,
+												);
+											}
+										} catch {
+											// Keep minimal fallback body if parsing fails.
+										}
+									}
+									transformedBody = fallbackBody as RequestBody;
+								}
+
+								const clampedReasoning = clampReasoningForModel(
+									transformedBody.reasoning,
+									model,
+								);
+								if (clampedReasoning !== transformedBody.reasoning) {
+									transformedBody = {
+										...transformedBody,
+										reasoning: clampedReasoning,
+									};
+								}
+
+								requestInit = {
+									...(requestInit ?? {}),
+									body: JSON.stringify(shapeBodyForModel(transformedBody)),
+								};
+								if (runtimeMetrics.lastSelectionSnapshot) {
+									runtimeMetrics.lastSelectionSnapshot = {
+										...runtimeMetrics.lastSelectionSnapshot,
+										family: modelFamily,
+										model: model ?? null,
+										requestedModel,
+										effectiveModel: model ?? null,
+										quotaKey,
+										fallbackApplied,
+										fallbackFrom,
+										fallbackTo,
+										fallbackReason,
+									};
+								}
+							};
+
+							// A degraded model must not degrade again without bound, even if a
+							// custom chain is cyclic. The attempted set already prevents
+							// revisiting a model; this caps the total hops per request.
+							const MAX_QUOTA_FALLBACK_SWITCHES = 3;
+							let quotaFallbackSwitches = 0;
+
 							while (true) {
 						let accountCount = accountManager.getAccountCount();
 						const attempted = new Set<number>();
@@ -2344,6 +2469,11 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 					break;
 				}
 							attempted.add(account.index);
+							// Hybrid's last-resort result is not necessarily eligible. Requests
+							// must honor active blocks rather than sending it upstream anyway.
+							if (selectionExplainability.some((entry) => entry.index === account.index && !entry.eligible)) {
+								continue;
+							}
 							runtimeMetrics.lastSelectedAccountIndex = account.index;
 							runtimeMetrics.lastQuotaKey = quotaKey;
 							if (runtimeMetrics.lastSelectionSnapshot) {
@@ -2895,92 +3025,12 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 			if (fallbackModel) {
 				const previousModel = model ?? "gpt-5-codex";
 				const previousModelFamily = modelFamily;
-				attemptedUnsupportedFallbackModels.add(previousModel);
-				attemptedUnsupportedFallbackModels.add(fallbackModel);
 				accountManager.refundToken(account, previousModelFamily, previousModel);
-
-				model = fallbackModel;
-				modelFamily = getModelFamily(model);
-				quotaKey = `${modelFamily}:${model}`;
-				fallbackApplied = true;
-				fallbackFrom = previousModel;
-				fallbackTo = model;
-				fallbackReason = "fallback-unsupported-model-entitlement";
-				const fallbackInstructions = await getCodexInstructions(model);
-
-				if (transformedBody && typeof transformedBody === "object") {
-					transformedBody = {
-						...transformedBody,
-						model,
-						instructions: fallbackInstructions,
-						input: upsertBackendModelIdentityMessage(
-							transformedBody.input,
-							model,
-						),
-					};
-				} else {
-					let fallbackBody: Record<string, unknown> = {
-						model,
-						instructions: fallbackInstructions,
-					};
-					if (requestInit?.body && typeof requestInit.body === "string") {
-						try {
-							const parsed = JSON.parse(requestInit.body) as Record<string, unknown>;
-							fallbackBody = {
-								...parsed,
-								model,
-								instructions: fallbackInstructions,
-							};
-							if (Array.isArray(fallbackBody.input)) {
-								fallbackBody.input = upsertBackendModelIdentityMessage(
-									fallbackBody.input,
-									model,
-								);
-							}
-						} catch {
-							// Keep minimal fallback body if parsing fails.
-						}
-					}
-					transformedBody = fallbackBody as RequestBody;
-				}
-
-				// The carried-over reasoning effort was clamped for the ORIGINAL
-				// model; the fallback target may not accept it (`max` exists only
-				// on the 5.6 tiers, so a sol -> gpt-5.5 hop must degrade it or the
-				// graceful fallback turns into a hard 400).
-				const clampedReasoning = clampReasoningForModel(
-					transformedBody.reasoning,
-					model,
+				await applyModelFallback(
+					previousModel,
+					fallbackModel,
+					"fallback-unsupported-model-entitlement",
 				);
-				if (clampedReasoning !== transformedBody.reasoning) {
-					transformedBody = {
-						...transformedBody,
-						reasoning: clampedReasoning,
-					};
-				}
-
-				// Shape for whichever model this attempt targets. A 5.6 -> 5.5 fallback
-				// must go out in the classic shape, and a 5.6 -> 5.6 hop must re-fold
-				// the new model's instructions into `input` rather than leaving them
-				// at the top level.
-				requestInit = {
-					...(requestInit ?? {}),
-					body: JSON.stringify(shapeBodyForModel(transformedBody)),
-				};
-				if (runtimeMetrics.lastSelectionSnapshot) {
-					runtimeMetrics.lastSelectionSnapshot = {
-						...runtimeMetrics.lastSelectionSnapshot,
-						family: modelFamily,
-						model: model ?? null,
-						requestedModel,
-						effectiveModel: model ?? null,
-						quotaKey,
-						fallbackApplied,
-						fallbackFrom,
-						fallbackTo,
-						fallbackReason,
-					};
-				}
 				runtimeMetrics.lastError = `Model fallback: ${previousModel} -> ${model}`;
 				runtimeMetrics.lastErrorCategory = "model-fallback";
 				logWarn(
@@ -3134,13 +3184,18 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 															continue;
 																																}
 
-				accountManager.markRateLimitedWithReason(
-					account,
-					delayMs,
-					modelFamily,
-					parseRateLimitReason(rateLimit.code),
-					model,
-				);
+				// Authoritative subscription exhaustion already has its own block.
+				// Do not duplicate its reset as a model/family transient 429; retain
+				// any genuine transient state written by other in-flight requests.
+				if (!quotaExhausted) {
+					accountManager.markRateLimitedWithReason(
+						account,
+						delayMs,
+						modelFamily,
+						parseRateLimitReason(rateLimit.code),
+						model,
+					);
+				}
 				accountManager.recordRateLimit(account, modelFamily, model);
 				account.lastSwitchReason = "rate-limit";
 				runtimeMetrics.accountRotations++;
@@ -3447,6 +3502,90 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 										(account) =>
 											!fetchedAccountKeys.has(getAccountDiagnosticsKey(account)),
 									).length;
+
+								const enabledSelection = count > 0 ? accountManager
+									.getSelectionExplainability(modelFamily, model)
+									.filter((entry) => entry.enabled) : [];
+								const upstreamBlocked = enabledSelection.length > 0 && enabledSelection.every(
+									(entry) => entry.rateLimitedUntil !== undefined || entry.quotaExhaustedUntil !== undefined,
+								);
+
+								// Every enabled account has an active upstream block. Before waiting out a
+								// block that can run for days (`retryAllAccountsMaxRetries`
+								// defaults to Infinity), degrade to the next chain model that is
+								// actually usable right now. Gated exactly like the entitlement
+								// auto-fallback -- same default-selector entry models, same
+								// opt-out env vars -- even when an entry ID was selected directly.
+								// Local token depletion and auth cooldown alone never trigger it.
+								// An account-wide quota block fails the eligibility test
+								// on every candidate, so it correctly falls through to the wait.
+								if (
+									upstreamBlocked &&
+									waitMs > 0 &&
+									count > 0 &&
+									model &&
+									quotaFallbackSwitches < MAX_QUOTA_FALLBACK_SWITCHES &&
+									isDefaultAutoFallbackModel(
+										model,
+										attemptedUnsupportedFallbackModels,
+									)
+								) {
+									const rejected = new Set<string>();
+									let usableFallback: string | undefined;
+									while (true) {
+										const candidate = pickFallbackChainTarget({
+											currentModel: model,
+											attemptedModels: new Set([
+												...attemptedUnsupportedFallbackModels,
+												...rejected,
+											]),
+											customChain: unsupportedCodexFallbackChain,
+											fallbackToGpt52OnUnsupportedGpt53,
+										});
+										if (!candidate || rejected.has(candidate)) break;
+										// Only degrade to a model some account can serve NOW,
+										// otherwise the hop just moves the same block sideways.
+										const candidatePool = getModelAccountPool(pluginConfig, candidate);
+										const strictCandidatePool = candidatePool.length > 0 &&
+											getModelAccountPoolMode(pluginConfig, candidate) === "strict";
+										const candidateAccounts = accountManager.getAccountsSnapshot();
+										const candidateEligible = accountManager.getSelectionExplainability(
+											getModelFamily(candidate), candidate,
+										).some((entry) => entry.eligible && (!strictCandidatePool ||
+											candidateAccounts.some((account) => account.index === entry.index &&
+												candidatePool.some((key) => matchesModelPoolAccountKey(account, key)))));
+									// A preferred pool may spill into general accounts; a strict
+									// pool must contain an eligible member. This does not select
+									// an account or advance any rotation cursor.
+										if (candidateEligible) {
+											usableFallback = candidate;
+											break;
+										}
+										rejected.add(candidate);
+									}
+
+									if (usableFallback) {
+										const previousModel = model;
+										quotaFallbackSwitches++;
+										await applyModelFallback(
+											previousModel,
+											usableFallback,
+											"fallback-quota-exhausted",
+										);
+										runtimeMetrics.lastError = `Model fallback: ${previousModel} -> ${model}`;
+										runtimeMetrics.lastErrorCategory = "model-fallback";
+										logWarn(
+											`All ${count} account(s) are rate-limited or out of quota for ${previousModel}. Falling back to ${model}.`,
+											{
+												requestedModel: previousModel,
+												effectiveModel: model,
+												fallbackApplied: true,
+												fallbackReason: "fallback-quota-exhausted",
+											},
+										);
+										continue;
+									}
+								}
 
 								if (
 									retryAllAccountsRateLimited &&

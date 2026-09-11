@@ -143,6 +143,14 @@ export interface ToolContext {
 		now: number,
 		family?: ModelFamily,
 	) => string | null;
+	getQuotaExhaustedUntil: (
+		account: { quotaExhaustedUntil?: number },
+		now: number,
+	) => number | null;
+	formatQuotaExhaustionEntry: (
+		account: { quotaExhaustedUntil?: number },
+		now: number,
+	) => string | null;
 	buildJsonAccountIdentity: (
 		index: number,
 		options?: {
