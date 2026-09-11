@@ -281,7 +281,7 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `unsupportedCodexPolicy` | `strict` | unsupported-model behavior: `strict` (return entitlement error) or `fallback` (retry with configured fallback chain) |
 | `fallbackOnUnsupportedCodexModel` | `false` | legacy fallback toggle mapped to `unsupportedCodexPolicy` (prefer using `unsupportedCodexPolicy`) |
 | `fallbackToGpt52OnUnsupportedGpt53` | `true` | legacy compatibility toggle for the `gpt-5.3-codex -> gpt-5.2-codex` edge when generic fallback is enabled |
-| `unsupportedCodexFallbackChain` | `{}` | optional per-model fallback-chain override (map of `model -> [fallback1, fallback2, ...]`; default includes `gpt-6-astra` and the 5.6 tiers down to `gpt-5.5`, and `gpt-5.5`/`gpt-5-codex` down to `gpt-5.2`). The 5.6 tier, `gpt-5.5`, and canonical Codex auto-fallbacks are on by default, both for common entitlement gates and when every account is rate-limited or out of quota for the requested model; set `CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK=1`, `CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK=1`, `CODEX_AUTH_DISABLE_GPT55_AUTO_FALLBACK=1`, or `CODEX_AUTH_DISABLE_CODEX_AUTO_FALLBACK=1` to opt out. A model chosen directly rather than through a default selector is never swapped, and the chain is only followed to a model some account can serve immediately. GPT-5.5 Pro and GPT-6 Astra Pro are not mapped: neither is a Codex-routable id. The Daybreak cyber tiers are deliberately chainless, so an unentitled account fails loudly rather than being answered by a general model. |
+| `unsupportedCodexFallbackChain` | `{}` | optional per-model fallback-chain override (map of `model -> [fallback1, fallback2, ...]`; default includes `gpt-6-astra` and the 5.6 tiers down to `gpt-5.5`, and `gpt-5.5`/`gpt-5-codex` down to `gpt-5.2`). These entry IDs auto-fallback by default, even when selected directly, both for common entitlement gates and when every enabled account has an active upstream rate/quota block for the requested model; set `CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK=1`, `CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK=1`, `CODEX_AUTH_DISABLE_GPT55_AUTO_FALLBACK=1`, or `CODEX_AUTH_DISABLE_CODEX_AUTO_FALLBACK=1` to opt out. Directly selected non-entry IDs stay strict under this auto gate. GPT-5.5 Pro and GPT-6 Astra Pro are not mapped: neither is a Codex-routable id. The Daybreak cyber tiers are deliberately chainless, so an unentitled account fails loudly rather than being answered by a general model. |
 | `sessionRecovery` | `true` | auto-recover from common api errors |
 | `autoResume` | `true` | auto-resume after thinking block recovery |
 | `tokenRefreshSkewMs` | `60000` | refresh tokens this many ms before expiry |
@@ -294,6 +294,15 @@ The sample above intentionally sets `"retryAllAccountsMaxRetries": 3` as a bound
 | `fetchTimeoutMs` | `60000` | upstream fetch timeout in ms |
 | `streamStallTimeoutMs` | `45000` | max time to wait for next SSE chunk before aborting |
 | `quotaNotifications` | disabled | optional macOS Notification Center alerts for aggregate 5-hour and weekly pool quotas. `autoProtectCredits` defaults to `true` and polls the same endpoint to exclude fully spent subscription quotas from rotation; `intervalMs` defaults to 30 minutes with a 30-second minimum, `notifyEveryCheck` defaults to `false`, and `thresholds` defaults to `[25, 10, 0]` |
+
+For upstream rate/quota blocks, automatic model fallback runs **before** configured
+waiting (`retryAllAccountsRateLimited` and its wait/retry limits). It only moves to
+a model with an eligible account under that target's pool policy: unavailable
+strict pools are skipped, while preferred pools may use general accounts. An
+unavailable strict pool for the current model remains a strict-pool error. Local
+token-bucket depletion or authentication cooldown alone does not trigger model
+fallback. Shared subscription exhaustion blocks the account across all models;
+changing models cannot bypass it.
 
 The quota guard queries each distinct enabled account with bounded concurrency
 every `intervalMs` (30 minutes by default), even when notifications are off.
