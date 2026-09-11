@@ -843,8 +843,8 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 		 * served request and on a refused one alike, so the moment an account hits
 		 * 0% left we can record it instead of rediscovering it with a failed request
 		 * on every subsequent prompt. The block lands on the persisted
-		 * `rateLimitResetTimes` map, so it is remembered across restarts and shared
-		 * with other processes, and it clears itself once the window rolls over.
+		 * account-wide `quotaExhaustedUntil` field, so it is remembered across
+		 * restarts and clears itself once the window rolls over.
 		 *
 		 * Call this only for responses whose headers are authoritative: one the
 		 * backend served, or one it refused for a confirmed usage limit. Every other
@@ -875,7 +875,7 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 				account.lastSwitchReason = "rate-limit";
 				manager.saveToDiskDebounced();
 				logWarn(
-					`Account ${account.index + 1} (${account.email ?? "unknown"}) has no ${family} quota left; skipping it for ${formatWaitTime(resetAtMs - Date.now())}.`,
+					`Account ${account.index + 1} has no shared subscription quota left; skipping it for ${formatWaitTime(resetAtMs - Date.now())}.`,
 				);
 				return true;
 			} catch (error) {
@@ -2469,6 +2469,11 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 					break;
 				}
 							attempted.add(account.index);
+							// Hybrid's last-resort result is not necessarily eligible. Requests
+							// must honor active blocks rather than sending it upstream anyway.
+							if (selectionExplainability.some((entry) => entry.index === account.index && !entry.eligible)) {
+								continue;
+							}
 							runtimeMetrics.lastSelectedAccountIndex = account.index;
 							runtimeMetrics.lastQuotaKey = quotaKey;
 							if (runtimeMetrics.lastSelectionSnapshot) {
@@ -3179,13 +3184,18 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 															continue;
 																																}
 
-				accountManager.markRateLimitedWithReason(
-					account,
-					delayMs,
-					modelFamily,
-					parseRateLimitReason(rateLimit.code),
-					model,
-				);
+				// Authoritative subscription exhaustion already has its own block.
+				// Do not duplicate its reset as a model/family transient 429; retain
+				// any genuine transient state written by other in-flight requests.
+				if (!quotaExhausted) {
+					accountManager.markRateLimitedWithReason(
+						account,
+						delayMs,
+						modelFamily,
+						parseRateLimitReason(rateLimit.code),
+						model,
+					);
+				}
 				accountManager.recordRateLimit(account, modelFamily, model);
 				account.lastSwitchReason = "rate-limit";
 				runtimeMetrics.accountRotations++;
@@ -3493,15 +3503,24 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 											!fetchedAccountKeys.has(getAccountDiagnosticsKey(account)),
 									).length;
 
-								// Every account is blocked for this model. Before waiting out a
+								const enabledSelection = count > 0 ? accountManager
+									.getSelectionExplainability(modelFamily, model)
+									.filter((entry) => entry.enabled) : [];
+								const upstreamBlocked = enabledSelection.length > 0 && enabledSelection.every(
+									(entry) => entry.rateLimitedUntil !== undefined || entry.quotaExhaustedUntil !== undefined,
+								);
+
+								// Every enabled account has an active upstream block. Before waiting out a
 								// block that can run for days (`retryAllAccountsMaxRetries`
 								// defaults to Infinity), degrade to the next chain model that is
 								// actually usable right now. Gated exactly like the entitlement
 								// auto-fallback -- same default-selector entry models, same
-								// opt-out env vars -- so a directly chosen model is never
-								// silently swapped. An account-wide quota block fails this test
+								// opt-out env vars -- even when an entry ID was selected directly.
+								// Local token depletion and auth cooldown alone never trigger it.
+								// An account-wide quota block fails the eligibility test
 								// on every candidate, so it correctly falls through to the wait.
 								if (
+									upstreamBlocked &&
 									waitMs > 0 &&
 									count > 0 &&
 									model &&
@@ -3523,15 +3542,22 @@ export const OpenAIOAuthPlugin: Plugin = async ({ client }: PluginInput) => {
 											customChain: unsupportedCodexFallbackChain,
 											fallbackToGpt52OnUnsupportedGpt53,
 										});
-										if (!candidate) break;
+										if (!candidate || rejected.has(candidate)) break;
 										// Only degrade to a model some account can serve NOW,
 										// otherwise the hop just moves the same block sideways.
-										if (
-											accountManager.getMinWaitTimeForFamily(
-												getModelFamily(candidate),
-												candidate,
-											) === 0
-										) {
+										const candidatePool = getModelAccountPool(pluginConfig, candidate);
+										const strictCandidatePool = candidatePool.length > 0 &&
+											getModelAccountPoolMode(pluginConfig, candidate) === "strict";
+										const candidateAccounts = accountManager.getAccountsSnapshot();
+										const candidateEligible = accountManager.getSelectionExplainability(
+											getModelFamily(candidate), candidate,
+										).some((entry) => entry.eligible && (!strictCandidatePool ||
+											candidateAccounts.some((account) => account.index === entry.index &&
+												candidatePool.some((key) => matchesModelPoolAccountKey(account, key)))));
+									// A preferred pool may spill into general accounts; a strict
+									// pool must contain an eligible member. This does not select
+									// an account or advance any rotation cursor.
+										if (candidateEligible) {
 											usableFallback = candidate;
 											break;
 										}

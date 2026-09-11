@@ -117,6 +117,23 @@ describe("account-wide quota exhaustion state", () => {
 	});
 
 	// (e)
+	it("probes eligibility by dropping only expired stamps and never moving the rotation cursor", () => {
+		vi.useFakeTimers();
+		const now = Date.now();
+		const manager = new AccountManager(undefined, {
+			version: 3, activeIndex: 0,
+			accounts: [{ refreshToken: "token-1", addedAt: 1, lastUsed: 1,
+				quotaExhaustedUntil: now - 1, rateLimitResetTimes: { codex: now - 1 } }],
+		});
+		const { quotaExhaustedUntil: _q, rateLimitResetTimes: _r, ...before } = manager.getAccountsSnapshot()[0]!;
+		expect(manager.getSelectionExplainability("codex")[0]?.eligible).toBe(true);
+		const { quotaExhaustedUntil, rateLimitResetTimes, ...after } = manager.getAccountsSnapshot()[0]!;
+		expect(after).toEqual(before);
+		expect(quotaExhaustedUntil).toBeUndefined();
+		expect(rateLimitResetTimes).toEqual({});
+		expect(manager.getCurrentAccount()?.index).toBe(0);
+	});
+
 	it("ignores and clears an expired quotaExhaustedUntil", () => {
 		const now = Date.now();
 		const manager = new AccountManager(undefined, {

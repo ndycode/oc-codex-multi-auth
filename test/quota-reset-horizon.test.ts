@@ -142,7 +142,8 @@ describe("markQuotaExhausted horizon guard", () => {
 		const resetAt = Date.now() + 7 * 24 * HOUR_MS;
 
 		expect(manager.markQuotaExhausted(account, resetAt, "codex")).toBe(true);
-		expect(account.rateLimitResetTimes["codex"]).toBe(Math.floor(resetAt));
+		expect(account.quotaExhaustedUntil).toBe(Math.floor(resetAt));
+		expect(account.rateLimitResetTimes).toEqual({});
 	});
 
 	it("refuses a reset past the horizon, so nothing permanent is persisted", async () => {
@@ -151,6 +152,7 @@ describe("markQuotaExhausted horizon guard", () => {
 		const bogus = Date.now() + 4_000_000_000 * 1000; // ~127 years
 
 		expect(manager.markQuotaExhausted(account, bogus, "codex")).toBe(false);
+		expect(account.quotaExhaustedUntil).toBeUndefined();
 		expect(account.rateLimitResetTimes["codex"]).toBeUndefined();
 	});
 });

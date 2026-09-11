@@ -294,11 +294,13 @@ describe("AccountManager.markQuotaExhausted (issue #218)", () => {
 		expect(manager.getCurrentOrNext()?.refreshToken).toBe("token-2");
 	});
 
-	it("records the block as a quota rate limit", () => {
+	it("records shared quota separately from rate limits", () => {
 		const manager = buildManager();
 		const account = manager.getCurrentOrNext()!;
 		manager.markQuotaExhausted(account, Date.now() + SEVEN_DAYS_MS, "codex");
 		expect(account.lastRateLimitReason).toBe("quota");
+		expect(account.quotaExhaustedUntil).toBeGreaterThan(Date.now());
+		expect(account.rateLimitResetTimes).toEqual({});
 	});
 
 	it("never shortens an existing longer block", () => {
@@ -308,7 +310,7 @@ describe("AccountManager.markQuotaExhausted (issue #218)", () => {
 
 		expect(manager.markQuotaExhausted(account, weeklyReset, "codex")).toBe(true);
 		expect(manager.markQuotaExhausted(account, Date.now() + 60_000, "codex")).toBe(false);
-		expect(account.rateLimitResetTimes.codex).toBe(weeklyReset);
+		expect(account.quotaExhaustedUntil).toBe(weeklyReset);
 	});
 
 	it("is not shortened by a later ordinary rate limit", () => {
@@ -327,8 +329,10 @@ describe("AccountManager.markQuotaExhausted (issue #218)", () => {
 			"gpt-5-codex",
 		);
 
-		expect(account.rateLimitResetTimes.codex).toBe(weeklyReset);
-		expect(account.rateLimitResetTimes["codex:gpt-5-codex"]).toBe(weeklyReset);
+		expect(account.quotaExhaustedUntil).toBe(weeklyReset);
+		expect(account.rateLimitResetTimes.codex).toBeLessThan(weeklyReset);
+		expect(account.rateLimitResetTimes["codex:gpt-5-codex"]).toBe(account.rateLimitResetTimes.codex);
+		expect(account.lastRateLimitReason).toBe("tokens");
 		expect(manager.getCurrentOrNext()?.refreshToken).toBe("token-2");
 	});
 
@@ -354,22 +358,24 @@ describe("AccountManager.markQuotaExhausted (issue #218)", () => {
 		expect(account.rateLimitResetTimes.codex).toBeGreaterThan(shortReset);
 	});
 
-	it("ignores a reset that is already in the past", () => {
+	it.each([NaN, Infinity, -Infinity, -1000, 0])("ignores an invalid or elapsed reset %s", (offset) => {
 		const manager = buildManager();
 		const account = manager.getCurrentOrNext()!;
 
-		expect(manager.markQuotaExhausted(account, Date.now() - 1000, "codex")).toBe(false);
+		expect(manager.markQuotaExhausted(account, Date.now() + offset, "codex")).toBe(false);
+		expect(account.quotaExhaustedUntil).toBeUndefined();
 		expect(account.rateLimitResetTimes.codex).toBeUndefined();
 	});
 
-	it("blocks the model-scoped quota key too", () => {
+	it("blocks other models without manufacturing model-scoped rate limits", () => {
 		const manager = buildManager();
 		const account = manager.getCurrentOrNext()!;
 		const weeklyReset = Date.now() + SEVEN_DAYS_MS;
 
 		manager.markQuotaExhausted(account, weeklyReset, "codex", "gpt-5-codex");
 
-		expect(account.rateLimitResetTimes.codex).toBe(weeklyReset);
-		expect(account.rateLimitResetTimes["codex:gpt-5-codex"]).toBe(weeklyReset);
+		expect(account.quotaExhaustedUntil).toBe(weeklyReset);
+		expect(account.rateLimitResetTimes).toEqual({});
+		expect(manager.getCurrentOrNextForFamily("gpt-5.1", "gpt-5.1")?.refreshToken).toBe("token-2");
 	});
 });
