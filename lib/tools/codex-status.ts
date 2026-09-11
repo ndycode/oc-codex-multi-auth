@@ -220,7 +220,6 @@ export function createCodexStatusTool(ctx: ToolContext): ToolDefinition {
 						badges.push(formatUiBadge(ui, "rate-limited", "warning"));
 					if (quotaExhausted !== "none")
 						badges.push(formatUiBadge(ui, "quota-exhausted", "warning"));
-						badges.push(formatUiBadge(ui, "rate-limited", "warning"));
 					if (cooldown !== "none")
 						badges.push(formatUiBadge(ui, "cooldown", "warning"));
 					if (badges.length === 0)

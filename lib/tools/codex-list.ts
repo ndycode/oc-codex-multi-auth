@@ -222,7 +222,6 @@ export function createCodexListTool(ctx: ToolContext): ToolDefinition {
 						badges.push(formatUiBadge(ui, "rate-limited", "warning"));
 					if (quotaExhausted)
 						badges.push(formatUiBadge(ui, "quota-exhausted", "warning"));
-						badges.push(formatUiBadge(ui, "rate-limited", "warning"));
 					if (
 						typeof account.coolingDownUntil === "number" &&
 						account.coolingDownUntil > now
