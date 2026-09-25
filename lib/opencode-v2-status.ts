@@ -4,6 +4,7 @@ import { readTuiQuotaSnapshot, readTuiQuotaOverviewSnapshot, isFreshTuiQuotaSnap
 import { formatPromptStatusText, formatQuotaDetailsText, formatQuotaOverviewStatusLines, formatQuotaResetsStatusLines, type CompactQuotaStatus } from "./tui-status.js";
 import { dirname, join } from "node:path";
 import { getStoragePath, loadAccounts } from "./storage.js";
+import { getCurrentProjectRoot } from "./storage/state.js";
 import { createUsageAccountFingerprint } from "./codex-usage.js";
 import { resolveDisplayEmail } from "./account-display.js";
 
@@ -47,6 +48,11 @@ export async function readV2Status({ width }: { width: number }) {
 	const maskEmail = getCodexTuiMaskEmail(config);
 	const snapshot = await readTuiQuotaSnapshot();
 	const pool = await loadAccounts();
+	// The headers cache is global: project pools seeded from the same accounts
+	// share fingerprints, so it cannot attribute a request to this project.
+	const servingIndex = !getCurrentProjectRoot() && snapshot?.source === "headers" && isFreshTuiQuotaSnapshot(snapshot)
+		? pool?.accounts.findIndex((account) => createUsageAccountFingerprint(account) === snapshot.fingerprint)
+		: undefined;
 	const owned = snapshot && pool?.accounts.some((account) => createUsageAccountFingerprint(account) === snapshot.fingerprint);
 	let quota: CompactQuotaStatus = snapshot && owned
 		? { ...snapshot, type: "ready", stale: !isFreshTuiQuotaSnapshot(snapshot) }
@@ -81,10 +87,11 @@ export async function readV2Status({ width }: { width: number }) {
 		: "";
 	return {
 		text,
+		accountStorage: getCurrentProjectRoot() ? "project" as const : "global" as const,
 		accounts: (pool?.accounts ?? []).map((account, index) => ({
 			index: index + 1,
 			label: account.accountLabel?.trim() || resolveDisplayEmail(account.email, maskEmail) || `Account ${index + 1}`,
-			active: index === pool?.activeIndex,
+			active: index === (servingIndex !== undefined && servingIndex >= 0 ? servingIndex : pool?.activeIndex),
 			enabled: account.enabled !== false,
 		})),
 		details: formatQuotaDetailsText(quota, Date.now(), { quotaDisplay, maskEmail: getCodexTuiMaskEmailInQuotaDetails(config) }),
