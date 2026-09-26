@@ -102,7 +102,7 @@ export class AccountManager {
 		// next load repeats it.
 		if (manager.state.consumeScopeRepairs()) {
 			try {
-				await manager.persistence.saveToDisk();
+				await manager.persistence.saveToDisk(true);
 			} catch (error) {
 				logWarn(
 					`Failed to persist OAuth scope repair: ${

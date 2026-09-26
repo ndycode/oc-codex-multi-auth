@@ -14,8 +14,8 @@
  *      slot is no longer pinned across a simulated restart (the core of #171,
  *      which previously required hand-editing activeIndex).
  *   C. clearAuthFailures on success prevents stale-count accumulation toward
- *      removal of a recovered account.
- *   D. Threshold removal: MAX_AUTH_FAILURES_BEFORE_REMOVAL drops the dead group.
+ *      disabling a recovered account.
+ *   D. Threshold disabling keeps the dead group's credentials for recovery.
  *   E. Single standalone account 401 exercises the cooledCount<=0 /
  *      markAccountCoolingDown fallback (Greptile-flagged uncovered branch).
  *   F. The real detector classifies the upstream 401 body correctly and does
@@ -97,14 +97,14 @@ type Active = ReturnType<AccountManager["getCurrentOrNextForFamilyHybrid"]>;
  * Replays the request-path 401 handler from index.ts (the block guarded by
  * `if (isInvalidatedAuthTokenError(errorBody, response.status))`) against the
  * REAL manager. Mirrors the production order: refund -> recordFailure ->
- * increment -> (threshold? remove) -> cool group (fallback per-account) -> save.
+ * increment -> (threshold? disable) -> cool group (fallback per-account) -> save.
  *
- * @returns { removed, cooledCount, failures } for assertions.
+ * @returns { disabled, cooledCount, failures } for assertions.
  */
 async function applyInvalidated401(
 	manager: AccountManager,
 	account: NonNullable<Active>,
-): Promise<{ removed: number; cooledCount: number; failures: number }> {
+): Promise<{ disabled: number; cooledCount: number; failures: number }> {
 	// Gate on the real detector exactly as index.ts does.
 	expect(isInvalidatedAuthTokenError(INVALIDATED_401_BODY, 401)).toBe(true);
 
@@ -112,12 +112,12 @@ async function applyInvalidated401(
 	manager.recordFailure(account, FAMILY, "gpt-5.1");
 
 	const failures = await manager.incrementAuthFailures(account);
-	let removed = 0;
+	let disabled = 0;
 	if (failures >= ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL) {
-		removed = manager.removeAccountsWithSameRefreshToken(account);
-		if (removed > 0) {
+		disabled = manager.disableAccountsWithSameRefreshToken(account);
+		if (disabled > 0) {
 			manager.saveToDiskDebounced();
-			return { removed, cooledCount: 0, failures };
+			return { disabled, cooledCount: 0, failures };
 		}
 	}
 
@@ -130,7 +130,7 @@ async function applyInvalidated401(
 		manager.markAccountCoolingDown(account, COOLDOWN, "auth-failure");
 	}
 	manager.saveToDiskDebounced();
-	return { removed, cooledCount, failures };
+	return { disabled, cooledCount, failures };
 }
 
 /**
@@ -150,6 +150,7 @@ function simulateRestart(manager: AccountManager): AccountManager {
 		activeIndexByFamily,
 		accounts: snapshot.map((a) => ({
 			refreshToken: a.refreshToken,
+			enabled: a.enabled,
 			addedAt: a.addedAt,
 			lastUsed: a.lastUsed,
 			coolingDownUntil: a.coolingDownUntil,
@@ -240,7 +241,7 @@ describe("chaos/auth-invalidated-401 — real manager + real detector (issue #17
 		restarted.disposeShutdownHandler();
 	});
 
-	it("C: clearAuthFailures on success prevents stale-count accumulation toward removal", async () => {
+	it("C: clearAuthFailures on success prevents stale-count accumulation toward disabling", async () => {
 		const manager = createManager(makeTwoAccountStorage());
 		const dead = manager.getCurrentOrNextForFamilyHybrid(FAMILY, "gpt-5.1")!;
 
@@ -254,32 +255,39 @@ describe("chaos/auth-invalidated-401 — real manager + real detector (issue #17
 		manager.clearAuthFailures(dead);
 		expect(manager.getAuthFailures(dead)).toBe(0);
 
-		// A subsequent single 401 starts from 1 again — never reaches removal.
+		// A subsequent single 401 starts from 1 again — never reaches disabling.
 		const after = await applyInvalidated401(manager, dead);
 		expect(after.failures).toBe(1);
-		expect(after.removed).toBe(0);
+		expect(after.disabled).toBe(0);
 		expect(manager.getAccountCount()).toBe(2);
 
 		manager.disposeShutdownHandler();
 	});
 
-	it("D: reaching MAX_AUTH_FAILURES_BEFORE_REMOVAL removes the dead refresh-token group", async () => {
+	it("D: reaching the auth failure threshold disables the dead group without deleting credentials", async () => {
 		const manager = createManager(makeTwoAccountStorage());
 		const dead = manager.getCurrentOrNextForFamilyHybrid(FAMILY, "gpt-5.1")!;
 
-		let last = { removed: 0, cooledCount: 0, failures: 0 };
+		let last = { disabled: 0, cooledCount: 0, failures: 0 };
 		for (let i = 0; i < ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL; i++) {
 			last = await applyInvalidated401(manager, dead);
 		}
 
 		expect(last.failures).toBe(ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL);
-		expect(last.removed).toBe(1);
-		expect(manager.getAccountCount()).toBe(1);
-		// The surviving account is the healthy one; rotation returns it.
+		expect(last.disabled).toBe(1);
+		expect(manager.getAccountCount()).toBe(2);
+		await manager.flushPendingSave();
+		const onDisk = JSON.parse(await fs.readFile(TEST_STORAGE_PATH, "utf8")) as AccountStorageV3;
+		expect(onDisk.accounts.map((entry) => entry.refreshToken)).toEqual(["rt-dead", "rt-healthy"]);
+		expect(onDisk.accounts[0]?.enabled).toBe(false);
+		const restarted = simulateRestart(manager);
+		expect(restarted.getAccountsSnapshot()[0]?.enabled).toBe(false);
+		// The disabled account is retained, but rotation returns the healthy one.
 		const survivor = manager.getCurrentOrNextForFamilyHybrid(FAMILY, "gpt-5.1");
 		expect(survivor!.refreshToken).toBe("rt-healthy");
 
 		manager.disposeShutdownHandler();
+		restarted.disposeShutdownHandler();
 	});
 
 	it("E: single standalone account 401 exercises the cooledCount fallback and cools the lone account", async () => {

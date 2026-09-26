@@ -272,6 +272,7 @@ export class AccountRecovery {
 		for (const candidate of this.state.accounts) {
 			if (candidate.refreshToken === account.refreshToken && candidate.enabled !== false) {
 				candidate.enabled = false;
+				this.persistence.markAccountDisabled(candidate);
 				disabled++;
 			}
 		}
@@ -285,6 +286,7 @@ export class AccountRecovery {
 		for (const candidate of this.state.accounts) {
 			if (getWorkspaceIdentityKey(candidate) === targetKey && candidate.enabled !== false) {
 				candidate.enabled = false;
+				this.persistence.markAccountDisabled(candidate);
 				disabled++;
 			}
 		}
@@ -293,7 +295,7 @@ export class AccountRecovery {
 
 	/**
 	 * Remove all accounts that share the same refreshToken as the given account.
-	 * This is used when auth refresh fails to remove all org variants together.
+	 * Explicit removal helper; automatic auth failures disable accounts instead.
 	 * @returns Number of accounts removed
 	 */
 	removeAccountsWithSameRefreshToken(account: ManagedAccount): number {

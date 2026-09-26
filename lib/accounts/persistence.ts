@@ -18,7 +18,7 @@ import {
 import { getWorkspaceIdentityKey } from "../storage/identity.js";
 import { nowMs } from "../utils.js";
 import { clampNonNegativeInt } from "./rate-limits.js";
-import type { AccountState } from "./state.js";
+import { hasMissingScopeReauthNote, type AccountState, type ManagedAccount } from "./state.js";
 
 const log = createLogger("accounts");
 
@@ -38,12 +38,17 @@ export class AccountPersistence {
 	 * further write degrades to {@link mergeVolatileState}.
 	 */
 	private disposed = false;
+	private readonly pendingDisabledAccounts = new Set<string>();
 	private externalReloadSnapshot?: Map<string, Pick<AccountMetadataV3,
 		"rateLimitResetTimes" | "coolingDownUntil" | "quotaExhaustedUntil" | "quotaExhaustedStampAt">>;
 
 	constructor(private readonly state: AccountState) {}
 
-	async saveToDisk(): Promise<void> {
+	markAccountDisabled(account: ManagedAccount): void {
+		this.pendingDisabledAccounts.add(getWorkspaceIdentityKey(account));
+	}
+
+	async saveToDisk(repairScopes = false): Promise<void> {
 		const activeIndexByFamily: Partial<Record<ModelFamily, number>> = {};
 		for (const family of MODEL_FAMILIES) {
 			const raw = this.state.currentAccountIndexByFamily[family];
@@ -131,9 +136,16 @@ export class AccountPersistence {
 				storage.accounts = current.accounts.map((account) => {
 					const mine = mineByIdentity.get(getWorkspaceIdentityKey(account));
 					if (!mine) return account;
-					// A stale manager must not re-enable an account disabled by another
-					// process while its file watcher has not yet reloaded the pool.
-					return account.enabled === false ? { ...mine, enabled: false } : mine;
+					// Take persisted enabled state from disk unless this manager just
+					// disabled the account. A stale snapshot must not undo a re-login.
+					if (this.pendingDisabledAccounts.has(getWorkspaceIdentityKey(account))) {
+						return { ...mine, enabled: false };
+					}
+					if (repairScopes && account.enabled === false &&
+						hasMissingScopeReauthNote(account.accountNote) && mine.enabled !== false) {
+						return { ...mine, enabled: true, accountNote: mine.accountNote };
+					}
+					return { ...mine, enabled: account.enabled, accountNote: account.accountNote };
 				});
 				if (membershipChanged) {
 					storage.activeIndex = current.activeIndex;
@@ -141,6 +153,7 @@ export class AccountPersistence {
 				}
 			}
 			await persist(storage);
+			this.pendingDisabledAccounts.clear();
 		});
 	}
 

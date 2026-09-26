@@ -718,6 +718,15 @@ Your input exceeds the context window
 </details>
 
 <details>
+<summary><b>Account storage is unreadable or accounts disappear between sessions</b></summary>
+
+Multiple sessions can share the same account file. A background save now preserves accounts added by another session, and authentication failures disable accounts without deleting their credentials. Check `codex-list` for disabled accounts before logging in again.
+
+If the existing JSON file is corrupt, account loads and transactional writes fail instead of silently creating a smaller pool. Quit all OpenCode sessions, keep a copy of the corrupt file for diagnosis, then move it aside. Start OpenCode and preview the newest valid `backups/codex-credential-snapshot-*.json` with `codex-import path="..." dryRun=true` before importing. Snapshots contain refresh tokens; do not share them. A token already rotated after the snapshot may need a fresh login.
+
+</details>
+
+<details>
 <summary><b>Import concerns: accidental overwrite or bad backup file</b></summary>
 
 **Recommended safe flow:**

@@ -112,6 +112,23 @@ describe("AccountPersistence account membership", () => {
 		expect(persistedStorage()?.accounts[1]).toEqual(newAccount);
 	});
 
+	it("does not restore an account explicitly removed by another process", async () => {
+		const state = makeState([
+			makeStoredAccount(),
+			makeStoredAccount({ accountId: "acct-removed", refreshToken: "rt-removed" }),
+		]);
+		const persistence = new AccountPersistence(state);
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount()],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+
+		expect(persistedStorage()?.accounts.map((account) => account.accountId)).toEqual(["acct-1"]);
+	});
+
 	it("does not re-enable an account disabled by another process", async () => {
 		const state = makeState([makeStoredAccount()]);
 		const persistence = new AccountPersistence(state);
@@ -124,6 +141,46 @@ describe("AccountPersistence account membership", () => {
 		await persistence.saveToDisk();
 
 		expect(persistedStorage()?.accounts[0]?.enabled).toBe(false);
+	});
+
+	it("does not undo a re-login that re-enabled an account", async () => {
+		const state = makeState([makeStoredAccount({ enabled: false })]);
+		const persistence = new AccountPersistence(state);
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount({ enabled: true })],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+
+		expect(persistedStorage()?.accounts[0]?.enabled).toBe(true);
+	});
+
+	it("persists an auth-failure disable once, then respects a later re-login", async () => {
+		const state = makeState([makeStoredAccount()]);
+		const persistence = new AccountPersistence(state);
+		const account = state.accounts[0]!;
+		account.enabled = false;
+		persistence.markAccountDisabled(account);
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount()],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+		expect(persistedStorage()?.accounts[0]?.enabled).toBe(false);
+
+		saveAccountsMock.mockClear();
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount({ enabled: true, refreshToken: "rt-reissued", tokenRotatedAt: Date.now() })],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+		await persistence.saveToDisk();
+		expect(persistedStorage()?.accounts[0]?.enabled).toBe(true);
+		expect(persistedStorage()?.accounts[0]?.refreshToken).toBe("rt-reissued");
 	});
 });
 

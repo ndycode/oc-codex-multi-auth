@@ -158,7 +158,7 @@ This guarantee is intentionally local-filesystem/same-host. A process that exits
 - OAuth callback port remains `1455`; callback path is `/auth/callback`.
 - ChatGPT-backed Codex requests require `store: false`, `stream: true`, and `reasoning.encrypted_content`. Legacy transformation mode (`transformRequestBody`) enforces all three unconditionally. Native mode carries `store: false` and `reasoning.encrypted_content` through the shipped config templates and `stream` through the host payload.
 - Multi-turn continuity depends on `reasoning.encrypted_content` and the host-supplied conversation history.
-- Account pool limits: max **20** accounts; auth-failure cooldown **30s**; auto-removal after **3** consecutive auth failures.
+- Account pool limits: max **20** accounts; auth-failure cooldown **30s**; disable (retain credentials) after **3** consecutive auth failures.
 - Account bootstrap can hydrate from Codex CLI storage under `~/.codex` unless `CODEX_AUTH_SYNC_CODEX_CLI=0`.
 - Auth methods exposed to OpenCode are the four OAuth labels only (default browser, open URL manually, device code, manual URL paste). There is no registered API-key login method.
 - Credentials and account metadata stay local unless the user exports or migrates them.
