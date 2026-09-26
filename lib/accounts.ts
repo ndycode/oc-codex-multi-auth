@@ -188,6 +188,14 @@ export class AccountManager {
 		return this.state.removeAccountByIndex(index);
 	}
 
+	disableAccountsWithSameRefreshToken(account: ManagedAccount): number {
+		return this.recovery.disableAccountsWithSameRefreshToken(account);
+	}
+
+	disableAccountsByWorkspaceIdentity(account: ManagedAccount): number {
+		return this.recovery.disableAccountsByWorkspaceIdentity(account);
+	}
+
 	setAccountEnabled(index: number, enabled: boolean): ManagedAccount | null {
 		return this.state.setAccountEnabled(index, enabled);
 	}

@@ -336,6 +336,7 @@ const mockQuotaExhaustionCalls: Array<{
 
 type MockManagedAccount = {
 	index: number;
+	enabled?: boolean;
 	accountId?: string;
 	accountUserId?: string;
 	email?: string;
@@ -501,7 +502,7 @@ vi.mock("../lib/accounts.js", () => {
 		private selectableAccounts(excludedIndices?: ReadonlySet<number>) {
 			return this.accounts.filter(
 				(account) =>
-					account.selectable !== false && !excludedIndices?.has(account.index),
+					account.enabled !== false && account.selectable !== false && !excludedIndices?.has(account.index),
 			);
 		}
 
@@ -538,10 +539,10 @@ vi.mock("../lib/accounts.js", () => {
 		getSelectionExplainability() {
 			return this.accounts.map((account, index) => ({
 				index,
-				enabled: true,
+				enabled: account.enabled !== false,
 				isCurrentForFamily: index === 0,
-				eligible: true,
-				reasons: ["eligible"],
+				eligible: account.enabled !== false,
+				reasons: account.enabled === false ? ["disabled"] : ["eligible"],
 				healthScore: 100,
 				tokensAvailable: 50,
 				lastUsed: Date.now(),
@@ -591,6 +592,22 @@ vi.mock("../lib/accounts.js", () => {
 		removeAccount() {}
 		removeAccountsWithSameRefreshToken() { return 1; }
 		removeAccountsByWorkspaceIdentity() { return 1; }
+		disableAccountsWithSameRefreshToken(account: MockManagedAccount) {
+			let disabled = 0;
+			for (const candidate of this.accounts) {
+				if (candidate.refreshToken === account.refreshToken && candidate.enabled !== false) {
+					candidate.enabled = false;
+					disabled++;
+				}
+			}
+			return disabled;
+		}
+		disableAccountsByWorkspaceIdentity(account: MockManagedAccount) {
+			const candidate = this.accounts.find((entry) => entry.accountId === account.accountId);
+			if (!candidate || candidate.enabled === false) return 0;
+			candidate.enabled = false;
+			return 1;
+		}
 
 		getMinWaitTimeForFamily() {
 			return 0;
@@ -5660,7 +5677,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		expect(sent.model).toBe("gpt-5.5");
 	});
 
-	it("cools down the account when grouped auth removal removes zero entries", async () => {
+	it("cools down the account when grouped auth disabling changes zero entries", async () => {
 		const fetchHelpers = await import("../lib/request/fetch-helpers.js");
 		const { AccountManager } = await import("../lib/accounts.js");
 		const { ACCOUNT_LIMITS } = await import("../lib/constants.js");
@@ -5672,8 +5689,8 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		const incrementAuthFailuresSpy = vi
 			.spyOn(AccountManager.prototype, "incrementAuthFailures")
 			.mockReturnValue(ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL);
-		const removeGroupedAccountsSpy = vi
-			.spyOn(AccountManager.prototype, "removeAccountsWithSameRefreshToken")
+		const disableGroupedAccountsSpy = vi
+			.spyOn(AccountManager.prototype, "disableAccountsWithSameRefreshToken")
 			.mockReturnValue(0);
 		const markAccountsWithRefreshTokenCoolingDownSpy = vi.spyOn(
 			AccountManager.prototype,
@@ -5693,7 +5710,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		expect(response.status).toBe(503);
 		expect(globalThis.fetch).not.toHaveBeenCalled();
 		expect(incrementAuthFailuresSpy).toHaveBeenCalledTimes(1);
-		expect(removeGroupedAccountsSpy).toHaveBeenCalledTimes(1);
+		expect(disableGroupedAccountsSpy).toHaveBeenCalledTimes(1);
 		expect(markAccountsWithRefreshTokenCoolingDownSpy).toHaveBeenCalledWith(
 			"refresh-1",
 			ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
@@ -5701,7 +5718,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		);
 	});
 
-	it("passes maskEmail to the account label on the auth-failure removal path", async () => {
+	it("passes maskEmail to the account label on the auth-failure disable path", async () => {
 		const fetchHelpers = await import("../lib/request/fetch-helpers.js");
 		const accountsModule = await import("../lib/accounts.js");
 		const configModule = await import("../lib/config.js");
@@ -5716,11 +5733,11 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		vi.spyOn(AccountManager.prototype, "incrementAuthFailures").mockReturnValue(
 			ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL,
 		);
-		// Returning 1 drives the single-account removal branch that renders the
-		// account label in the user-facing removal toast.
+		// Returning 1 drives the single-account disable branch that renders the
+		// account label in the user-facing toast.
 		vi.spyOn(
 			AccountManager.prototype,
-			"removeAccountsWithSameRefreshToken",
+			"disableAccountsWithSameRefreshToken",
 		).mockReturnValue(1);
 
 		globalThis.fetch = vi.fn().mockResolvedValue(
@@ -6221,16 +6238,13 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			.mockReturnValue(999);
 		vi.spyOn(
 			accountsModule.AccountManager.prototype,
-			"removeAccountsWithSameRefreshToken",
+			"disableAccountsWithSameRefreshToken",
 		).mockImplementation((account) => {
-			const removedIndex = mockManagedAccounts.findIndex(
+			const disabledIndex = mockManagedAccounts.findIndex(
 				(candidate) => candidate.refreshToken === account.refreshToken,
 			);
-			if (removedIndex < 0) return 0;
-			mockManagedAccounts.splice(removedIndex, 1);
-			mockManagedAccounts.forEach((candidate, index) => {
-				candidate.index = index;
-			});
+			if (disabledIndex < 0) return 0;
+			mockManagedAccounts[disabledIndex]!.enabled = false;
 			return 1;
 		});
 	};
@@ -6315,7 +6329,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		expect(body).toContain("1 configured pool key(s) matched no known account");
 	});
 
-	it("counts a live unavailable pooled account after a fetched account is removed", async () => {
+	it("counts a disabled pooled account after auth failure", async () => {
 		const configModule = await import("../lib/config.js");
 		await setupRemovedAccountThenUnsupportedModel();
 		vi.mocked(configModule.getModelAccountPool).mockReturnValue([
@@ -6331,11 +6345,11 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 
 		expect(response.status).toBe(503);
 		expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-		expect(body).toContain("3 configured pool key(s) resolved to 2 account(s)");
+		expect(body).toContain("3 configured pool key(s) resolved to 3 account(s)");
 		expect(body).toContain("1 pooled account(s) were never attempted");
 	});
 
-	it("counts a live unavailable general account after a fetched account is removed", async () => {
+	it("counts a disabled general account after auth failure", async () => {
 		await setupRemovedAccountThenUnsupportedModel();
 
 		const { sdk } = await setupPlugin();
@@ -6344,7 +6358,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 
 		expect(response.status).toBe(503);
 		expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-		expect(body).toContain("across 2 configured account(s)");
+		expect(body).toContain("across 3 configured account(s)");
 		expect(body).toContain("1 configured account(s) were unavailable or excluded");
 	});
 
@@ -6805,6 +6819,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			};
 
 			const accounts = [deadWorkspace, duplicateWorkspace, healthyFallback];
+			const disabledWorkspaceIds = new Set<string>();
 			const removeAccount = vi.fn((target: typeof deadWorkspace) => {
 				const idx = accounts.findIndex((account) => account.accountId === target.accountId);
 				if (idx < 0) return false;
@@ -6841,18 +6856,28 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 				});
 				return removedCount;
 			});
+			const disableAccountsByWorkspaceIdentity = vi.fn((target: typeof deadWorkspace) => {
+				let disabled = 0;
+				for (const candidate of accounts) {
+					if (candidate.accountId === target.accountId && !disabledWorkspaceIds.has(candidate.accountId)) {
+						disabledWorkspaceIds.add(candidate.accountId);
+						disabled++;
+					}
+				}
+				return disabled;
+			});
 
 			const customManager = {
 				getAccountCount: () => accounts.length,
-				getCurrentOrNextForFamilyHybrid: () => accounts[0] ?? null,
-				getAccountForStrategy: () => accounts[0] ?? null,
+				getCurrentOrNextForFamilyHybrid: () => accounts.find((entry) => !disabledWorkspaceIds.has(entry.accountId)) ?? null,
+				getAccountForStrategy: () => accounts.find((entry) => !disabledWorkspaceIds.has(entry.accountId)) ?? null,
 				getSelectionExplainability: () =>
 					accounts.map((account, index) => ({
 						index,
-						enabled: true,
+						enabled: !disabledWorkspaceIds.has(account.accountId),
 						isCurrentForFamily: index === 0,
-						eligible: true,
-						reasons: ["eligible"],
+						eligible: !disabledWorkspaceIds.has(account.accountId),
+						reasons: disabledWorkspaceIds.has(account.accountId) ? ["disabled"] : ["eligible"],
 						healthScore: 100,
 						tokensAvailable: 50,
 						lastUsed: Date.now(),
@@ -6877,6 +6902,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 				removeAccount,
 				removeAccountsWithSameRefreshToken,
 				removeAccountsByWorkspaceIdentity,
+				disableAccountsByWorkspaceIdentity,
 				recordFailure: vi.fn(),
 				recordSuccess: vi.fn(),
 				getMinWaitTimeForFamily: vi.fn(() => 0),
@@ -6924,14 +6950,16 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			expect(response.status).toBe(200);
 			expect(globalThis.fetch).toHaveBeenCalledTimes(2);
 			expect(removeAccount).not.toHaveBeenCalled();
-			// Only the deactivated workspace is removed by identity; refresh-token
-			// siblings (distinct workspaces) must survive in rotation.
+			// Only the deactivated workspace is disabled; credentials and
+			// refresh-token siblings remain stored.
 			expect(removeAccountsWithSameRefreshToken).not.toHaveBeenCalled();
-			expect(removeAccountsByWorkspaceIdentity).toHaveBeenCalledTimes(1);
-			// Only the deactivated workspace (org-dead) is removed by identity; the
-			// refresh-token sibling survives. Its accountId is re-derived by the
+			expect(removeAccountsByWorkspaceIdentity).not.toHaveBeenCalled();
+			expect(disableAccountsByWorkspaceIdentity).toHaveBeenCalledTimes(1);
+			expect(disabledWorkspaceIds.has("org-dead")).toBe(true);
+			// The refresh-token sibling survives. Its accountId is re-derived by the
 			// retry path's extractAccountId mock (-> "account-1").
 			expect(accounts.map((account) => account.accountId)).toEqual([
+				"org-dead",
 				"account-1",
 				"org-live",
 			]);
@@ -6948,7 +6976,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			);
 		});
 
-		it("cools down the deactivated workspace when grouped removal returns zero", async () => {
+		it("cools down the deactivated workspace when disabling changes zero entries", async () => {
 			const fetchHelpers = await import("../lib/request/fetch-helpers.js");
 			const storageModule = await import("../lib/storage.js");
 			const accountsModule = await import("../lib/accounts.js");
@@ -6968,6 +6996,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			const saveToDiskDebounced = vi.fn();
 			const removeAccountsWithSameRefreshToken = vi.fn(() => 0);
 			const removeAccountsByWorkspaceIdentity = vi.fn(() => 0);
+			const disableAccountsByWorkspaceIdentity = vi.fn(() => 0);
 			const customManager = {
 				getAccountCount: () => 1,
 				getCurrentOrNextForFamilyHybrid: () => deadWorkspace,
@@ -7004,6 +7033,7 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 				removeAccount: vi.fn(() => false),
 				removeAccountsWithSameRefreshToken,
 				removeAccountsByWorkspaceIdentity,
+				disableAccountsByWorkspaceIdentity,
 				recordFailure: vi.fn(),
 				recordSuccess: vi.fn(),
 				getMinWaitTimeForFamily: vi.fn(() => 0),
@@ -7041,7 +7071,8 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 
 			expect(response.status).toBe(503);
 			expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-			expect(removeAccountsByWorkspaceIdentity).toHaveBeenCalledTimes(1);
+			expect(removeAccountsByWorkspaceIdentity).not.toHaveBeenCalled();
+			expect(disableAccountsByWorkspaceIdentity).toHaveBeenCalledTimes(1);
 			expect(markAccountCoolingDown).toHaveBeenCalledWith(
 				deadWorkspace,
 				expect.any(Number),

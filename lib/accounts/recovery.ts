@@ -266,6 +266,31 @@ export class AccountRecovery {
 		this.state.authFailuresByRefreshToken.delete(account.refreshToken);
 	}
 
+	/** Keep credentials available for re-login when a shared refresh token fails. */
+	disableAccountsWithSameRefreshToken(account: ManagedAccount): number {
+		let disabled = 0;
+		for (const candidate of this.state.accounts) {
+			if (candidate.refreshToken === account.refreshToken && candidate.enabled !== false) {
+				candidate.enabled = false;
+				disabled++;
+			}
+		}
+		return disabled;
+	}
+
+	/** Leave other workspaces that share this refresh token enabled. */
+	disableAccountsByWorkspaceIdentity(account: ManagedAccount): number {
+		const targetKey = getWorkspaceIdentityKey(account);
+		let disabled = 0;
+		for (const candidate of this.state.accounts) {
+			if (getWorkspaceIdentityKey(candidate) === targetKey && candidate.enabled !== false) {
+				candidate.enabled = false;
+				disabled++;
+			}
+		}
+		return disabled;
+	}
+
 	/**
 	 * Remove all accounts that share the same refreshToken as the given account.
 	 * This is used when auth refresh fails to remove all org variants together.

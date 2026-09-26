@@ -2891,7 +2891,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 							accountManager = reloaded;
 						}
 						}
-						let accountCount = accountManager.getAccountCount();
+						const accountCount = accountManager.getAccountCount();
 						const attempted = new Set<number>();
 						// Diagnostics for the terminal error message below. The composite key keeps
 						// legacy Business seats distinct and can also be compared with snapshots
@@ -3024,9 +3024,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 				runtimeMetrics.lastErrorCategory = "auth-refresh";
 
 				// Transient refresh failures (network blip / upstream 5xx) must NOT
-				// count toward permanent account removal — the credentials are still
-				// valid and a flaky network or outage would otherwise silently delete
-				// them. Cool the account down briefly and rotate instead.
+				// count toward disabling an account. Cool it down and rotate instead.
 				const isTransientRefreshFailure =
 					err instanceof CodexAuthError && err.retryable === true;
 				if (isTransientRefreshFailure) {
@@ -3044,7 +3042,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 					}
 					accountManager.saveToDiskDebounced();
 					logWarn(
-						`[${PLUGIN_NAME}] Transient auth refresh failure for account ${account.index + 1} (${err.refreshFailureReason ?? "unknown"}${err.statusCode ? ` ${err.statusCode}` : ""}); cooling down without counting toward removal.`,
+						`[${PLUGIN_NAME}] Transient auth refresh failure for account ${account.index + 1} (${err.refreshFailureReason ?? "unknown"}${err.statusCode ? ` ${err.statusCode}` : ""}); cooling down without disabling.`,
 					);
 					continue;
 				}
@@ -3056,47 +3054,35 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 				});
 				
 				if (failures >= ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL) {
-					const removedCount = accountManager.removeAccountsWithSameRefreshToken(account);
-					if (removedCount <= 0) {
-						logWarn(
-							`[${PLUGIN_NAME}] Expected grouped account removal after auth failures, but removed ${removedCount}.`,
-						);
-						const cooledCount = accountManager.markAccountsWithRefreshTokenCoolingDown(
-							account.refreshToken,
-							ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
-							"auth-failure",
-						);
-						if (cooledCount <= 0) {
-							logWarn(
-								`[${PLUGIN_NAME}] Unable to apply auth-failure cooldown; no live account found for refresh token.`,
-							);
-						}
+					const disabledCount = accountManager.disableAccountsWithSameRefreshToken(account);
+					if (disabledCount > 0) {
 						accountManager.saveToDiskDebounced();
+						await showToast(
+							disabledCount > 1
+								? `Disabled ${disabledCount} accounts after ${failures} auth failures; credentials retained. Run 'opencode auth login' to repair.`
+								: `Disabled ${accountLabel} after ${failures} auth failures; credentials retained. Run 'opencode auth login' to repair.`,
+							"error",
+							{ duration: toastDurationMs * 2 },
+						);
 						continue;
 					}
-					accountManager.saveToDiskDebounced();
-					const removalMessage = removedCount > 1
-						? `Removed ${removedCount} accounts (same refresh token) after ${failures} consecutive auth failures. Run 'opencode auth login' to re-add.`
-						: `Removed ${accountLabel} after ${failures} consecutive auth failures. Run 'opencode auth login' to re-add.`;
-					await showToast(
-						removalMessage,
-						"error",
-						{ duration: toastDurationMs * 2 },
-					);
-					// Restart traversal: clear attempted and refresh accountCount to avoid skipping healthy accounts
-					attempted.clear();
-					accountCount = accountManager.getAccountCount();
-					continue;
 				}
 				
-				accountManager.markAccountCoolingDown(
-								account,
-								ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
-								"auth-failure",
-							);
-						accountManager.saveToDiskDebounced();
-						continue;
-					}
+				const cooledCount = accountManager.markAccountsWithRefreshTokenCoolingDown(
+					account.refreshToken,
+					ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
+					"auth-failure",
+				);
+				if (cooledCount <= 0) {
+					accountManager.markAccountCoolingDown(
+						account,
+						ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
+						"auth-failure",
+					);
+				}
+				accountManager.saveToDiskDebounced();
+				continue;
+			}
 
 				const hadAccountId = !!account.accountId;
 					const tokenAccountId = extractAccountId(accountAuth.access);
@@ -3432,19 +3418,19 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 					);
 				}
 
-					// Remove ONLY the deactivated workspace, scoped by workspace
+					// Disable ONLY the deactivated workspace, scoped by workspace
 					// identity (org/account id). A single multi-org OAuth login
 					// produces sibling accounts that share one refresh token but are
-					// independently valid; removing all refresh-token siblings here
+					// independently valid; disabling all refresh-token siblings here
 					// would silently drop still-valid workspaces from rotation. The
 					// refresh token itself is still good, so siblings must survive.
-					const removedCount = accountManager.removeAccountsByWorkspaceIdentity(account);
-					if (removedCount > 0) {
+					const disabledCount = accountManager.disableAccountsByWorkspaceIdentity(account);
+					if (disabledCount > 0) {
 						accountManager.saveToDiskDebounced();
 						restartAccountTraversalAfterWorkspaceDeactivation = true;
-						const removalMessage = removedCount > 1
-							? `Workspace deactivated. Removed ${removedCount} related entries from rotation and switching accounts.`
-							: `Workspace deactivated. Removed ${accountLabel} from rotation and switching accounts.`;
+						const removalMessage = disabledCount > 1
+							? `Workspace deactivated. Disabled ${disabledCount} related entries; credentials retained.`
+							: `Workspace deactivated. Disabled ${accountLabel}; credentials retained.`;
 						await showToast(
 							removalMessage,
 							"warning",
@@ -3453,9 +3439,6 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 						break;
 					}
 
-					logWarn(
-						`[${PLUGIN_NAME}] Expected grouped account removal after workspace deactivation, but removed ${removedCount}.`,
-					);
 					accountManager.markAccountCoolingDown(
 						account,
 						ACCOUNT_LIMITS.AUTH_FAILURE_COOLDOWN_MS,
@@ -3708,7 +3691,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 																													// explicit handler the 401 fell straight through to `return errorResponse`
 																													// below, so persisted family routing kept pinning every request to the dead
 																													// account slot instead of failing over (issue #171). Treat it as an
-																													// account-health failure: cool the refresh-token group down (or remove it
+																				// account-health failure: cool the refresh-token group down (or disable it
 																													// past the failure threshold) and rotate to the next healthy account.
 																													//
 																													// Note: 401s intentionally do NOT feed the circuit breaker — the breaker
@@ -3728,30 +3711,23 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 																														runtimeMetrics.lastErrorCategory = "auth-invalidated";
 
 																														const failures = await accountManager.incrementAuthFailures(account);
-																														if (failures >= ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL) {
-																															const removedCount =
-																																accountManager.removeAccountsWithSameRefreshToken(account);
-																															if (removedCount > 0) {
-																																accountManager.saveToDiskDebounced();
-																																await showToast(
-																																	removedCount > 1
-																																		? `Removed ${removedCount} accounts (same refresh token) after ${failures} auth-token failures. Run 'opencode auth login' to re-add.`
-																																		: `Removed ${accountLabel} after ${failures} auth-token failures. Run 'opencode auth login' to re-add.`,
-																																	"error",
-																																	{ duration: toastDurationMs * 2 },
-																																);
-																																// Indices shift after removal; restart traversal with a fresh
-																																// attempted set so no healthy account is skipped.
-																																attempted.clear();
-																																accountCount = accountManager.getAccountCount();
-																																break;
-																															}
-																															logWarn(
-																																`[${PLUGIN_NAME}] Expected grouped account removal after auth-token invalidation, but removed ${removedCount}.`,
-																															);
-																														}
+																				if (failures >= ACCOUNT_LIMITS.MAX_AUTH_FAILURES_BEFORE_REMOVAL) {
+																					const disabledCount =
+																						accountManager.disableAccountsWithSameRefreshToken(account);
+																					if (disabledCount > 0) {
+																						accountManager.saveToDiskDebounced();
+																						await showToast(
+																							disabledCount > 1
+																								? `Disabled ${disabledCount} accounts after ${failures} auth-token failures; credentials retained. Run 'opencode auth login' to repair.`
+																								: `Disabled ${accountLabel} after ${failures} auth-token failures; credentials retained. Run 'opencode auth login' to repair.`,
+																							"error",
+																							{ duration: toastDurationMs * 2 },
+																						);
+																						break;
+																					}
+																				}
 
-																														// Below the removal threshold (or grouped removal was a no-op): cool the
+																				// Below the disable threshold (or the group was already disabled): cool the
 																														// account's whole refresh-token group down so selection skips it, then
 																														// rotate to the next healthy account instead of returning the 401.
 																														const cooledCount = accountManager.markAccountsWithRefreshTokenCoolingDown(
