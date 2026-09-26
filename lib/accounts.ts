@@ -102,7 +102,7 @@ export class AccountManager {
 		// next load repeats it.
 		if (manager.state.consumeScopeRepairs()) {
 			try {
-				await manager.persistence.saveToDisk();
+				await manager.persistence.saveToDisk(true);
 			} catch (error) {
 				logWarn(
 					`Failed to persist OAuth scope repair: ${
@@ -186,6 +186,14 @@ export class AccountManager {
 
 	removeAccountByIndex(index: number): boolean {
 		return this.state.removeAccountByIndex(index);
+	}
+
+	disableAccountsWithSameRefreshToken(account: ManagedAccount): number {
+		return this.recovery.disableAccountsWithSameRefreshToken(account);
+	}
+
+	disableAccountsByWorkspaceIdentity(account: ManagedAccount): number {
+		return this.recovery.disableAccountsByWorkspaceIdentity(account);
 	}
 
 	setAccountEnabled(index: number, enabled: boolean): ManagedAccount | null {

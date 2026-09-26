@@ -182,15 +182,12 @@ describe("chaos/storage-faults — real fault injection", () => {
 	});
 
 	describe("scenario 7: corrupted V3 file on load", () => {
-		it("malformed JSON does not crash loadAccounts and preserves the file on disk for recovery", async () => {
-			// The loader must tolerate garbage that could appear after a
-			// crash or a third-party text editor mangling the file. Returning
-			// null here is the degraded-but-safe path: the file stays on disk
-			// so recovery tooling (`codex-recovery`) can inspect it.
+		it("malformed JSON rejects account loads and preserves the file for recovery", async () => {
+			// A malformed file must not become an empty pool that the next write
+			// can replace. Keep the original for recovery.
 			await fs.writeFile(storagePath, "{not-json", "utf-8");
 
-			const loaded = await loadAccounts();
-			expect(loaded).toBeNull();
+			await expect(loadAccounts()).rejects.toMatchObject({ code: "INVALID_STORAGE" });
 
 			// File must not have been clobbered by the failed load.
 			const preserved = await fs.readFile(storagePath, "utf-8");

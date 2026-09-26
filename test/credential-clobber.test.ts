@@ -91,6 +91,99 @@ function persistedStorage(): AccountStorageV3 | undefined {
 	return saveAccountsMock.mock.calls[0]?.[0] as AccountStorageV3 | undefined;
 }
 
+describe("AccountPersistence account membership", () => {
+	it("preserves newly added accounts from another process", async () => {
+		const state = makeState([makeStoredAccount()]);
+		const persistence = new AccountPersistence(state);
+		const newAccount = makeStoredAccount({
+			accountId: "acct-2",
+			refreshToken: "rt-new",
+			email: "new@example.com",
+		});
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount(), newAccount],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+
+		expect(persistedStorage()?.accounts).toHaveLength(2);
+		expect(persistedStorage()?.accounts[1]).toEqual(newAccount);
+	});
+
+	it("does not restore an account explicitly removed by another process", async () => {
+		const state = makeState([
+			makeStoredAccount(),
+			makeStoredAccount({ accountId: "acct-removed", refreshToken: "rt-removed" }),
+		]);
+		const persistence = new AccountPersistence(state);
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount()],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+
+		expect(persistedStorage()?.accounts.map((account) => account.accountId)).toEqual(["acct-1"]);
+	});
+
+	it("does not re-enable an account disabled by another process", async () => {
+		const state = makeState([makeStoredAccount()]);
+		const persistence = new AccountPersistence(state);
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount({ enabled: false })],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+
+		expect(persistedStorage()?.accounts[0]?.enabled).toBe(false);
+	});
+
+	it("does not undo a re-login that re-enabled an account", async () => {
+		const state = makeState([makeStoredAccount({ enabled: false })]);
+		const persistence = new AccountPersistence(state);
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount({ enabled: true })],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+
+		expect(persistedStorage()?.accounts[0]?.enabled).toBe(true);
+	});
+
+	it("persists an auth-failure disable once, then respects a later re-login", async () => {
+		const state = makeState([makeStoredAccount()]);
+		const persistence = new AccountPersistence(state);
+		const account = state.accounts[0]!;
+		account.enabled = false;
+		persistence.markAccountDisabled(account);
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount()],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+
+		await persistence.saveToDisk();
+		expect(persistedStorage()?.accounts[0]?.enabled).toBe(false);
+
+		saveAccountsMock.mockClear();
+		diskStateRef.current = {
+			version: 3,
+			accounts: [makeStoredAccount({ enabled: true, refreshToken: "rt-reissued", tokenRotatedAt: Date.now() })],
+			activeIndex: 0,
+		} satisfies AccountStorageV3;
+		await persistence.saveToDisk();
+		expect(persistedStorage()?.accounts[0]?.enabled).toBe(true);
+		expect(persistedStorage()?.accounts[0]?.refreshToken).toBe("rt-reissued");
+	});
+});
+
 // Issue #218: a weekly quota block is worth days, so unlike a 5h window it
 // cannot be left to last-writer-wins. A second process holding a stale snapshot
 // would save over it and put the exhausted account straight back in rotation.
@@ -355,16 +448,12 @@ describe("AccountPersistence rate-limit merge (multi-process clobber guard)", ()
 		});
 	});
 
-	// Documents a known limitation rather than desired behavior. A record with
+	// A record with
 	// neither organizationId nor accountId is identified by its refresh token
 	// (lib/storage/identity.ts), so once another process rotates that token
-	// there is nothing left to match the two records on and the merge cannot
-	// run. It degrades to the pre-merge behavior — the block is dropped, never
-	// mis-assigned to a different account — which is why a positional fallback
-	// would be worse than this. Fixing it needs a rotation-invariant account id
-	// in storage, which also fixes the more serious credential miss asserted
-	// below. Flip both expectations when that lands.
-	it("cannot merge a token-only record whose token rotated (known limitation)", async () => {
+	// there is nothing left to match the two records on. Disk membership must
+	// remain authoritative rather than overwriting the newer single-use token.
+	it("keeps a rotated token-only record from disk", async () => {
 		const state = makeState([
 			makeStoredAccount({
 				accountId: undefined,
@@ -392,11 +481,8 @@ describe("AccountPersistence rate-limit merge (multi-process clobber guard)", ()
 		await persistence.saveToDisk();
 
 		const persisted = persistedStorage();
-		// Dropped, not mis-assigned: no record matched, so nothing was merged.
-		expect(persisted?.accounts[0]?.rateLimitResetTimes).toBeUndefined();
-		// Pre-existing and more serious: the same identity miss makes
-		// adoptNewerDiskCredentials overwrite the rotated single-use token.
-		expect(persisted?.accounts[0]?.refreshToken).toBe("rt-old");
+		expect(persisted?.accounts[0]?.rateLimitResetTimes?.codex).toBe(WEEKLY_RESET);
+		expect(persisted?.accounts[0]?.refreshToken).toBe("rt-new");
 	});
 
 	it("leaves live rotation state untouched", async () => {

@@ -18,7 +18,7 @@ import {
 import { getWorkspaceIdentityKey } from "../storage/identity.js";
 import { nowMs } from "../utils.js";
 import { clampNonNegativeInt } from "./rate-limits.js";
-import type { AccountState } from "./state.js";
+import { hasMissingScopeReauthNote, type AccountState, type ManagedAccount } from "./state.js";
 
 const log = createLogger("accounts");
 
@@ -38,12 +38,17 @@ export class AccountPersistence {
 	 * further write degrades to {@link mergeVolatileState}.
 	 */
 	private disposed = false;
+	private readonly pendingDisabledAccounts = new Set<string>();
 	private externalReloadSnapshot?: Map<string, Pick<AccountMetadataV3,
 		"rateLimitResetTimes" | "coolingDownUntil" | "quotaExhaustedUntil" | "quotaExhaustedStampAt">>;
 
 	constructor(private readonly state: AccountState) {}
 
-	async saveToDisk(): Promise<void> {
+	markAccountDisabled(account: ManagedAccount): void {
+		this.pendingDisabledAccounts.add(getWorkspaceIdentityKey(account));
+	}
+
+	async saveToDisk(repairScopes = false): Promise<void> {
 		const activeIndexByFamily: Partial<Record<ModelFamily, number>> = {};
 		for (const family of MODEL_FAMILIES) {
 			const raw = this.state.currentAccountIndexByFamily[family];
@@ -96,7 +101,9 @@ export class AccountPersistence {
 		// state), fatal for credentials — refresh tokens are single-use, so
 		// clobbering another process's freshly-rotated token kills the
 		// account permanently. Adopt any newer on-disk credentials before
-		// persisting.
+		// persisting. Membership comes from disk: another process may have
+		// added an account before this manager's file watcher reloads it, or
+		// explicitly removed one that this manager still holds in memory.
 		await withAccountStorageTransaction(async (current, persist) => {
 			if (this.disposed) {
 				// Disposal landed while this save was already in flight — after
@@ -117,8 +124,36 @@ export class AccountPersistence {
 				this.applyDiskQuotaClearTombstones(storage, current);
 				this.adoptLongerDiskRateLimits(storage, current);
 				this.adoptNewerDiskCredentials(storage, current);
+				const mineByIdentity = new Map(
+					storage.accounts.map((account) => [getWorkspaceIdentityKey(account), account]),
+				);
+				const membershipChanged =
+					current.accounts.length !== storage.accounts.length ||
+					current.accounts.some((account, index) => {
+						const mine = storage.accounts[index];
+						return !mine || getWorkspaceIdentityKey(account) !== getWorkspaceIdentityKey(mine);
+					});
+				storage.accounts = current.accounts.map((account) => {
+					const mine = mineByIdentity.get(getWorkspaceIdentityKey(account));
+					if (!mine) return account;
+					// Take persisted enabled state from disk unless this manager just
+					// disabled the account. A stale snapshot must not undo a re-login.
+					if (this.pendingDisabledAccounts.has(getWorkspaceIdentityKey(account))) {
+						return { ...mine, enabled: false };
+					}
+					if (repairScopes && account.enabled === false &&
+						hasMissingScopeReauthNote(account.accountNote) && mine.enabled !== false) {
+						return { ...mine, enabled: true, accountNote: mine.accountNote };
+					}
+					return { ...mine, enabled: account.enabled, accountNote: account.accountNote };
+				});
+				if (membershipChanged) {
+					storage.activeIndex = current.activeIndex;
+					storage.activeIndexByFamily = current.activeIndexByFamily;
+				}
 			}
 			await persist(storage);
+			this.pendingDisabledAccounts.clear();
 		});
 	}
 
@@ -488,10 +523,8 @@ export class AccountPersistence {
 	 * avoid unbounded growth of the global cleanup queue.
 	 *
 	 * From here on this manager's account list is no longer authoritative.
-	 * `saveToDisk` takes membership from that list wholesale — it adopts newer
-	 * credentials and longer rate-limit blocks from disk, but never disk
-	 * accounts the list lacks — so a replaced manager writing it 500ms later
-	 * would delete whatever its successor has since loaded or added.
+	 * Although live saves now take membership from disk, the replaced manager
+	 * must not overwrite the successor's credentials or active selection.
 	 *
 	 * Neither the queued timer nor an already-started save is cancelled, which
 	 * would drop real state: the only save a cancel can still reach is one

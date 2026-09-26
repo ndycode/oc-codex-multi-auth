@@ -1778,10 +1778,13 @@ describe("storage", () => {
       expect(result).toBeNull();
     });
 
-    it("returns null on parse error", async () => {
+    it("rejects corrupted account storage without replacing it", async () => {
       await fs.writeFile(testStoragePath, "not valid json{{{", "utf-8");
-      const result = await loadAccounts();
-      expect(result).toBeNull();
+      await expect(loadAccounts()).rejects.toMatchObject({ code: "INVALID_STORAGE" });
+      await expect(withAccountStorageTransaction(async (_current, persist) => {
+        await persist({ version: 3, activeIndex: 0, accounts: [] });
+      })).rejects.toMatchObject({ code: "INVALID_STORAGE" });
+      expect(await fs.readFile(testStoragePath, "utf-8")).toBe("not valid json{{{");
     });
 
     it("returns normalized data on valid file", async () => {

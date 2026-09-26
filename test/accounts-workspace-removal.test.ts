@@ -46,6 +46,28 @@ function buildSharedRefreshManager(): AccountManager {
 }
 
 describe("removeAccountsByWorkspaceIdentity (audit fix #3)", () => {
+	it("disables only the deactivated workspace without deleting credentials", () => {
+		const manager = buildSharedRefreshManager();
+		const workspaceA = manager.getAccountsSnapshot().find((a) => a.organizationId === "org-a")!;
+
+		expect(manager.disableAccountsByWorkspaceIdentity(workspaceA)).toBe(1);
+		expect(manager.getAccountCount()).toBe(2);
+		expect(manager.getAccountsSnapshot().map((a) => a.enabled)).toEqual([false, true]);
+		expect(manager.getAccountsSnapshot().map((a) => a.refreshToken)).toEqual([
+			"shared-refresh", "shared-refresh",
+		]);
+	});
+
+	it("disables all accounts sharing an invalid refresh token without deleting them", () => {
+		const manager = buildSharedRefreshManager();
+		const workspaceA = manager.getAccountsSnapshot()[0]!;
+
+		expect(manager.disableAccountsWithSameRefreshToken(workspaceA)).toBe(2);
+		expect(manager.getAccountCount()).toBe(2);
+		expect(manager.getAccountsSnapshot().map((a) => a.enabled)).toEqual([false, false]);
+		expect(manager.hasRefreshToken("shared-refresh")).toBe(true);
+	});
+
 	it("removes ONLY the targeted workspace, leaving the refresh-token sibling", () => {
 		const manager = buildSharedRefreshManager();
 		expect(manager.getAccountCount()).toBe(2);

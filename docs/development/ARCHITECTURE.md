@@ -361,7 +361,7 @@ Unsupported-model behavior is strict by default. Default auto-fallbacks still co
 6. `reasoning.encrypted_content` must stay available for multi-turn continuity.
 7. Account emails and tokens must not be exposed in diagnostic payloads or response headers.
 8. Keychain failures must not silently delete JSON credentials.
-9. Account pool limits stay at `ACCOUNT_LIMITS` (max 20, 30s auth cooldown, remove after 3 consecutive auth failures).
+9. Account pool limits stay at `ACCOUNT_LIMITS` (max 20, 30s auth cooldown, disable after 3 consecutive auth failures without deleting credentials).
 10. Codex CLI hydrate from `~/.codex` stays on unless `CODEX_AUTH_SYNC_CODEX_CLI=0`.
 11. Startup prewarm runs only for legacy request transform when not disabled via `CODEX_AUTH_PREWARM=0`.
 12. Installer help/post-install strings must match the live catalog (10 modern bases / 53 variants; 53 legacy explicit).

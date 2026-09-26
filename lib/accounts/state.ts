@@ -207,7 +207,7 @@ function hasExplicitOAuthScope(scope: string | undefined): scope is string {
 	return typeof scope === "string" && scope.trim().length > 0;
 }
 
-function hasMissingScopeReauthNote(accountNote: string | undefined): boolean {
+export function hasMissingScopeReauthNote(accountNote: string | undefined): boolean {
 	return typeof accountNote === "string" && accountNote.includes(MISSING_SCOPE_NOTE_MARKER);
 }
 

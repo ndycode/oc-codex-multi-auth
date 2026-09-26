@@ -3,11 +3,8 @@
  * armed before that call fires up to 500ms later; a save that had already
  * started cannot be stopped at all.
  *
- * The manager's snapshot is authoritative for account *membership*.
- * `saveToDisk` adopts newer credentials and longer rate-limit blocks from disk,
- * but never adopts disk accounts the snapshot lacks, so a replaced manager
- * writing it late does not merely lose a rotation stamp: it deletes every
- * account its successor has that the dead one did not.
+ * Disk is authoritative for account membership. A disposed manager also
+ * preserves disk credentials and merges only its new volatile state.
  *
  * Dropping the write outright is not the answer either. The only save a
  * cancel can still reach is one armed *after* the caller's flush, and that is
@@ -104,7 +101,7 @@ describe("AccountManager.disposeShutdownHandler", () => {
 		await expect(storedRefreshTokens()).resolves.toEqual([...ON_DISK_ACCOUNTS]);
 	});
 
-	it("is the only thing preventing that write", async () => {
+	it("preserves new accounts even when the old manager is still live", async () => {
 		// Given the same store and an identical queued save
 		const manager = managerWithForeignAccount();
 
@@ -112,10 +109,9 @@ describe("AccountManager.disposeShutdownHandler", () => {
 		manager.saveToDiskDebounced();
 		await sleep(PAST_DEBOUNCE_MS);
 
-		// Then the save lands and replaces the store's accounts, so the
-		// assertion above is about disposal rather than about a save that never
-		// had a chance to fire
-		await expect(storedRefreshTokens()).resolves.toEqual(["rt-from-a-dead-manager"]);
+		// The other process's accounts remain and the stale account is not
+		// resurrected if it was deliberately removed from disk.
+		await expect(storedRefreshTokens()).resolves.toEqual([...ON_DISK_ACCOUNTS]);
 	});
 
 	it("keeps membership when a save was already in flight at disposal", async () => {
