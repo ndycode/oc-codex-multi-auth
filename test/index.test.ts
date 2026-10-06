@@ -1858,6 +1858,77 @@ describe("OpenAIOAuthPlugin", () => {
 			);
 		});
 
+		it("describes complete reports without inventing unavailable readings", () => {
+			const description = plugin.tool["codex-limits"].description;
+			expect(description).toContain("each additional limit under its rendered name");
+			expect(description).toContain("Pool total when present");
+			expect(description).toContain("Preserve account errors and unavailable-data messages");
+			expect(description).toContain("do not invent missing fields or treat absent reset data as zero");
+		});
+
+		it.each([true, false])("reports banked resets per account, including zero but not missing data (UI v2: %s)", async (v2Enabled) => {
+			const config = await import("../lib/config.js");
+			vi.spyOn(config, "getCodexTuiV2").mockReturnValue(v2Enabled);
+			mockStorage.accounts = [
+				{
+					refreshToken: "r1",
+					accountId: "acc-1",
+					email: "first@example.com",
+					accessToken: "access-1",
+					expiresAt: Date.now() + 3600_000,
+				},
+				{
+					refreshToken: "r2",
+					accountId: "acc-2",
+					email: "second@example.com",
+					accessToken: "access-2",
+					expiresAt: Date.now() + 3600_000,
+				},
+				{
+					refreshToken: "r3",
+					accountId: "acc-3",
+					accessToken: "access-3",
+					expiresAt: Date.now() + 3600_000,
+				},
+			];
+			const usage = (available?: number, applicable?: number) =>
+				new Response(
+					JSON.stringify({
+						plan_type: "plus",
+						rate_limit: {
+							secondary_window: {
+								used_percent: 40,
+								limit_window_seconds: 604800,
+								reset_at: Math.floor(Date.now() / 1000) + 86400,
+							},
+						},
+						rate_limit_reset_credits: available === undefined ? undefined : {
+							available_count: available,
+							applicable_available_count: applicable,
+						},
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			globalThis.fetch = vi
+				.fn()
+				.mockResolvedValueOnce(usage(2, 1))
+				.mockResolvedValueOnce(usage(0, 0))
+				.mockResolvedValueOnce(usage());
+
+			const result = await plugin.tool["codex-limits"].execute();
+
+			const first = result.slice(result.indexOf("Account 1"), result.indexOf("Account 2"));
+			const second = result.slice(result.indexOf("Account 2"), result.indexOf("Account 3"));
+			const third = result.slice(result.indexOf("Account 3"));
+			expect(first).toContain("Resets: 2 banked (1 applicable now)");
+			expect(first).not.toContain("Resets: 0 banked");
+			expect(second).toContain("Resets: 0 banked");
+			expect(second).not.toContain("Resets: 2 banked");
+			expect(third).toContain("Weekly limit:");
+			expect(third).not.toContain("Resets:");
+			expect(result.match(/Resets:/g)).toHaveLength(2);
+		});
+
 		it("names what a seat is worth and what the pool adds up to", async () => {
 			mockStorage.accounts = [
 				{

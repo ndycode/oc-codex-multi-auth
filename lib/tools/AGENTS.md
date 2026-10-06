@@ -88,6 +88,29 @@ JSON output conventions:
   keep filtered counts separate from pool totals (`totalAccounts` = full pool,
   `shownAccounts` = filtered rows).
 
+## Agent-facing descriptions
+
+A tool description is read by the model, not just for discovery: it is the only
+place that tells the caller how to *present* the result. When a tool's text
+output is already the complete report, the description must say so explicitly and
+name every column it renders, otherwise the caller re-summarizes it and silently
+drops the fields the user asked for (the `codex-limits` case: 5-hour limits and
+banked reset credits vanished from a summary that kept only the weekly column).
+
+Convention: a tool whose output is user-facing state spells out
+
+- the shape to render (one row per account, closing pool/aggregate total),
+- every column it emits, by name, and
+- the follow-up tool that acts on the numbers (e.g. `codex-limits` → `codex-reset`
+  for banked credits).
+
+Include dynamic fields under their rendered names. Preserve errors and
+unavailable-data messages; only require fields and aggregate totals actually
+emitted by the tool. Missing readings must not be invented or reported as zero.
+
+Prefer guidance on the description over emitting both text and a second
+machine-shaped variant; `format:"json"` already covers machine consumers.
+
 ## Adding a tool
 
 1. Create `lib/tools/codex-<name>.ts` exporting `createCodex<Name>Tool(ctx)`,
