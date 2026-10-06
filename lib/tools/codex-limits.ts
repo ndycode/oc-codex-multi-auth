@@ -88,7 +88,7 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 		// the description forbids the summarization that tends to drop the
 		// banked-reset and 5-hour columns the user came here for.
 		description:
-			"Show live 5-hour and weekly Codex usage limits for all accounts. Report the result in full: keep one row per account and every column the output emits — 5-hour limit, weekly limit, code review, plan, credits, and banked resets (`Resets: N banked`) — plus the closing Pool total. Do not collapse rows into a shorter table or omit a column. Banked resets are redeemable with codex-reset.",
+			"Show live 5-hour and weekly Codex usage limits for all accounts. Report the result in full: keep one row per reported account and every field the output emits — 5-hour limit, weekly limit, code review, each additional limit under its rendered name, plan, credits, and banked resets (`Resets: N banked`) — plus the closing Pool total when present. Preserve account errors and unavailable-data messages; do not invent missing fields or treat absent reset data as zero. Do not collapse rows into a shorter table or omit an emitted field. Banked resets are redeemable with codex-reset.",
 		args: {
 			format: tool.schema
 				.enum(TOOL_OUTPUT_FORMAT_VALUES)
@@ -339,8 +339,7 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 							);
 						}
 						// Always report the banked-reset reading when the server
-						// stated it — including `0 banked` — so every account shows
-						// the same column instead of silently dropping the line.
+						// stated it — including `0 banked`. Missing data stays absent.
 						if (usage.resetCredits) {
 							lines.push(
 								`  ${formatUiKeyValue(ui, "Resets", formatResetCredits(usage.resetCredits), "muted")}`,
@@ -372,8 +371,7 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 							lines.push(`  Credits: ${creditsLine}`);
 						}
 						// Always report the banked-reset reading when the server
-						// stated it — including `0 banked` — so every account shows
-						// the same column instead of silently dropping the line.
+						// stated it — including `0 banked`. Missing data stays absent.
 						if (usage.resetCredits) {
 							lines.push(
 								`  Resets: ${formatResetCredits(usage.resetCredits)}`,

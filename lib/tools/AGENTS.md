@@ -104,6 +104,10 @@ Convention: a tool whose output is user-facing state spells out
 - the follow-up tool that acts on the numbers (e.g. `codex-limits` → `codex-reset`
   for banked credits).
 
+Include dynamic fields under their rendered names. Preserve errors and
+unavailable-data messages; only require fields and aggregate totals actually
+emitted by the tool. Missing readings must not be invented or reported as zero.
+
 Prefer guidance on the description over emitting both text and a second
 machine-shaped variant; `format:"json"` already covers machine consumers.
 
