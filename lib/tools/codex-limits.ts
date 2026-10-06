@@ -84,8 +84,11 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 		invalidateAccountManagerCache,
 	} = ctx;
 	const definition = tool({
+		// Agent-facing: the rendered text below is already the full report, so
+		// the description forbids the summarization that tends to drop the
+		// banked-reset and 5-hour columns the user came here for.
 		description:
-			"Show live 5-hour and weekly Codex usage limits for all accounts.",
+			"Show live 5-hour and weekly Codex usage limits for all accounts. Report the result in full: keep one row per account and every column the output emits — 5-hour limit, weekly limit, code review, plan, credits, and banked resets (`Resets: N banked`) — plus the closing Pool total. Do not collapse rows into a shorter table or omit a column. Banked resets are redeemable with codex-reset.",
 		args: {
 			format: tool.schema
 				.enum(TOOL_OUTPUT_FORMAT_VALUES)
@@ -335,7 +338,10 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 								`  ${formatUiKeyValue(ui, "Credits", creditsLine, "muted")}`,
 							);
 						}
-						if (usage.resetCredits && usage.resetCredits.available > 0) {
+						// Always report the banked-reset reading when the server
+						// stated it — including `0 banked` — so every account shows
+						// the same column instead of silently dropping the line.
+						if (usage.resetCredits) {
 							lines.push(
 								`  ${formatUiKeyValue(ui, "Resets", formatResetCredits(usage.resetCredits), "muted")}`,
 							);
@@ -365,7 +371,10 @@ export function createCodexLimitsTool(ctx: ToolContext): ToolDefinition {
 						if (creditsLine) {
 							lines.push(`  Credits: ${creditsLine}`);
 						}
-						if (usage.resetCredits && usage.resetCredits.available > 0) {
+						// Always report the banked-reset reading when the server
+						// stated it — including `0 banked` — so every account shows
+						// the same column instead of silently dropping the line.
+						if (usage.resetCredits) {
 							lines.push(
 								`  Resets: ${formatResetCredits(usage.resetCredits)}`,
 							);

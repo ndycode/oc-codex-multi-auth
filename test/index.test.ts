@@ -1858,6 +1858,54 @@ describe("OpenAIOAuthPlugin", () => {
 			);
 		});
 
+		it("reports the banked-reset column for every account, including zero", async () => {
+			mockStorage.accounts = [
+				{
+					refreshToken: "r1",
+					accountId: "acc-1",
+					email: "first@example.com",
+					accessToken: "access-1",
+					expiresAt: Date.now() + 3600_000,
+				},
+				{
+					refreshToken: "r2",
+					accountId: "acc-2",
+					email: "second@example.com",
+					accessToken: "access-2",
+					expiresAt: Date.now() + 3600_000,
+				},
+			];
+			const usage = (available: number, applicable: number) =>
+				new Response(
+					JSON.stringify({
+						plan_type: "plus",
+						rate_limit: {
+							secondary_window: {
+								used_percent: 40,
+								limit_window_seconds: 604800,
+								reset_at: Math.floor(Date.now() / 1000) + 86400,
+							},
+						},
+						rate_limit_reset_credits: {
+							available_count: available,
+							applicable_available_count: applicable,
+						},
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			globalThis.fetch = vi
+				.fn()
+				.mockResolvedValueOnce(usage(2, 1))
+				.mockResolvedValueOnce(usage(0, 0));
+
+			const result = await plugin.tool["codex-limits"].execute();
+
+			// `0 banked` is a reading, not a missing line: dropping it made the
+			// column vanish on every account that had nothing banked.
+			expect(result).toContain("Resets: 2 banked (1 applicable now)");
+			expect(result).toContain("Resets: 0 banked");
+		});
+
 		it("names what a seat is worth and what the pool adds up to", async () => {
 			mockStorage.accounts = [
 				{
