@@ -129,6 +129,8 @@ import {
 	clearCorrelationId,
 } from "./lib/logger.js";
 import { createQuotaMonitor } from "./lib/quota-notifications.js";
+import { createRotationMonitor } from "./lib/custom-rotation/monitor.js";
+import { selectCustomAccount } from "./lib/custom-rotation/selection.js";
 import { checkAndNotify } from "./lib/auto-update-checker.js";
 import { describePluginOrigin, getPluginOrigin, recordPluginOrigin } from "./lib/plugin-origin.js";
 import { handleContextOverflow } from "./lib/context-overflow.js";
@@ -2294,6 +2296,9 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 		const quotaMonitor = createQuotaMonitor({
 			onCredentialsPersisted: invalidateAccountManagerCache,
 		});
+		const rotationMonitor = createRotationMonitor({
+			onCredentialsPersisted: invalidateAccountManagerCache,
+		});
 
 		let runtimeDisposed = false;
 		/**
@@ -2307,6 +2312,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 			if (runtimeDisposed) return;
 			runtimeDisposed = true;
 			quotaMonitor.dispose();
+			rotationMonitor.dispose();
 			disposeAccountsWatcher();
 			await cachedAccountManager?.flushPendingSave();
 			cachedAccountManager?.disposeShutdownHandler();
@@ -2427,6 +2433,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 			renderSetupChecklistOutput,
 			runSetupWizard,
 			invalidateAccountManagerCache,
+			onResetRedeemed: () => rotationMonitor.refresh(),
 			upsertFlaggedAccountRecord,
 		};
 
@@ -2435,6 +2442,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 	setStoragePath(startupPerProjectAccounts ? directory : null);
 	if (client) await backfillHostOpenAIAuthFromPool();
 	quotaMonitor.start();
+	rotationMonitor.start();
 
         return {
                 event: eventHandler,
@@ -3124,7 +3132,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 							// custom chain is cyclic. See MAX_QUOTA_FALLBACK_SWITCHES.
 							let quotaFallbackSwitches = 0;
 
-							while (true) {
+							accountTraversal: while (true) {
 						if (cachedAccountManager && cachedAccountManager !== accountManager) {
 							accountManager = cachedAccountManager;
 						} else if (!cachedAccountManager) {
@@ -3336,7 +3344,22 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 					configuredAccountPoolSize: preferredAccountIds.length,
 					accountPoolMode: strictAccountPool ? "strict" : undefined,
 				};
-				const selected = accountManager.getAccountForStrategy(
+				const accountStorageScope = getStoragePath();
+				const selectionManager: AccountManager | null = cachedAccountManager;
+				const selected = rotationStrategy === "custom"
+					? await selectCustomAccount({
+						candidates: (request) => accountManager.getCustomCandidates(request),
+						accept: (candidate, request) => accountManager.acceptCustomCandidate(candidate, request),
+						current: (family) => accountManager.getCurrentAccountForFamily(family),
+					}, { family: modelFamily, model, preferredAccountIds, poolMode: accountPoolMode, excludedIndices: attempted }, {
+						module: pluginConfig.customRotation?.module,
+						observations: rotationMonitor.observations,
+						scope: accountStorageScope,
+						currentScope: getStoragePath,
+						signal: rotationMonitor.signal,
+						requestSignal: abortSignal ?? undefined,
+					})
+					: accountManager.getAccountForStrategy(
 					rotationStrategy,
 					modelFamily,
 					model,
@@ -3345,13 +3368,21 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 					accountPoolMode,
 					attempted,
 				);
+				// A watcher or tool may replace the manager while the policy child runs.
+				// Restart against the live pool before serving or considering paid credits.
+				if (rotationStrategy === "custom" && cachedAccountManager !== selectionManager) {
+					continue accountTraversal;
+				}
+				const currentExplainability = rotationStrategy === "custom"
+					? accountManager.getSelectionExplainability(modelFamily, model, Date.now())
+					: selectionExplainability;
 				const selectedIneligible = selected !== null &&
-					selectionExplainability.some((entry) => entry.index === selected.index && !entry.eligible);
+					currentExplainability.some((entry) => entry.index === selected.index && !entry.eligible);
 				// `spendCredits`: once no entitled account has plan quota left, an
 				// account held back only by its spent window serves on its credits.
 				const creditsChoice =
 					spendCreditsEnabled && (!selected || attempted.has(selected.index) || selectedIneligible)
-						? await pickCreditsAccount(selectionExplainability)
+						? await pickCreditsAccount(currentExplainability)
 						: null;
 				const servingOnCredits = creditsChoice !== null;
 				const account = creditsChoice?.account ?? selected;
@@ -3833,6 +3864,9 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 							// only the block would leave the status line reporting "0% left" for
 							// an account the router considers healthy.
 							const recordQuotaHeaders = (): boolean => {
+								if (rotationStrategy === "custom" && getStoragePath() === accountStorageScope) {
+									rotationMonitor.observations.headers(account, accountStorageScope, response.headers, Date.now());
+								}
 								void recordPromptQuotaHeaders(
 									response,
 									account,

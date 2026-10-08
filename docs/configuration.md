@@ -182,7 +182,8 @@ Format: `field | env override | type | default | bounds | meaning`.
 
 | field | env | type | default | bounds | meaning |
 | --- | --- | --- | --- | --- | --- |
-| `rotationStrategy` | `CODEX_AUTH_ROTATION_STRATEGY` | `hybrid` \| `sticky` \| `round-robin` | `hybrid` | — | `hybrid`: stay while healthy, else score-select (health + tokens + freshness); `sticky`: drain the current account first, then the lowest-indexed available — staggers weekly-quota cooldowns; `round-robin`: advance in order every selection |
+| `rotationStrategy` | `CODEX_AUTH_ROTATION_STRATEGY` | `hybrid` \| `sticky` \| `round-robin` \| `custom` | `hybrid` | — | `hybrid`: stay while healthy, else score-select (health + tokens + freshness); `sticky`: drain the current account first, then the lowest-indexed available — staggers weekly-quota cooldowns; `round-robin`: advance in order every selection; `custom`: trusted JavaScript policy |
+| `customRotation.module` | — | absolute `.mjs` path | unset | — | trusted policy module; see [custom rotation](custom-rotation.md) for permissions, observations and offline validation |
 | `spendCredits` | `CODEX_AUTH_SPEND_CREDITS` | boolean | `false` | — | once no account entitled to the requested model has plan quota left, serve from an account that still holds Codex credits instead of waiting for a reset; see [Spending Codex credits](#spending-codex-credits) |
 | `modelAccountPools` | (file only) | object: model → account-id array | `{}` | keys/values non-empty strings | pin an effective model to stable account or Business-seat identities; matched case-insensitively after model normalization |
 | `modelAccountPoolModes` | (file only) | object: model → `preferred` \| `strict` | `{}` (all `preferred`) | — | `preferred` falls back to the general pool when the mapping has no selectable account; `strict` never leaves its list and fails with `strict_pool_unavailable` |

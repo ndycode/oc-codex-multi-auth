@@ -28,7 +28,7 @@ const STALE_MANAGED_MODEL_KEYS = new Set([
 	...["low", "medium", "high", "xhigh"].map((e) => `gpt-5.1-codex-max-${e}`),
 	...["medium", "high"].map((e) => `gpt-5.1-codex-mini-${e}`),
 ]);
-const STANDALONE_COMMANDS = new Set(["doctor", "status", "list", "limits", "dashboard", "health", "diag", "warm"]);
+const STANDALONE_COMMANDS = new Set(["doctor", "status", "list", "limits", "dashboard", "health", "diag", "warm", "rotation"]);
 const INSTALLER_COMMANDS = new Set(["install"]);
 const UPDATE_COMMANDS = new Set(["update"]);
 
@@ -155,7 +155,8 @@ function printHelp(write = console.log) {
 		"  dashboard           Print dashboard guidance\n" +
 		"  health              Check local token/account health\n" +
 		"  diag                Alias for doctor --deep\n" +
-		"  warm                Open every enabled account's usage window now (one request each)\n\n" +
+		"  warm                Open every enabled account's usage window now (one request each)\n" +
+		"  rotation validate   Validate a trusted .mjs policy offline [module] [--fixtures file] [--json]\n\n" +
 		"Limits options:\n" +
 		"  --sort account|usage|reset  Order accounts by number, by usage, or by next reset\n" +
 		"  --asc, --desc               Direction (default --asc: lowest number, least used, earliest reset)\n" +
@@ -2593,6 +2594,10 @@ function printLimitsResult(payload, json, render) {
 }
 
 export async function runStandaloneCommand(command, argv = [], options = {}) {
+	if (command === "rotation") {
+		const { runRotationValidate } = await import("./rotation-validate.js");
+		return runRotationValidate(argv);
+	}
 	let parsed;
 	try {
 		parsed = parseStandaloneArgs(argv);

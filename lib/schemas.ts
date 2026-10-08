@@ -4,6 +4,7 @@
  * Types are inferred from schemas using z.infer.
  */
 import { z } from "zod";
+import { isAbsolute } from "node:path";
 import { MODEL_FAMILIES, type ModelFamily } from "./prompts/codex.js";
 
 // ============================================================================
@@ -34,8 +35,11 @@ export const PluginConfigSchema = z.object({
 	beginnerSafeMode: z.boolean().optional(),
 	fastSession: z.boolean().optional(),
 	fastSessionStrategy: z.enum(["hybrid", "always"]).optional(),
-	rotationStrategy: z.enum(["hybrid", "sticky", "round-robin"]).optional(),
+	rotationStrategy: z.enum(["hybrid", "sticky", "round-robin", "custom"]).optional(),
 	spendCredits: z.boolean().optional(),
+	customRotation: z.object({
+		module: z.string().refine((path) => isAbsolute(path) && path.endsWith(".mjs"), "Expected an absolute .mjs path"),
+	}).optional(),
 	modelAccountPools: z.record(
 		z.string().min(1),
 		z.array(z.string().min(1)),

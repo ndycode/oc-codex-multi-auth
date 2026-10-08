@@ -221,6 +221,7 @@ export interface ToolContext {
 		state: Awaited<ReturnType<ToolContext["buildSetupChecklistState"]>>,
 	) => Promise<string>;
 	invalidateAccountManagerCache: (clearedSnapshots?: Readonly<AccountStorageV3["accounts"]>) => void;
+	onResetRedeemed?: () => void;
 	upsertFlaggedAccountRecord: (
 		accounts: FlaggedAccountMetadataV1[],
 		record: FlaggedAccountMetadataV1,

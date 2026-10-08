@@ -568,6 +568,7 @@ describe("runtime documentation parity", () => {
 		const sourceForExport = new Map([
 			["./dist/index.js", "index.ts"],
 			["./dist/tui.js", "tui.ts"],
+			["./dist/lib/custom-rotation/contract.js", "lib/custom-rotation/contract.ts"],
 		]);
 
 		for (const entry of Object.values(exports)) {

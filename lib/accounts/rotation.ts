@@ -28,9 +28,30 @@ import {
 	type RateLimitReason,
 } from "./rate-limits.js";
 import type { AccountState, ManagedAccount } from "./state.js";
+import type { CustomSelectionRequest } from "../custom-rotation/selection.js";
 
 export class AccountRotation {
 	constructor(private readonly state: AccountState) {}
+
+	getCustomCandidates(request: CustomSelectionRequest): readonly ManagedAccount[] {
+		const preferred = this.getPreferredSelectableIndices(
+			request.preferredAccountIds, request.family, request.model,
+			request.poolMode === "strict", request.excludedIndices,
+		);
+		return this.state.accounts.filter((account) =>
+			!request.excludedIndices?.has(account.index) &&
+			this.isInSelectionPool(account, preferred) &&
+			this.isSelectable(account, request.family, request.model),
+		);
+	}
+
+	acceptCustomCandidate(account: ManagedAccount, request: CustomSelectionRequest): ManagedAccount | null {
+		if (!this.getCustomCandidates(request).includes(account)) return null;
+		this.state.currentAccountIndexByFamily[request.family] = account.index;
+		this.state.cursorByFamily[request.family] = (account.index + 1) % this.state.accounts.length;
+		account.lastUsed = nowMs();
+		return account;
+	}
 
 	/**
 	 * Whether an account can serve a request for this (family, model) right now:

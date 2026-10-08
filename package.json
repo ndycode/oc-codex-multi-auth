@@ -9,6 +9,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./rotation": {
+      "types": "./dist/lib/custom-rotation/contract.d.ts",
+      "import": "./dist/lib/custom-rotation/contract.js"
+    },
     "./tui": {
       "types": "./dist/tui.d.ts",
       "import": "./dist/tui.js"

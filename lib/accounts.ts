@@ -16,6 +16,7 @@ import type { Auth } from "@opencode-ai/sdk";
 import { loadAccounts, type AccountStorageV3, type CooldownReason } from "./storage.js";
 import type { HybridSelectionOptions } from "./rotation.js";
 import type { RotationStrategy } from "./config.js";
+import type { CustomSelectionRequest } from "./custom-rotation/selection.js";
 import type { OAuthAuthDetails } from "./types.js";
 import type { ModelFamily } from "./prompts/codex.js";
 import {
@@ -215,6 +216,14 @@ export class AccountManager {
 
 	// ----- rotation delegations -----
 
+	getCustomCandidates(request: CustomSelectionRequest): readonly ManagedAccount[] {
+		return this.rotation.getCustomCandidates(request);
+	}
+
+	acceptCustomCandidate(account: ManagedAccount, request: CustomSelectionRequest): ManagedAccount | null {
+		return this.rotation.acceptCustomCandidate(account, request);
+	}
+
 	getCurrentOrNext(): ManagedAccount | null {
 		return this.rotation.getCurrentOrNextForFamily("codex");
 	}
@@ -261,6 +270,11 @@ export class AccountManager {
 		excludedIndices?: ReadonlySet<number>,
 	): ManagedAccount | null {
 		switch (strategy) {
+			case "custom": {
+				const request = { family, model, preferredAccountIds, poolMode, excludedIndices };
+				const candidate = this.rotation.getCustomCandidates(request)[0];
+				return candidate ? this.rotation.acceptCustomCandidate(candidate, request) : null;
+			}
 			case "sticky":
 				return this.rotation.getCurrentOrNextForFamilySticky(
 					family,

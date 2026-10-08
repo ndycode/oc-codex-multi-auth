@@ -897,6 +897,7 @@ export async function fetchCodexUsage(params: {
 	organizationId: string | undefined;
 	timeoutMs?: number;
 	normalizeAccountErrors?: boolean;
+	signal?: AbortSignal;
 }): Promise<UsagePayload> {
 	const headers = createCodexHeaders(
 		undefined,
@@ -908,6 +909,9 @@ export async function fetchCodexUsage(params: {
 	);
 	headers.set("accept", "application/json");
 	const controller = new AbortController();
+	const abort = (): void => controller.abort();
+	params.signal?.addEventListener("abort", abort, { once: true });
+	if (params.signal?.aborted) abort();
 	const timeout = setTimeout(
 		() => controller.abort(),
 		params.timeoutMs ?? getFetchTimeoutMs(loadPluginConfig()),
@@ -962,6 +966,7 @@ export async function fetchCodexUsage(params: {
 		throw error;
 	} finally {
 		clearTimeout(timeout);
+		params.signal?.removeEventListener("abort", abort);
 	}
 }
 

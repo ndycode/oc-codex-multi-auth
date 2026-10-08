@@ -210,6 +210,7 @@ async function requestCodexResetJson<T>(params: {
 	organizationId: string | undefined;
 	body?: unknown;
 	timeoutMs?: number;
+	signal?: AbortSignal;
 }): Promise<T> {
 	const headers = createCodexHeaders(
 		undefined,
@@ -223,6 +224,9 @@ async function requestCodexResetJson<T>(params: {
 	}
 
 	const controller = new AbortController();
+	const abort = (): void => controller.abort();
+	params.signal?.addEventListener("abort", abort, { once: true });
+	if (params.signal?.aborted) abort();
 	const timeout = setTimeout(
 		() => controller.abort(),
 		params.timeoutMs ?? getFetchTimeoutMs(loadPluginConfig()),
@@ -258,6 +262,7 @@ async function requestCodexResetJson<T>(params: {
 		throw error;
 	} finally {
 		clearTimeout(timeout);
+		params.signal?.removeEventListener("abort", abort);
 	}
 }
 
@@ -265,6 +270,7 @@ export async function fetchCodexResetCredits(params: {
 	accountId: string;
 	accessToken: string;
 	organizationId: string | undefined;
+	signal?: AbortSignal;
 	timeoutMs?: number;
 }): Promise<CodexResetCreditsPayload> {
 	return await requestCodexResetJson<CodexResetCreditsPayload>({

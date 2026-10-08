@@ -420,6 +420,7 @@ export function createCodexResetTool(ctx: ToolContext): ToolDefinition {
 						creditId: credit.id,
 						redeemRequestId: createRedeemRequestId(credit.id),
 					});
+					ctx.onResetRedeemed?.();
 				} catch (error) {
 					// The POST may have reached the backend before the failure
 					// (timeout, dropped response), so the redemption outcome is

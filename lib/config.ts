@@ -949,12 +949,13 @@ export function getFastSessionStrategy(pluginConfig: PluginConfig): "hybrid" | "
 	return pluginConfig.fastSessionStrategy === "always" ? "always" : "hybrid";
 }
 
-export type RotationStrategy = "hybrid" | "sticky" | "round-robin";
+export type RotationStrategy = "hybrid" | "sticky" | "round-robin" | "custom";
 
 const ROTATION_STRATEGIES = new Set([
 	"hybrid",
 	"sticky",
 	"round-robin",
+	"custom",
 ] as const);
 
 /**
@@ -979,7 +980,7 @@ export function getRotationStrategy(pluginConfig: PluginConfig): RotationStrateg
 	);
 	if (envValue !== undefined) return envValue;
 	const configured = pluginConfig.rotationStrategy;
-	if (configured === "sticky" || configured === "round-robin") return configured;
+	if (configured === "sticky" || configured === "round-robin" || configured === "custom") return configured;
 	return "hybrid";
 }
 
