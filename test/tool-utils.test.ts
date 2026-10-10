@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cleanupToolDefinitions } from "../lib/request/helpers/tool-utils.js";
+import { cleanupToolDefinitions, ensureFunctionToolStrictFalse } from "../lib/request/helpers/tool-utils.js";
 
 describe("cleanupToolDefinitions", () => {
   it("returns non-array input unchanged", () => {
@@ -580,4 +580,68 @@ describe("cleanupToolDefinitions", () => {
     const props = result[0].function.parameters.properties as Record<string, unknown>;
     expect(props.valid).toEqual({ type: "string" });
   });
+});
+
+describe("ensureFunctionToolStrictFalse", () => {
+	it("returns non-array input unchanged", () => {
+		expect(ensureFunctionToolStrictFalse(null)).toBeNull();
+		expect(ensureFunctionToolStrictFalse("string")).toBe("string");
+		expect(ensureFunctionToolStrictFalse({})).toEqual({});
+	});
+
+	it("sets strict: false on Responses-shaped function tools missing the flag", () => {
+		const tools = [{
+			type: "function",
+			name: "subagent",
+			description: "Spawns an agent in a child session.",
+			parameters: {
+				type: "object",
+				properties: {
+					agent: { type: "string" },
+					sessionID: { type: "string", pattern: "^ses" },
+				},
+				required: ["agent"],
+			},
+		}];
+
+		const result = ensureFunctionToolStrictFalse(tools) as typeof tools;
+		expect(result[0].strict).toBe(false);
+		// Schema content must be untouched — optionality is preserved.
+		expect(result[0].parameters.required).toEqual(["agent"]);
+	});
+
+	it("sets strict: false on Chat-Completions-shaped function tools missing the flag", () => {
+		const tools = [{
+			type: "function",
+			function: {
+				name: "test",
+				parameters: { type: "object", properties: {} },
+			},
+		}];
+
+		const result = ensureFunctionToolStrictFalse(tools) as typeof tools;
+		expect(result[0].function.strict).toBe(false);
+	});
+
+	it("preserves explicitly set strict values", () => {
+		const tools = [
+			{ type: "function", name: "a", parameters: {}, strict: true },
+			{ type: "function", function: { name: "b", strict: true } },
+		];
+
+		const result = ensureFunctionToolStrictFalse(tools) as typeof tools;
+		expect(result[0].strict).toBe(true);
+		expect(result[1].function.strict).toBe(true);
+	});
+
+	it("leaves non-function tools untouched", () => {
+		const tools = [
+			{ type: "web_search_preview", search_context_size: "medium" },
+			{ type: "file_search", vector_store_ids: ["vs_123"] },
+		];
+
+		const result = ensureFunctionToolStrictFalse(tools) as typeof tools;
+		expect(result[0]).not.toHaveProperty("strict");
+		expect(result[1]).not.toHaveProperty("strict");
+	});
 });

@@ -46,6 +46,46 @@ export function cleanupToolDefinitions(tools: unknown): unknown {
 }
 
 /**
+ * Ensures every function tool carries an explicit `strict: false`.
+ *
+ * Why: OpenCode's AI SDK adapter omits `strict` when serializing function
+ * tools for the Responses API, and the backend treats an omitted flag as
+ * strict mode — making every schema property effectively required. Models
+ * then fabricate values for optional parameters (notably `sessionID` on
+ * OpenCode's `subagent` tool), which breaks fresh subagent creation with
+ * "Session <parent-session-id> is not a child of the current session".
+ * Codex CLI hardcodes `strict: false` on every function tool for the same
+ * reason (codex-rs/tools/src/responses_api.rs).
+ *
+ * Handles both wire shapes:
+ * - Responses API:    { type: "function", name, parameters, strict }
+ * - Chat Completions: { type: "function", function: { name, parameters, strict } }
+ *
+ * Explicitly set `strict` values are preserved.
+ *
+ * @param tools - Array of tool definitions
+ * @returns The same array, with `strict: false` filled in where missing
+ */
+export function ensureFunctionToolStrictFalse(tools: unknown): unknown {
+	if (!Array.isArray(tools)) return tools;
+
+	for (const tool of tools) {
+		if (!tool || typeof tool !== "object") continue;
+		const entry = tool as Record<string, unknown>;
+		if (entry.type !== "function") continue;
+
+		const functionDef = entry.function as Record<string, unknown> | undefined;
+		if (functionDef && typeof functionDef === "object") {
+			if (functionDef.strict === undefined) functionDef.strict = false;
+		} else if (entry.strict === undefined) {
+			entry.strict = false;
+		}
+	}
+
+	return tools;
+}
+
+/**
  * Recursively cleans up a JSON schema object
  */
 function cleanupSchema(schema: Record<string, unknown>): void {
