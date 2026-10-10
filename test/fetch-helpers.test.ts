@@ -1863,6 +1863,120 @@ describe('Fetch Helpers Module', () => {
 				expect(serialized.include).toContain('reasoning.encrypted_content');
 			});
 
+			it('pins strict: false on function tools missing the flag in native mode', async () => {
+				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
+				// OpenCode's AI SDK adapter omits `strict`; the Responses backend treats
+				// that as strict mode, so optional params (e.g. subagent sessionID)
+				// become effectively required and models fabricate values.
+				const requestBody = {
+					model: 'gpt-5.5',
+					input: [{ type: 'message', role: 'user', content: 'Hello' }],
+					tools: [
+						{
+							type: 'function',
+							name: 'subagent',
+							description: 'Spawns an agent in a child session.',
+							parameters: {
+								type: 'object',
+								properties: {
+									agent: { type: 'string' },
+									sessionID: { type: 'string', pattern: '^ses' },
+								},
+								required: ['agent'],
+							},
+						},
+						{ type: 'function', name: 'explicit', parameters: {}, strict: true },
+						{ type: 'web_search_preview' },
+					],
+				};
+
+				const result = await transformRequestForCodex(
+					{ body: JSON.stringify(requestBody) },
+					'https://example.com',
+					{ global: {}, models: {} },
+					true,
+					undefined,
+					{ requestTransformMode: 'native' } as any,
+				);
+
+				const tools = result?.body.tools as any[];
+				expect(tools[0].strict).toBe(false);
+				// Optionality must survive — the backend must not see sessionID as required.
+				expect(tools[0].parameters.required).toEqual(['agent']);
+				// Explicit values are preserved.
+				expect(tools[1].strict).toBe(true);
+				// Hosted tools are untouched.
+				expect(tools[2]).not.toHaveProperty('strict');
+
+				const serialized = JSON.parse(result!.updatedInit.body as string);
+				expect(serialized.tools[0].strict).toBe(false);
+			});
+
+			it('pins strict: false inside additional_tools on the lite wire shape', async () => {
+				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
+				const requestBody = {
+					model: 'gpt-5.6-sol',
+					input: [{ type: 'message', role: 'user', content: 'Hello' }],
+					tools: [
+						{
+							type: 'function',
+							name: 'subagent',
+							parameters: {
+								type: 'object',
+								properties: { agent: { type: 'string' } },
+								required: ['agent'],
+							},
+						},
+					],
+				};
+
+				const result = await transformRequestForCodex(
+					{ body: JSON.stringify(requestBody) },
+					'https://example.com',
+					{ global: {}, models: {} },
+					true,
+					undefined,
+					{ requestTransformMode: 'native' } as any,
+				);
+
+				const serialized = JSON.parse(result!.updatedInit.body as string);
+				const additionalTools = serialized.input.find(
+					(item: any) => item?.type === 'additional_tools',
+				);
+				const subagent = additionalTools?.tools?.find((t: any) => t.name === 'subagent');
+				expect(subagent?.strict).toBe(false);
+			});
+
+			it('pins strict: false on function tools in legacy mode', async () => {
+				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
+				const requestBody = {
+					model: 'gpt-5.5',
+					input: [{ type: 'message', role: 'user', content: 'Hello' }],
+					tools: [
+						{
+							type: 'function',
+							name: 'subagent',
+							parameters: {
+								type: 'object',
+								properties: { agent: { type: 'string' } },
+								required: ['agent'],
+							},
+						},
+					],
+				};
+
+				const result = await transformRequestForCodex(
+					{ body: JSON.stringify(requestBody) },
+					'https://example.com',
+					{ global: {}, models: {} },
+					true,
+				);
+
+				const serialized = JSON.parse(result!.updatedInit.body as string);
+				const subagent = serialized.tools.find((t: any) => t.name === 'subagent');
+				expect(subagent?.strict).toBe(false);
+				expect(subagent?.parameters.required).toEqual(['agent']);
+			});
 			it('produces a complete Codex request when instructions come from the bundled fallback', async () => {
 				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
 				const { BUNDLED_CODEX_INSTRUCTIONS } = await import(

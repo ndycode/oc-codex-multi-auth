@@ -39,6 +39,7 @@ import {
 	shapeBodyForModel,
 	usesResponsesLite,
 } from "./helpers/responses-lite.js";
+import { ensureFunctionToolStrictFalse } from "./helpers/tool-utils.js";
 import { resolveClientIdentity } from "./helpers/client-identity.js";
 import { convertSseToJson, ensureContentType, readBoundedResponseText } from "./response-handler.js";
 import type { OAuthAuthDetails, UserConfig, RequestBody } from "../types.js";
@@ -1003,6 +1004,17 @@ export async function transformRequestForCodex(
 		}
 		const originalModel = body.model;
 		const requestTransformMode = options?.requestTransformMode ?? "legacy";
+
+		// OpenCode's AI SDK adapter omits `strict` on function tools, and the
+		// Responses backend treats an omitted flag as strict mode — making
+		// optional parameters effectively required, so models fabricate values
+		// (e.g. a sessionID for OpenCode's subagent tool) and fresh subagent
+		// creation fails. Codex CLI pins strict: false on every function tool
+		// for the same reason (codex-rs/tools/src/responses_api.rs). Applies to
+		// both transform modes; explicitly set values are preserved.
+		if (Array.isArray(body.tools)) {
+			body.tools = ensureFunctionToolStrictFalse(body.tools);
+		}
 
 		if (requestTransformMode === "native") {
 			logRequest(LOG_STAGES.BEFORE_TRANSFORM, {
