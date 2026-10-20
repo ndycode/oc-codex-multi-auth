@@ -22,7 +22,8 @@ vi.mock("../lib/logger.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/logger.js")>()),
 	logWarn: mocks.logWarn,
 }));
-import { createV2Fetch, missingV2SdkSurface, setupV2 } from "../lib/opencode-v2.js";
+import { createV2Fetch, missingV2SdkSurface, promptCacheKeyFromHeaders, setupV2 } from "../lib/opencode-v2.js";
+import { createCodexHeaders, transformRequestForCodex } from "../lib/request/fetch-helpers.js";
 import { createStorageScope, getStoragePath, setStoragePathDirect, subscribeToStoragePathChanges } from "../lib/storage/state.js";
 
 function host() {
@@ -205,6 +206,111 @@ describe("V2 compatibility adapter", () => {
 			]));
 			expect(body.input).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "item_reference" })]));
 			expect(options.providerOptions?.openai?.store).toBe(true);
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it.each(["doGenerate", "doStream"] as const)("derives prompt_cache_key from the session affinity headers before %s (#296)", async (method) => {
+		const h = host();
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		const captured: Record<string, unknown>[] = [];
+		const stop = new Error("captured request");
+		const sdk = createOpenAI({
+			apiKey: "test-key",
+			fetch: async (_input, init) => {
+				captured.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+				throw stop;
+			},
+		});
+		const languageEvent: AISDKHooks["language"] = { model: h.model, sdk };
+		await h.hooks.get("language")?.(languageEvent);
+		const affinity = `ses_${"a1".repeat(32)}`;
+		const prompt: Parameters<ReturnType<typeof sdk.responses>["doGenerate"]>[0]["prompt"] = [
+			{ role: "user", content: [{ type: "text", text: "run it" }] },
+			{ role: "assistant", content: [{ type: "tool-call", toolCallId: "call_1", toolName: "bash", input: "{}" }] },
+			{ role: "tool", content: [{ type: "tool-result", toolCallId: "call_1", toolName: "bash", output: { type: "text", value: "done" } }] },
+		];
+		try {
+			// OpenCode's AI SDK bridge forwards these headers but not LLMRequest.promptCacheKey.
+			await expect(languageEvent.language![method]({
+				prompt,
+				headers: { "x-session-affinity": affinity, "X-Session-Id": affinity, "x-opencode-session": affinity },
+			})).rejects.toThrow("captured request");
+			await expect(languageEvent.language![method]({
+				prompt,
+				headers: { "x-session-affinity": affinity },
+				providerOptions: { openai: { promptCacheKey: "host-supplied" } },
+			})).rejects.toThrow("captured request");
+			await expect(languageEvent.language![method]({ prompt })).rejects.toThrow("captured request");
+			expect(captured).toHaveLength(3);
+			expect(captured[0]!.prompt_cache_key).toBe("a1".repeat(32));
+			expect(captured[1]!.prompt_cache_key).toBe("host-supplied");
+			expect(captured[2]).not.toHaveProperty("prompt_cache_key");
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("normalizes session affinity headers like OpenCode's promptCacheKey", () => {
+		const hex = "0f".repeat(32);
+		expect(promptCacheKeyFromHeaders(undefined)).toBeUndefined();
+		expect(promptCacheKeyFromHeaders({ "user-agent": "opencode/2.0.32", "x-session-affinity": "  " })).toBeUndefined();
+		expect(promptCacheKeyFromHeaders({ "x-session-affinity": `ses_${hex}` })).toBe(hex);
+		expect(promptCacheKeyFromHeaders({ "X-Session-Id": "ses_custom" })).toBe("ses_custom");
+		expect(promptCacheKeyFromHeaders({ "x-opencode-session": "s1", "X-Session-Affinity": "s2" })).toBe("s2");
+		const long = promptCacheKeyFromHeaders({ "x-session-affinity": `${"k".repeat(64)}-first` });
+		expect(long).toMatch(/^[0-9a-f]{64}$/);
+		expect(promptCacheKeyFromHeaders({ "x-session-affinity": `${"k".repeat(64)}-first` })).toBe(long);
+		expect(promptCacheKeyFromHeaders({ "x-session-affinity": `${"k".repeat(64)}-second` })).not.toBe(long);
+	});
+
+	it("pins prompt_cache_key, session_id and conversation_id to the session for a tool call and its continuation", async () => {
+		const h = host();
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		const wire: Array<{ init: RequestInit | undefined }> = [];
+		const stop = new Error("captured request");
+		const sdk = createOpenAI({
+			apiKey: "test-key",
+			fetch: createV2Fetch(async (_input, init) => {
+				wire.push({ init });
+				throw stop;
+			}, "2.0.32"),
+		});
+		const languageEvent: AISDKHooks["language"] = { model: h.model, sdk };
+		await h.hooks.get("language")?.(languageEvent);
+		const affinity = `ses_${"b2".repeat(32)}`;
+		const headers = { "x-session-affinity": affinity, "X-Session-Id": affinity, "x-opencode-session": affinity };
+		const toolCallTurn: Parameters<ReturnType<typeof sdk.responses>["doStream"]>[0]["prompt"] = [
+			{ role: "system", content: "You are a coding agent." },
+			{ role: "user", content: [{ type: "text", text: "run printf" }] },
+		];
+		const continuation: typeof toolCallTurn = [
+			...toolCallTurn,
+			{ role: "assistant", content: [
+				{ type: "reasoning", text: "", providerOptions: { openai: { itemId: "rs_1", reasoningEncryptedContent: "enc" } } },
+				{ type: "tool-call", toolCallId: "call_1", toolName: "bash", input: "{\"command\":\"printf ok\"}" },
+			] },
+			{ role: "tool", content: [{ type: "tool-result", toolCallId: "call_1", toolName: "bash", output: { type: "text", value: "ok" } }] },
+		];
+		try {
+			for (const prompt of [toolCallTurn, continuation]) {
+				await expect(languageEvent.language!.doStream({ prompt, headers })).rejects.toThrow("captured request");
+			}
+			expect(wire).toHaveLength(2);
+			const expected = "b2".repeat(32);
+			for (const { init } of wire) {
+				// Same hand-off as the V1 fetch pipeline in index.ts.
+				const transformed = await transformRequestForCodex(
+					init, "https://chatgpt.com/backend-api/codex/responses", { global: {}, models: {} }, true,
+					JSON.parse(String(init?.body)) as Record<string, unknown>, { requestTransformMode: "native" },
+				);
+				const promptCacheKey = transformed?.body.prompt_cache_key;
+				expect(promptCacheKey).toBe(expected);
+				const codexHeaders = createCodexHeaders(transformed?.updatedInit, "acct", "token", { model: transformed?.body.model, promptCacheKey });
+				expect(codexHeaders.get("session_id")).toBe(expected);
+				expect(codexHeaders.get("conversation_id")).toBe(expected);
+			}
 		} finally {
 			await cleanup();
 		}

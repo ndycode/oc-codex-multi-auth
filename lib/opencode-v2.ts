@@ -9,6 +9,7 @@
  * failing silently inside a hook.
  */
 import { createOpenAI } from "@ai-sdk/openai";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { Integration, type Credential, type Model, type Plugin } from "@opencode/plugin";
 import { z } from "zod";
@@ -36,6 +37,14 @@ function createV2Language(model: ReturnType<ReturnType<typeof createOpenAI>["res
 		const openai: NonNullable<Options["providerOptions"]>[string] = { ...options.providerOptions?.openai, store: false };
 		delete openai.previousResponseId;
 		delete openai.conversation;
+		// OpenCode's AI SDK bridge drops LLMRequest.promptCacheKey and only
+		// forwards the session-affinity headers. Without a key the Codex
+		// backend gets no prompt_cache_key or session_id/conversation_id,
+		// so cache routing is unpinned and continuations miss the cache.
+		const cacheKey = typeof openai.promptCacheKey === "string" && openai.promptCacheKey
+			? openai.promptCacheKey
+			: promptCacheKeyFromHeaders(options.headers);
+		if (cacheKey) openai.promptCacheKey = cacheKey;
 		return { ...options, providerOptions: { ...options.providerOptions, openai } };
 	};
 	// The SDK only writes `strict` for tools that declare it, and the Codex
@@ -55,6 +64,22 @@ function createV2Language(model: ReturnType<ReturnType<typeof createOpenAI>["res
 			return Reflect.get(target, property, receiver);
 		},
 	});
+}
+
+const SESSION_AFFINITY_HEADERS = ["x-session-affinity", "x-opencode-session", "x-session-id"];
+const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
+
+/** Mirrors OpenCode's own promptCacheKey derivation from the session affinity id. */
+export function promptCacheKeyFromHeaders(headers: Record<string, string | undefined> | undefined): string | undefined {
+	if (!headers) return undefined;
+	const byName = new Map(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
+	const affinity = SESSION_AFFINITY_HEADERS.map((name) => byName.get(name)?.trim()).find((value) => value);
+	if (!affinity) return undefined;
+	const key = /^ses_[0-9a-f]{64}$/.test(affinity) ? affinity.slice(4) : affinity;
+	if (Array.from(key).length <= PROMPT_CACHE_KEY_MAX_LENGTH) return key;
+	// Truncation would merge distinct sessions sharing a long prefix into one
+	// cache-affinity group; a SHA-256 hex digest is exactly 64 chars.
+	return createHash("sha256").update(key).digest("hex");
 }
 
 /** V1 supplied these defaults through provider options; V2's bridge needs them on the wire. */
