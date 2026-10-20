@@ -9,6 +9,7 @@
  * failing silently inside a hook.
  */
 import { createOpenAI } from "@ai-sdk/openai";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { Integration, type Credential, type Model, type Plugin } from "@opencode/plugin";
 import { z } from "zod";
@@ -75,7 +76,10 @@ export function promptCacheKeyFromHeaders(headers: Record<string, string | undef
 	const affinity = SESSION_AFFINITY_HEADERS.map((name) => byName.get(name)?.trim()).find((value) => value);
 	if (!affinity) return undefined;
 	const key = /^ses_[0-9a-f]{64}$/.test(affinity) ? affinity.slice(4) : affinity;
-	return Array.from(key).slice(0, PROMPT_CACHE_KEY_MAX_LENGTH).join("");
+	if (Array.from(key).length <= PROMPT_CACHE_KEY_MAX_LENGTH) return key;
+	// Truncation would merge distinct sessions sharing a long prefix into one
+	// cache-affinity group; a SHA-256 hex digest is exactly 64 chars.
+	return createHash("sha256").update(key).digest("hex");
 }
 
 /** V1 supplied these defaults through provider options; V2's bridge needs them on the wire. */
