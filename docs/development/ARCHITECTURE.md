@@ -174,7 +174,7 @@ With `sessionRecovery` on (default), the request path gates on the hook object a
 
 ## Model Catalog
 
-`--modern` writes `config/opencode-modern.json`: 11 base model families — `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-fast`, `gpt-5.4-nano`, `gpt-5.1` — with 59 effective variants via OpenCode's variant picker, every entry carrying `store: false` + `reasoning.encrypted_content`. `--full` adds 59 explicit selector IDs; `--legacy` writes 59 explicit entries; the default install preserves `provider.openai`.
+`--modern` writes `config/opencode-modern.json`: 12 base model families — `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-fast`, `gpt-5.4-nano`, `gpt-5.1` — with 65 effective variants via OpenCode's variant picker, every entry carrying `store: false` + `reasoning.encrypted_content`. `--full` adds 65 explicit selector IDs; `--legacy` writes 65 explicit entries; the default install preserves `provider.openai`.
 
 Retired bases (`gpt-5.4-mini`; the `*-codex` ids) are absent from the templates but still routed if typed — default fallback chains rescue them, and the installer's `STALE_MANAGED_MODEL_KEYS` prunes them from existing configs. `normalizeModel()` defaults to `gpt-6-sol`.
 
@@ -220,7 +220,7 @@ docs/
 8. Codex CLI hydrate from `~/.codex` unless `CODEX_AUTH_SYNC_CODEX_CLI=0`; startup prewarm only for legacy transform mode unless `CODEX_AUTH_PREWARM=0`.
 9. Boolean env overrides are truthy only for the literal string `"1"`.
 10. New `codex-*` tools need a per-file factory, registry wiring in `lib/tools/index.ts`, tests, and docs.
-11. Installer/help/doc catalog counts match the shipped templates (11 bases / 59 variants; 59 legacy entries) — `test/doc-parity.test.ts` derives them from the templates, so drift fails the suite.
+11. Installer/help/doc catalog counts match the shipped templates (12 bases / 65 variants; 65 legacy entries) — `test/doc-parity.test.ts` derives them from the templates, so drift fails the suite.
 
 ---
 

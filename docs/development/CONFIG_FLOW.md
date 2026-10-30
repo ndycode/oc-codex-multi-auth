@@ -95,9 +95,9 @@ daemon:
 | flag | writes |
 | --- | --- |
 | (none) | registers the plugin entries only; preserves `provider.openai`; no model catalog |
-| `--modern` | compact catalog: 11 base model families + 59 variants |
-| `--full` | modern catalog **plus** 59 explicit selector entries (`gpt-5.5-medium`, …) |
-| `--legacy` | legacy explicit-only catalog (the 59 selector entries) |
+| `--modern` | compact catalog: 12 base model families + 65 variants |
+| `--full` | modern catalog **plus** 65 explicit selector entries (`gpt-5.5-medium`, …) |
+| `--legacy` | legacy explicit-only catalog (the 65 selector entries) |
 | `--dry-run`, `--no-cache-clear` | preview / skip package-cache cleanup |
 
 Templates live in `config/`: `minimal-opencode.json` (plugin-only skeleton),
