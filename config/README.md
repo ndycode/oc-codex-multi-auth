@@ -9,9 +9,9 @@ these for you, you only copy by hand for a manual/debug setup.
 | File | Installer equivalent | Contents |
 | --- | --- | --- |
 | [`minimal-opencode.json`](./minimal-opencode.json) | `npx -y oc-codex-multi-auth@latest` (plugin-only) | debug skeleton: registers the plugin and pins `model`, no model catalog — OpenCode supplies whatever models it knows |
-| [`opencode-modern.json`](./opencode-modern.json) | `--modern` | compact catalog: 11 base model families with 59 variants via OpenCode's `--variant` picker (OpenCode v1.0.210+) |
-| [`opencode-legacy.json`](./opencode-legacy.json) | `--legacy` | the same presets as 59 explicit selector entries (`gpt-5.5-medium`, …) for OpenCode v1.0.209 and below |
-| (no file — merged output) | `--full` | modern bases **plus** all 59 explicit selector entries, for scripts that need typed ids |
+| [`opencode-modern.json`](./opencode-modern.json) | `--modern` | compact catalog: 12 base model families with 65 variants via OpenCode's `--variant` picker (OpenCode v1.0.210+) |
+| [`opencode-legacy.json`](./opencode-legacy.json) | `--legacy` | the same presets as 65 explicit selector entries (`gpt-5.5-medium`, …) for OpenCode v1.0.209 and below |
+| (no file — merged output) | `--full` | modern bases **plus** all 65 explicit selector entries, for scripts that need typed ids |
 | (no file — V1 skipped) | `--v2` | registers the plugin in the OpenCode V2 `plugins` entry only; no V1 catalog |
 
 Other installer flags: `--plugin-only` (explicit form of the default),

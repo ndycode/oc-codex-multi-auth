@@ -20,7 +20,7 @@ npx -y oc-codex-multi-auth@latest --modern
 ```
 
 `--modern` fits most setups: it registers the plugin and writes the compact
-catalog of 11 base models with 59 `--variant` presets. Use no flag to keep
+catalog of 12 base models with 65 `--variant` presets. Use no flag to keep
 your existing `provider.openai` untouched, `--full` to also get explicit
 selector IDs, `--legacy` for older OpenCode, or `--v2` for OpenCode 2.0.16+.
 See [Getting Started](getting-started.md).
