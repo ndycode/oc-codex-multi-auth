@@ -688,6 +688,7 @@ vi.mock("../lib/accounts.js", () => {
 type ToolExecute<T = void> = { execute: (args: T) => Promise<string> };
 type OptionalToolExecute<T> = { execute: (args?: T) => Promise<string> };
 type PluginType = {
+	"chat.headers": (input: { sessionID: string; model: { providerID: string } }, output: { headers: Record<string, string> }) => Promise<void>;
 	event: (input: { event: { type: string; properties?: unknown } }) => Promise<void>;
 	auth: {
 		provider: string;
@@ -1301,6 +1302,29 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(result.apiKey).toBeDefined();
 			expect(result.baseURL).toBeDefined();
 			expect(result.fetch).toBeDefined();
+		});
+
+		it.each([true, false])("records the host session's serving account without forwarding the internal header (quota headers: %s)", async (hasQuota) => {
+			// Given a host session and one eligible account.
+			mockStorage.accounts = [{ accountId: "account-1", refreshToken: "FAKE_REFRESH", accessToken: "FAKE_ACCESS", expiresAt: Date.now() + 60_000 }];
+			const cache = await import("../lib/tui-quota-cache.js");
+			const record = vi.spyOn(cache, "writeSessionQuotaSnapshot").mockResolvedValue();
+			vi.spyOn(cache, "writeTuiQuotaSnapshot").mockResolvedValue();
+			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), {
+				status: 200, headers: hasQuota ? { "x-codex-primary-used-percent": "20", "x-codex-primary-window-minutes": "300" } : {},
+			}));
+			const output = { headers: {} };
+			await plugin["chat.headers"]({ sessionID: "ses_host_session", model: { providerID: "openai" } }, output);
+			const sdk = await plugin.auth.loader(async () => ({ type: "oauth", access: "a", refresh: "r", expires: Date.now() + 60_000, multiAccount: true }), {});
+			if (!sdk.fetch) throw new Error("missing SDK fetch");
+			// When the SDK sends a response request with the host hook's headers.
+			await sdk.fetch("https://api.openai.com/v1/responses", {
+				method: "POST", headers: output.headers, body: JSON.stringify({ model: "gpt-5.4", input: [] }),
+			});
+			// Then the session receives only display data and the marker never reaches the backend.
+			expect(record).toHaveBeenCalledWith("ses_host_session", expect.objectContaining({ accountIndex: 1, limits: hasQuota ? [expect.objectContaining({ leftPercent: 80 })] : [] }));
+			const sentHeaders = new Headers(fetchSpy.mock.calls[0]?.[1]?.headers);
+			expect(sentHeaders.has("x-oc-codex-tui-session")).toBe(false);
 		});
 
 		it("uses OPENAI_BASE_URL for multiAccount OAuth requests", async () => {

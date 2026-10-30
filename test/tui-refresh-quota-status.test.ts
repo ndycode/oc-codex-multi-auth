@@ -30,6 +30,7 @@ import {
 	getTuiQuotaCachePath,
 	TUI_QUOTA_SNAPSHOT_FRESH_MS,
 	writeTuiQuotaSnapshot,
+	writeSessionQuotaSnapshot,
 	type TuiQuotaSnapshot,
 } from "../lib/tui-quota-cache.js";
 import { refreshQuotaStatusInner, resolveQuotaPollFingerprint } from "../tui.js";
@@ -96,6 +97,78 @@ describe("refreshQuotaStatusInner", () => {
 		vi.clearAllMocks();
 		vi.useRealTimers();
 		vi.unstubAllEnvs();
+	});
+
+	it("keeps each session's account and quota when another session updates the shared cache", async () => {
+		// Given two sessions with different serving accounts and a newer global response.
+		const api = createFakeApi(stateDir);
+		const snapshots = [0, 1].map((index) => {
+			const account = storage.accounts[index];
+			if (!account) throw new Error("missing account fixture");
+			return createTuiQuotaSnapshot({
+				fingerprint: createUsageAccountFingerprint(account), source: "headers",
+				accountIndex: index + 1, accountCount: 3,
+				limits: [{ label: "5h", leftPercent: 80 - index * 30 }],
+			});
+		});
+		for (const [index, snapshot] of snapshots.entries()) {
+			await writeSessionQuotaSnapshot(`ses_${index}`, snapshot, stateDir);
+			await writeTuiQuotaSnapshot(snapshot, getTuiQuotaCachePath(stateDir));
+		}
+		// When both sessions refresh concurrently.
+		const results = await Promise.all([0, 1].map((index) => refreshQuotaStatusInner(api, `ses_${index}`)));
+		// Then each status and poll retain that session's account and quota.
+		expect(results).toMatchObject([
+			{ type: "ready", accountIndex: 1, limits: [{ leftPercent: 80 }] },
+			{ type: "ready", accountIndex: 2, limits: [{ leftPercent: 50 }] },
+		]);
+		for (const [index, snapshot] of snapshots.entries()) {
+			expect(await resolveQuotaPollFingerprint(api, `ses_${index}`)).toBe(snapshot.fingerprint);
+		}
+	});
+
+	it.each([true, false])("keeps global fallback for a session without a response (shared cache: %s)", async (hasShared) => {
+		// Given another session's optional response and a different global active account.
+		const api = createFakeApi(stateDir);
+		const account = storage.accounts[1];
+		if (!account) throw new Error("missing account fixture");
+		if (hasShared) await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({
+			fingerprint: createUsageAccountFingerprint(account), source: "headers", accountIndex: 2,
+			limits: [{ label: "5h", leftPercent: 50 }],
+		}), getTuiQuotaCachePath(stateDir));
+		if (!hasShared) {
+			vi.mocked(ensureCodexUsageAccessToken).mockResolvedValueOnce({ accessToken: "FAKE_ACCESS", refreshed: false, persisted: false });
+			vi.mocked(fetchCodexUsage).mockResolvedValueOnce({ rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18_000 } } });
+		}
+		// When a new session requests its status.
+		const status = await refreshQuotaStatusInner(api, "ses_without_response");
+		// Then the existing global rule still selects headers first, otherwise the active account.
+		expect(status).toMatchObject({ type: "ready", accountIndex: hasShared ? 2 : 1, limits: [{ leftPercent: hasShared ? 50 : 80 }] });
+	});
+
+	it("refreshes stale session quota for its serving account instead of the global active account", async () => {
+		// Given a session binding whose quota is stale, plus a fresh response for another account.
+		const api = createFakeApi(stateDir);
+		const account = storage.accounts[1];
+		const globalAccount = storage.accounts[0];
+		if (!account || !globalAccount) throw new Error("missing account fixture");
+		await writeSessionQuotaSnapshot("ses_stale", createTuiQuotaSnapshot({
+			fingerprint: createUsageAccountFingerprint(account), source: "headers", accountIndex: 2,
+			fetchedAt: Date.now() - TUI_QUOTA_SNAPSHOT_FRESH_MS,
+			limits: [{ label: "5h", leftPercent: 50 }],
+		}), stateDir);
+		await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({
+			fingerprint: createUsageAccountFingerprint(globalAccount), source: "headers", accountIndex: 1,
+			limits: [{ label: "5h", leftPercent: 10 }],
+		}), getTuiQuotaCachePath(stateDir));
+		vi.mocked(ensureCodexUsageAccessToken).mockResolvedValueOnce({ accessToken: "FAKE_ACCESS", refreshed: false, persisted: false });
+		vi.mocked(fetchCodexUsage).mockResolvedValueOnce({ rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 18_000 } } });
+		// When the stale session refreshes.
+		const status = await refreshQuotaStatusInner(api, "ses_stale");
+		// Then usage comes from its bound account, and polling retains that binding.
+		expect(status).toMatchObject({ type: "ready", accountIndex: 2, limits: [{ leftPercent: 70 }] });
+		expect(ensureCodexUsageAccessToken).toHaveBeenCalledWith({ storage, account });
+		expect(await resolveQuotaPollFingerprint(api, "ses_stale")).toBe(createUsageAccountFingerprint(account));
 	});
 
 	it.each(["expires", "account is removed"])("keeps the serving account across polls until its snapshot %s", async (invalidation) => {

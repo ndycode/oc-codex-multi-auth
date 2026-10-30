@@ -12,6 +12,8 @@ import {
 	parseTuiQuotaSnapshotFromHeaders,
 	readTuiQuotaSnapshot,
 	writeTuiQuotaSnapshot,
+	readSessionQuotaSnapshot,
+	writeSessionQuotaSnapshot,
 	TUI_QUOTA_CACHE_VERSION,
 	TUI_QUOTA_SNAPSHOT_FRESH_MS,
 } from "../lib/tui-quota-cache.js";
@@ -19,6 +21,35 @@ import { formatQuotaDetailsText, type CompactQuotaStatus } from "../lib/tui-stat
 import { getQuotaExhaustedResetAtMs, MAX_QUOTA_RESET_HORIZON_MS } from "../lib/quota-windows.js";
 
 describe("TUI quota cache", () => {
+	it("bounds session storage and preserves concurrent sessions without credentials", async () => {
+		// Given more sessions than the cache can retain and a credential-bearing input.
+		const dir = await mkdtemp(join(tmpdir(), "tui-session-quota-"));
+		const snapshot = { ...createTuiQuotaSnapshot({
+			fingerprint: "FAKE_FINGERPRINT", source: "headers", limits: [{ label: "5h", leftPercent: 80 }],
+		}), accessToken: "FAKE_SECRET_ACCESS", refreshToken: "FAKE_SECRET_REFRESH" };
+		try {
+			for (let index = 0; index < 128; index++) await writeSessionQuotaSnapshot(`ses_${index}`, snapshot, dir);
+			// When concurrent writers add two sessions and update a retained session.
+			await Promise.all(["ses_128", "ses_129", "ses_64"].map((id) => writeSessionQuotaSnapshot(id, snapshot, dir)));
+			// Then the oldest sessions are evicted, both new sessions survive, and no tokens reach disk.
+			expect(await readSessionQuotaSnapshot("ses_0", dir)).toBeUndefined();
+			expect(await readSessionQuotaSnapshot("ses_1", dir)).toBeUndefined();
+			for (const id of ["ses_64", "ses_128", "ses_129"]) {
+				expect(await readSessionQuotaSnapshot(id, dir)).toMatchObject({ fingerprint: "FAKE_FINGERPRINT" });
+			}
+			const files = await fs.readdir(dir);
+			expect(files).toHaveLength(1);
+			const file = files[0];
+			if (!file) throw new Error("missing session cache");
+			const raw = await fs.readFile(join(dir, file), "utf-8");
+			expect(JSON.parse(raw)).toHaveLength(128);
+			expect(raw).not.toContain("FAKE_SECRET");
+			expect(raw).not.toContain("ses_129");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("parses Codex quota response headers into a prompt snapshot", () => {
 		const headers = new Headers({
 			"x-codex-primary-used-percent": "20",

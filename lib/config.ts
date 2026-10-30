@@ -1514,6 +1514,8 @@ export interface QuotaStatusConfig {
 	 */
 	rows: number;
 	showFor: QuotaStatusAudience;
+	/** Text put in front of the first row, e.g. `"OpenAI "`, so the line says which provider it describes. */
+	prefix: string;
 }
 
 function pickEnum<T extends string>(
@@ -1605,5 +1607,6 @@ export function getQuotaStatus(pluginConfig: PluginConfig): QuotaStatusConfig {
 				? Math.min(MAX_QUOTA_STATUS_ROWS, Math.max(1, Math.trunc(config.rows)))
 				: 1,
 		showFor: pickEnum(config?.showFor, QUOTA_STATUS_AUDIENCES, "always"),
+		prefix: typeof config?.prefix === "string" ? config.prefix : "",
 	};
 }

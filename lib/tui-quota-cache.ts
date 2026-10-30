@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
@@ -10,6 +11,7 @@ import {
 	type CodexQuotaWindowKind,
 } from "./quota-windows.js";
 import { renameWithWindowsRetry } from "./storage/atomic-write.js";
+import { withStorageTransaction } from "./storage/transaction-lock.js";
 import type { CreditsBalance } from "./codex-credits.js";
 import type { CompactQuotaLimit } from "./tui-status.js";
 
@@ -59,6 +61,71 @@ type RecentTuiQuotaWrite = {
 };
 
 const recentTuiQuotaWrites = new Map<string, RecentTuiQuotaWrite>();
+
+const SESSION_QUOTA_CACHE_FILE = "oc-codex-multi-auth-tui-sessions.json";
+const MAX_SESSION_QUOTA_ENTRIES = 128;
+type SessionQuotaEntry = {
+	readonly sessionKey: string;
+	readonly snapshot: TuiQuotaSnapshot;
+};
+
+async function readSessionQuotaEntries(target: string): Promise<SessionQuotaEntry[]> {
+	try {
+		const parsed: unknown = JSON.parse(await fs.readFile(target, "utf-8"));
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter((entry: unknown): entry is SessionQuotaEntry =>
+			isRecord(entry) && typeof entry.sessionKey === "string" &&
+			isTuiQuotaSnapshot(entry.snapshot),
+		).slice(-MAX_SESSION_QUOTA_ENTRIES);
+	} catch {
+		// This display-only cache can be absent or left by an incompatible build.
+		return [];
+	}
+}
+
+export async function readSessionQuotaSnapshot(
+	sessionID: string | undefined,
+	stateDir?: string,
+): Promise<TuiQuotaSnapshot | undefined> {
+	if (!sessionID) return undefined;
+	const sessionKey = createHash("sha256").update(sessionID).digest("hex");
+	const entries = await readSessionQuotaEntries(join(resolveStateDir(stateDir), SESSION_QUOTA_CACHE_FILE));
+	const snapshot = entries.find((entry) => entry.sessionKey === sessionKey)?.snapshot;
+	return snapshot ? sanitizeTuiQuotaSnapshot(snapshot) : undefined;
+}
+
+export async function writeSessionQuotaSnapshot(
+	sessionID: string,
+	snapshot: TuiQuotaSnapshot,
+	stateDir?: string,
+): Promise<void> {
+	const target = join(resolveStateDir(stateDir), SESSION_QUOTA_CACHE_FILE);
+	const sessionKey = createHash("sha256").update(sessionID).digest("hex");
+	// Reuse the explicit display-field allowlist; never persist credentials or extra fields.
+	const display: unknown = JSON.parse(getSnapshotWriteKey(snapshot));
+	if (!isRecord(display)) return;
+	const safeSnapshot = { ...display, version: snapshot.version, fetchedAt: snapshot.fetchedAt };
+	if (!isTuiQuotaSnapshot(safeSnapshot)) return;
+	await withStorageTransaction({
+		storagePath: target,
+		load: () => readSessionQuotaEntries(target),
+		persist: async (entries: SessionQuotaEntry[]) => {
+			const temporary = createTemporaryPath(target, Date.now());
+			try {
+				await writeSnapshotFile(target, temporary, entries);
+			} catch (error) {
+				await fs.unlink(temporary).catch(() => undefined);
+				throw error;
+			}
+		},
+		handler: async (entries, persist) => {
+			await persist([
+				...entries.filter((entry) => entry.sessionKey !== sessionKey).slice(-(MAX_SESSION_QUOTA_ENTRIES - 1)),
+				{ sessionKey, snapshot: safeSnapshot },
+			]);
+		},
+	});
+}
 
 function getDefaultOpenCodeStateDir(): string {
 	// Match OpenCode's xdg-basedir resolution: an absolute XDG_STATE_HOME

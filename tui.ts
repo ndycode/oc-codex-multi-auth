@@ -54,6 +54,7 @@ import {
 	isFreshTuiQuotaSnapshot,
 	isTuiQuotaSnapshot,
 	readTuiQuotaSnapshot,
+	readSessionQuotaSnapshot,
 	writeTuiQuotaSnapshot,
 	type TuiQuotaSnapshot,
 } from "./lib/tui-quota-cache.js";
@@ -252,6 +253,11 @@ async function readSharedQuotaStatus(
 		: undefined;
 }
 
+async function readSessionQuotaStatus(api: TuiPluginApi, sessionID: string | undefined): Promise<StoredQuotaStatus | undefined> {
+	return await readSessionQuotaSnapshot(sessionID, api.state.path.state) ??
+		await readSessionQuotaSnapshot(sessionID);
+}
+
 async function writeSharedQuotaStatus(
 	api: TuiPluginApi,
 	status: StoredQuotaStatus,
@@ -266,9 +272,14 @@ async function writeSharedQuotaStatus(
 
 export async function resolveQuotaPollFingerprint(
 	api: TuiPluginApi,
+	sessionID?: string,
 ): Promise<string | undefined> {
 	const storage = await loadAccounts();
 	if (!storage || storage.accounts.length === 0) return undefined;
+	const session = await readSessionQuotaStatus(api, sessionID);
+	if (session && storage.accounts.some((account) => createUsageAccountFingerprint(account) === session.fingerprint)) {
+		return session.fingerprint;
+	}
 	const shared = await readSharedQuotaStatus(api);
 	if (
 		shared?.source === "headers" &&
@@ -287,6 +298,7 @@ export async function resolveQuotaPollFingerprint(
 
 export async function refreshQuotaStatusInner(
 	api: TuiPluginApi,
+	sessionID?: string,
 ): Promise<CompactQuotaStatus> {
 	try {
 		const storage = await loadAccounts();
@@ -294,7 +306,12 @@ export async function refreshQuotaStatusInner(
 			return { type: "missing" };
 		}
 
-		const latestShared = await readSharedQuotaStatus(api);
+		const session = await readSessionQuotaStatus(api, sessionID);
+		const sessionIndex = session
+			? storage.accounts.findIndex((account) => createUsageAccountFingerprint(account) === session.fingerprint)
+			: -1;
+		const sessionAccount = storage.accounts[sessionIndex];
+		const latestShared = sessionAccount ? session : await readSharedQuotaStatus(api);
 		const now = Date.now();
 		// A shared snapshot only proves freshness while requests flow: the
 		// request path pushes it per response, but during an idle gap nothing
@@ -302,15 +319,17 @@ export async function refreshQuotaStatusInner(
 		// server-side. Trust it as current within one refresh interval;
 		// otherwise fall through to a live /wham/usage read and keep the
 		// snapshot only as a stale fallback.
-		if (latestShared?.source === "headers" && isFreshTuiQuotaSnapshot(latestShared, now) &&
+		if (latestShared?.source === "headers" && latestShared.limits.length > 0 && isFreshTuiQuotaSnapshot(latestShared, now) &&
 			storage.accounts.some((account) => createUsageAccountFingerprint(account) === latestShared.fingerprint)) {
 			writeStoredQuotaStatus(api, latestShared);
 			return toCompactQuotaStatus(latestShared, false);
 		}
-		const selection = resolveCodexUsageActiveAccount(storage);
+		const selection = sessionAccount ? { account: sessionAccount, index: sessionIndex } : resolveCodexUsageActiveAccount(storage);
 		if (!selection) return { type: "missing" };
 		const fingerprint = createUsageAccountFingerprint(selection.account);
-		const shared = await readSharedQuotaStatus(api, fingerprint);
+		const globalShared = await readSharedQuotaStatus(api, fingerprint);
+		const shared = sessionAccount && session && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
+			? session : globalShared;
 		const stored = readStoredQuotaStatus(api, fingerprint);
 		const cached =
 			shared && (!stored || shared.fetchedAt >= stored.fetchedAt)
@@ -693,6 +712,7 @@ function createOverviewQuotaController(
 function createActiveQuotaController(
 	api: TuiPluginApi,
 	solid: SolidRuntime,
+	sessionID: string | undefined,
 ): QuotaStatusController {
 	const [quota, setQuota] = solid.createSignal<CompactQuotaStatus>({
 		type: "loading",
@@ -710,10 +730,12 @@ function createActiveQuotaController(
 		}
 		setQuota(next);
 	};
+	let inFlight: Promise<void> | undefined;
 	const refresh = (): void => {
-		void refreshQuotaStatus(api).then(applyQuota, () => {
+		if (inFlight) return;
+		inFlight = refreshQuotaStatusInner(api, sessionID).then(applyQuota, () => {
 			applyQuota({ type: "unavailable" });
-		});
+		}).finally(() => { inFlight = undefined; });
 	};
 	let refreshTimeout: ReturnType<typeof setTimeout> | undefined;
 	const scheduleRefresh = (): void => {
@@ -731,7 +753,7 @@ function createActiveQuotaController(
 		if (cachePollInFlight) return;
 		cachePollInFlight = true;
 		void (async () => {
-			const fingerprint = await resolveQuotaPollFingerprint(api);
+			const fingerprint = await resolveQuotaPollFingerprint(api, sessionID);
 			if (!fingerprint) {
 				if (currentFingerprint) applyQuota({ type: "missing" });
 				return;
@@ -743,8 +765,13 @@ function createActiveQuotaController(
 				refresh();
 				return;
 			}
-			const shared = await readSharedQuotaStatus(api, fingerprint);
-			if (!shared) return;
+			const session = await readSessionQuotaStatus(api, sessionID);
+			const globalShared = await readSharedQuotaStatus(api, fingerprint);
+			const shared = session?.fingerprint === fingerprint && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
+				? session : globalShared;
+			if (!shared || shared.limits.length === 0) return;
+			const current = quota();
+			if (current.type === "ready" && current.fetchedAt !== undefined && shared.fetchedAt < current.fetchedAt) return;
 			const revision = getQuotaSnapshotRevision(shared);
 			if (!revision || revision === currentSnapshotRevision) return;
 			writeStoredQuotaStatus(api, shared);
@@ -832,10 +859,11 @@ function createQuotaControllers(
 	api: TuiPluginApi,
 	solid: SolidRuntime,
 	screens: readonly QuotaStatusScreen[],
+	sessionID: string | undefined,
 ): QuotaStatusController[] {
 	const controllers: QuotaStatusController[] = [];
 	if (screens.includes("active")) {
-		controllers.push(createActiveQuotaController(api, solid));
+		controllers.push(createActiveQuotaController(api, solid, sessionID));
 	}
 	if (screens.includes("overview") || screens.includes("resets") || screens.includes("credits")) {
 		controllers.push(createOverviewQuotaController(api, solid));
@@ -857,6 +885,13 @@ export function showsQuotaForSession(params: {
 }): boolean {
 	if (params.audience === "always") return true;
 	return !params.providerID || params.providerID === PROVIDER_ID;
+}
+
+/** Puts `quotaStatus.prefix` before the first row and indents the others to line up under it. */
+export function withStatusPrefix(lines: string[], prefix: string): string[] {
+	if (!prefix) return lines;
+	const indent = " ".repeat(prefix.length);
+	return lines.map((line, index) => `${index === 0 ? prefix : indent}${line}`);
 }
 
 function getString(value: unknown): string | undefined {
@@ -917,6 +952,7 @@ function createPromptStatus(
 		api,
 		solid,
 		initialOptions.quotaStatus.screens,
+		sessionID,
 	);
 	let controllerScreens = initialOptions.quotaStatus.screens;
 	let rotationInterval: ReturnType<typeof setInterval> | undefined;
@@ -962,7 +998,7 @@ function createPromptStatus(
 		// to nothing, and never hear the new pipeline resolve.
 		if (screensChanged) {
 			for (const controller of controllers) controller.dispose();
-			controllers = createQuotaControllers(api, solid, nextScreens);
+			controllers = createQuotaControllers(api, solid, nextScreens, sessionID);
 			controllerScreens = nextScreens;
 			setRotation(0);
 		}
@@ -994,8 +1030,10 @@ function createPromptStatus(
 		) {
 			return undefined;
 		}
+		const prefix = currentOptions.quotaStatus.prefix
+		const measured = metrics().availableChars
 		const layout = {
-			availableChars: metrics().availableChars,
+			availableChars: measured === undefined ? undefined : Math.max(1, measured - prefix.length),
 			maxRows: currentOptions.quotaStatus.rows,
 		};
 		const rendered: Array<{ screen: QuotaStatusScreen; lines: string[] }> = [];
@@ -1005,7 +1043,7 @@ function createPromptStatus(
 			);
 			if (!controller) continue;
 			const lines = controller.lines(screen, currentOptions, layout);
-			if (lines.length > 0) rendered.push({ screen, lines });
+			if (lines.length > 0) rendered.push({ screen, lines: withStatusPrefix(lines, prefix) });
 		}
 		if (rendered.length === 0) return undefined;
 		return rendered[Math.abs(rotation()) % rendered.length];

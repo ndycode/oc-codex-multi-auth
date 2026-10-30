@@ -32,3 +32,10 @@ describe("quota forecast configuration", () => {
 		expect(PluginConfigSchema.safeParse({ quotaStatus: { resetsMinUsedPercent } }).success).toBe(false);
 	});
 });
+
+describe("quota status prefix", () => {
+	it("defaults to no prefix and reads a configured one", () => {
+		expect(getQuotaStatus(PluginConfigSchema.parse({})).prefix).toBe("");
+		expect(getQuotaStatus(PluginConfigSchema.parse({ quotaStatus: { prefix: "OpenAI " } })).prefix).toBe("OpenAI ");
+	});
+});

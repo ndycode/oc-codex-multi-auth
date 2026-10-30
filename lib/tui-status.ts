@@ -20,7 +20,6 @@ import {
 	displayWidth,
 	formatClockTime,
 	formatShortDate,
-	formatShortWeekday,
 	sanitizeDisplayText,
 } from "./ui/display-text.js";
 import {
@@ -794,21 +793,19 @@ function formatReset(resetAtMs: number | undefined): string | undefined {
 }
 
 /**
- * Format a reset timestamp for the compact status line. Same-day resets keep
- * the time only (`02:25`); resets within the coming week add the weekday
- * (`Tue 02:25`); later resets use the absolute date (`Sep 15 02:25`). The
- * time is always kept so short windows such as the 5h limit stay meaningful.
+ * Format a reset timestamp for the compact status line as the time left in
+ * one unit: `40m` under an hour, `5h` under a day, otherwise `2d`. The line
+ * renders it as `resets in 5h`. A reset already in the past yields nothing.
  */
 function formatResetTime(resetAtMs: number | undefined): string | undefined {
-	const parts = describeReset(resetAtMs);
-	if (!parts) return undefined;
-	if (parts.sameDay) return parts.time;
-	// Within a week each weekday occurs exactly once, so the weekday alone
-	// disambiguates weekly windows; beyond that the absolute date does.
-	if (parts.dayDiff > 0 && parts.dayDiff < 7) {
-		return `${formatShortWeekday(parts.date)} ${parts.time}`;
-	}
-	return `${formatResetDay(parts.date)} ${parts.time}`;
+	if (!resetAtMs || !Number.isFinite(resetAtMs)) return undefined;
+	const left = resetAtMs - Date.now();
+	if (left <= 0) return undefined;
+	const minutes = Math.max(1, Math.ceil(left / 60_000));
+	if (minutes < 60) return `in ${minutes}m`;
+	const hours = Math.max(1, Math.round(left / 3_600_000));
+	if (hours < 24) return `in ${hours}h`;
+	return `in ${Math.max(1, Math.round(left / 86_400_000))}d`;
 }
 
 /**

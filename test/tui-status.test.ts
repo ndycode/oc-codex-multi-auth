@@ -210,7 +210,7 @@ describe("TUI prompt status helpers", () => {
 				width: 120,
 			});
 
-			expect(resetStatus).toMatch(/5h 8% resets \d{2}:\d{2}/);
+			expect(resetStatus).toMatch(/5h 8% resets in 1m/);
 			expect(resetStatus).toContain("7d 83%");
 			expect(
 				formatPromptStatusText({
@@ -535,28 +535,10 @@ describe("TUI prompt status helpers", () => {
 	});
 });
 
-describe("formatResetTime day context", () => {
+describe("formatResetTime time left", () => {
 	// Fake timers freeze both Date.now() and new Date() so the formatter's
 	// "now" and the fixed reset timestamps land on deterministic dates.
 	const now = new Date(2026, 8, 5, 12, 0); // 2026-09-05T12:00 local
-	// Expected labels are derived from the runtime's own Intl formatting so
-	// the assertions hold under any default locale.
-	const weekdayLabel = new Date(2026, 8, 8, 2, 25).toLocaleDateString(
-		undefined,
-		{ weekday: "short" },
-	);
-	const dateLabel = new Date(2026, 8, 15, 2, 25).toLocaleDateString(undefined, {
-		month: "short",
-		day: "2-digit",
-	});
-	const timeLabel = (h: number, m: number) =>
-		new Date(2026, 8, 5, h, m)
-			.toLocaleTimeString(undefined, {
-				hour: "2-digit",
-				minute: "2-digit",
-				hour12: false,
-			})
-			.replace(/^24/, "00");
 
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -611,62 +593,27 @@ describe("formatResetTime day context", () => {
 		expect(out).not.toBe("");
 	});
 
-	it("keeps time-only format for same-day resets", () => {
-		const out = formatPromptStatusText({
-			quota: {
-				...quota,
-				limits: [
-					{ label: "5h", leftPercent: 8, resetAtMs: new Date(2026, 8, 5, 18, 30).getTime() },
-				],
-			},
+	const resetLine = (label: string, resetAtMs: number) =>
+		formatPromptStatusText({
+			quota: { ...quota, limits: [{ label, leftPercent: 0, resetAtMs }] },
 			width: 120,
 		});
-		expect(out).toBe(`5h 8% resets ${timeLabel(18, 30)}`);
+
+	it("#given a reset under an hour away #when formatted #then it shows minutes", () => {
+		expect(resetLine("5h", now.getTime() + 40 * 60_000)).toBe("5h 0% resets in 40m");
 	});
 
-	it("adds weekday for resets within the coming week", () => {
-		const out = formatPromptStatusText({
-			quota: {
-				...quota,
-				limits: [
-					{ label: "7d", leftPercent: 0, resetAtMs: new Date(2026, 8, 8, 2, 25).getTime() },
-				],
-			},
-			width: 120,
-		});
-		expect(out).toBe(`7d 0% resets ${weekdayLabel} ${timeLabel(2, 25)}`);
+	it("#given a reset under a day away #when formatted #then it shows hours", () => {
+		expect(resetLine("5h", new Date(2026, 8, 5, 17, 10).getTime())).toBe("5h 0% resets in 5h");
 	});
 
-	it("uses absolute date beyond a week", () => {
-		const out = formatPromptStatusText({
-			quota: {
-				...quota,
-				limits: [
-					{ label: "7d", leftPercent: 0, resetAtMs: new Date(2026, 8, 15, 2, 25).getTime() },
-				],
-			},
-			width: 120,
-		});
-		expect(out).toBe(`7d 0% resets ${dateLabel} ${timeLabel(2, 25)}`);
+	it("#given a reset days away #when formatted #then it shows days", () => {
+		expect(resetLine("7d", new Date(2026, 8, 8, 2, 25).getTime())).toBe("7d 0% resets in 3d");
+		expect(resetLine("7d", new Date(2026, 8, 15, 2, 25).getTime())).toBe("7d 0% resets in 10d");
 	});
 
-	it("uses absolute date at exactly seven calendar days over a DST weekend", () => {
-		// 2026-03-02 -> 2026-03-09 is seven calendar days. In a zone that
-		// springs forward that weekend (America/New_York among them) the same
-		// gap is 167 hours, and a millisecond division reads it as six days
-		// and renders "Mon", repeating today's weekday. The assertion holds in
-		// any zone; it only exercises the DST path when the runner is in one.
-		vi.setSystemTime(new Date(2026, 2, 2, 12, 0));
-		const reset = new Date(2026, 2, 9, 2, 25);
-		const expected = `${reset.toLocaleDateString(undefined, { month: "short", day: "2-digit" })} ${reset.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}`;
-		const out = formatPromptStatusText({
-			quota: {
-				...quota,
-				limits: [{ label: "7d", leftPercent: 0, resetAtMs: reset.getTime() }],
-			},
-			width: 120,
-		});
-		expect(out).toBe(`7d 0% resets ${expected}`);
+	it("#given a reset already in the past #when formatted #then no reset is shown", () => {
+		expect(resetLine("7d", now.getTime() - 60_000)).not.toContain("resets");
 	});
 });
 

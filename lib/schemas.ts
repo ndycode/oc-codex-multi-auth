@@ -128,6 +128,7 @@ export const PluginConfigSchema = z.object({
 		accounts: z.boolean().optional(),
 		rows: z.number().int().min(1).max(4).optional(),
 		showFor: z.enum(["always", "codex-models"]).optional(),
+		prefix: z.string().max(40).optional(),
 	}).optional(),
 	limitsSort: z.object({
 		by: z.enum(["account", "usage", "reset"]).optional(),
