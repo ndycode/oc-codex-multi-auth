@@ -297,6 +297,7 @@ vi.mock("../lib/request/rate-limit-backoff.js", () => ({
 }));
 
 	vi.mock("../lib/request/fetch-helpers.js", () => ({
+	applyServiceTier: () => undefined,
 		extractRequestUrl: (input: unknown) => (typeof input === "string" ? input : String(input)),
 		rewriteUrlForCodex: rewriteUrlForCodexMock,
 		transformRequestForCodex: vi.fn(async (init: unknown) => ({
@@ -5948,6 +5949,35 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			expect(manager.saveToDiskDebounced).toHaveBeenCalled();
 			await manager.saveToDisk();
 			expect(mockStorage.accounts[0]?.quotaExhaustedUntil).toBe(resetAt);
+		});
+
+		it("replays x-codex-turn-state within a turn and drops it on the next user turn", async () => {
+			await makeManager([accountRecord()]);
+			const fetchHelpers = await import("../lib/request/fetch-helpers.js");
+			vi.mocked(globalThis.fetch).mockImplementationOnce(async () => new Response(
+				JSON.stringify({ content: "ok" }),
+				{ status: 200, headers: { "x-codex-turn-state": "turn-token-1" } },
+			));
+			const { sdk } = await setupPlugin();
+			if (!sdk.fetch) throw new Error("Missing plugin fetch");
+			const post = (input: unknown[]) => sdk.fetch!("https://api.openai.com/v1/chat", {
+				method: "POST",
+				body: JSON.stringify({ model: "gpt-5.5", prompt_cache_key: "ses-turn", input }),
+			});
+			const userTurn = [{ type: "message", role: "user", content: "run it" }];
+			const continuation = [
+				...userTurn,
+				{ type: "function_call", call_id: "c1", name: "bash", arguments: "{}" },
+				{ type: "function_call_output", call_id: "c1", output: "ok" },
+			];
+			vi.mocked(fetchHelpers.createCodexHeaders).mockClear();
+			expect((await post(userTurn)).status).toBe(200);
+			expect((await post(continuation)).status).toBe(200);
+			expect((await post([...continuation, { type: "message", role: "user", content: "next" }])).status).toBe(200);
+			const turnStates = vi.mocked(fetchHelpers.createCodexHeaders).mock.calls.map(
+				(call) => (call[3] as { turnState?: string } | undefined)?.turnState,
+			);
+			expect(turnStates).toEqual([undefined, "turn-token-1", undefined]);
 		});
 
 		// Each hop lands on a model that looks usable, then 429s. gpt-5.5's default

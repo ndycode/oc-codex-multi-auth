@@ -45,7 +45,8 @@ describe("GPT-6.1 Terra Model Support", () => {
 	it("accepts the catalog effort envelope", () => {
 		expect(getReasoningConfig(TERRA61, { reasoningEffort: "max" }).effort).toBe("max");
 		expect(getReasoningConfig(TERRA61, { reasoningEffort: "xhigh" }).effort).toBe("xhigh");
-		expect(getReasoningConfig(TERRA61, { reasoningEffort: "ultra" }).effort).toBe("max");
+		// Catalog multi_agent_reasoning_effort is xhigh for Terra.
+		expect(getReasoningConfig(TERRA61, { reasoningEffort: "ultra" }).effort).toBe("xhigh");
 		expect(getReasoningConfig(TERRA61, { reasoningEffort: "none" }).effort).toBe("low");
 	});
 	it("uses responses-lite and the opencode originator", () => {
@@ -61,7 +62,7 @@ describe("GPT-6.1 Terra Model Support", () => {
 		);
 		const shaped = shapeBodyForModel(transformed);
 		expect(shaped.model).toBe(TERRA61);
-		expect(shaped.reasoning?.effort).toBe("max");
+		expect(shaped.reasoning?.effort).toBe("xhigh");
 		expect(shaped.tools).toBeUndefined();
 		expect(shaped.input?.[0]).toMatchObject({ type: "additional_tools" });
 	});
@@ -100,10 +101,11 @@ describe("GPT-6.1 Terra Model Support", () => {
 		expect(headers.get(RESPONSES_LITE_HEADER)).toBe(RESPONSES_LITE_HEADER_VALUE);
 	});
 	it.each([
-		[TERRA61, "ultra", "max"],
+		[TERRA61, "ultra", "xhigh"],
 		[TERRA61, "none", "low"],
 		[TERRA61, "xhigh", "xhigh"],
-		[SOL61, "ultra", "max"],
+		[SOL61, "ultra", "xhigh"],
+		["gpt-6-sol", "ultra", "max"],
 		["gpt-5.5", "max", "xhigh"],
 	])("clamps a native-mode %s effort %s to %s on the wire", async (model, effort, expected) => {
 		const transformed = await transformRequestForCodex(

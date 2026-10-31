@@ -19,6 +19,7 @@ vi.mock("@opencode-ai/plugin/tool", () => {
 });
 
 vi.mock("../lib/request/fetch-helpers.js", () => ({
+	applyServiceTier: () => undefined,
 	extractRequestUrl: (input: any) => (typeof input === "string" ? input : String(input)),
 	rewriteUrlForCodex: (url: string) => url,
 	transformRequestForCodex: async (init: any) => ({ updatedInit: init, body: { model: "gpt-5.1" } }),

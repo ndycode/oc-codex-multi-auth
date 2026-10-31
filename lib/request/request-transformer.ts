@@ -31,6 +31,7 @@ import {
 	injectMissingToolOutputs,
 } from "./helpers/input-utils.js";
 import { cleanupToolDefinitions } from "./helpers/tool-utils.js";
+import { getCodexCatalogEntry } from "./helpers/codex-catalog.js";
 import type {
 	ConfigOptions,
 	InputItem,
@@ -41,7 +42,7 @@ import type {
 
 type CollaborationMode = "plan" | "default" | "unknown";
 type FastSessionStrategy = "hybrid" | "always";
-type SupportedReasoningSummary = "auto" | "concise" | "detailed";
+type SupportedReasoningSummary = "auto" | "concise" | "detailed" | "none";
 
 const PLAN_MODE_ONLY_TOOLS = new Set(["request_user_input"]);
 export {
@@ -373,12 +374,17 @@ function resolveReasoningConfig(
 function resolveTextVerbosity(
 	modelConfig: ConfigOptions,
 	body: RequestBody,
+	normalizedModel: string,
 ): "low" | "medium" | "high" {
 	const providerOpenAI = body.providerOptions?.openai;
+	// Codex falls back to the catalog's `default_verbosity` (low for every
+	// catalog model except Daybreak Red, which is high); models outside the
+	// catalog keep the historical `medium`.
 	return (
 		body.text?.verbosity ??
 		providerOpenAI?.textVerbosity ??
 		modelConfig.textVerbosity ??
+		getCodexCatalogEntry(normalizedModel)?.defaultVerbosity ??
 		"medium"
 	);
 }
@@ -761,17 +767,21 @@ export function getReasoningConfig(
 	}
 
 	// `ultra` never goes on the wire. Codex treats it as a client-side tier and
-	// rewrites it to `max` before sending (codex-rs/core/src/client.rs
-	// `reasoning_effort_for_request`); the subagent orchestration that makes
-	// ultra distinct lives in the Codex client, not in the request body. This
-	// plugin is a proxy, so `-ultra` is accepted as an alias and sent as `max`.
+	// resolves it before sending (codex-rs/protocol/src/openai_models/
+	// reasoning_effort.rs `resolve_reasoning_effort`): the catalog's
+	// `multi_agent_reasoning_effort` when the model has one (xhigh on GPT-6
+	// Astra and GPT-6.1 Sol/Terra), otherwise `max`. The subagent orchestration
+	// that makes ultra distinct lives in the Codex client, not in the request
+	// body, so this proxy only mirrors the resolved effort.
 	if (effort === "ultra") {
+		const ultraEffort =
+			getCodexCatalogEntry(canonicalModelName)?.multiAgentReasoningEffort ?? "max";
 		if (!supportsUltra) {
 			logWarn(
-				`${canonicalModelName} does not offer ultra; sending '${originalRequestedEffort}' as max`,
+				`${canonicalModelName} does not offer ultra; sending '${originalRequestedEffort}' as ${ultraEffort}`,
 			);
 		}
-		effort = "max";
+		effort = ultraEffort;
 	}
 
 	// `max` arrived with GPT-5.6. Older families fall through to the xhigh
@@ -865,6 +875,9 @@ function sanitizeReasoningSummary(
 	if (normalized === "concise" || normalized === "detailed" || normalized === "auto") {
 		return normalized;
 	}
+	// Codex's catalog default is `none` and it omits the field entirely; an
+	// explicit `none`/`off` is honored the same way (dropped at serialize time).
+	if (normalized === "none" || normalized === "off") return "none";
 	return "auto";
 }
 
@@ -1345,10 +1358,10 @@ export async function transformRequestBody(
 	};
 
 	// Configure text verbosity (support user config)
-	// Default: "medium" (matches Codex CLI default for all GPT-5 models)
+	// Default: the catalog's default_verbosity (low on Codex catalog models), else "medium"
 	body.text = {
 		...body.text,
-		verbosity: resolveTextVerbosity(modelConfig, body),
+		verbosity: resolveTextVerbosity(modelConfig, body, normalizedModel),
 	};
 
 	if (shouldApplyFastSessionTuning) {

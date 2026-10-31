@@ -110,8 +110,8 @@ describe("gpt-5.6 client identity (#196)", () => {
 
 		expect(wire.model).toBe("gpt-5.6-sol");
 		// Tools move into input as a leading additional_tools developer item;
-		// top-level instructions empty, tools omitted, no tool fan-out.
-		expect(wire.instructions).toBe("");
+		// top-level instructions and tools omitted, no tool fan-out.
+		expect(wire).not.toHaveProperty("instructions");
 		expect(wire.tools).toBeUndefined();
 		expect(wire.input[0]).toMatchObject({
 			type: "additional_tools",

@@ -85,8 +85,8 @@ describe("GPT-6.1 Sol Model Support", () => {
 			expect(getReasoningConfig(SOL61, { reasoningEffort: "xhigh" }).effort).toBe("xhigh");
 		});
 
-		it("sends ultra as max, the client-side tier's wire form", () => {
-			expect(getReasoningConfig(SOL61, { reasoningEffort: "ultra" }).effort).toBe("max");
+		it("sends ultra as the catalog multi_agent_reasoning_effort (xhigh)", () => {
+			expect(getReasoningConfig(SOL61, { reasoningEffort: "ultra" }).effort).toBe("xhigh");
 		});
 
 		it("floors none and minimal to low", () => {

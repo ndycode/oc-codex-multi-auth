@@ -198,6 +198,7 @@ import {
         rewriteUrlForCodex,
 	shouldRefreshToken,
 	transformRequestForCodex,
+	applyServiceTier,
 } from "./lib/request/fetch-helpers.js";
 import { shapeBodyForModel } from "./lib/request/helpers/responses-lite.js";
 import {
@@ -210,6 +211,7 @@ import {
 	clampReasoningForModel,
 	upsertBackendModelIdentityMessage,
 } from "./lib/request/request-transformer.js";
+import { TurnStateStore } from "./lib/request/turn-state.js";
 import {
 	getRateLimitBackoff,
 	RATE_LIMIT_SHORT_RETRY_THRESHOLD_MS,
@@ -338,6 +340,12 @@ function isLoopbackGatewayHost(hostname: string): boolean {
 	}
 	return LOOPBACK_GATEWAY_HOSTS.has(hostname);
 }
+
+/**
+ * `x-codex-turn-state` sticky-routing tokens, per session and account. Process
+ * scoped like the other request-path caches; bounded inside the store.
+ */
+const turnStateStore = new TurnStateStore();
 
 /** How often the "spending Codex credits" toast repeats while one account keeps serving on credits. */
 const CREDITS_TOAST_INTERVAL_MS = 10 * 60_000;
@@ -2853,6 +2861,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 							);
 										let requestInit = transformation?.updatedInit ?? baseInit;
 										let transformedBody: RequestBody | undefined = transformation?.body;
+										const requestedServiceTier = transformation?.requestedServiceTier;
 										const promptCacheKey = transformedBody?.prompt_cache_key;
 										let model = transformedBody?.model;
 										const requestedModel = model ?? null;
@@ -3107,6 +3116,11 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 										reasoning: clampedReasoning,
 									};
 								}
+								// The tier was resolved against the requested model; re-resolve it
+								// for the fallback target (its catalog may advertise other tiers
+								// or a different default).
+								transformedBody = { ...transformedBody };
+								applyServiceTier(transformedBody, requestedServiceTier);
 
 								requestInit = {
 									...(requestInit ?? {}),
@@ -3642,6 +3656,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 												accountManager.markToastShown(account.index);
 											}
 
+								const turnStateAccountKey = `${account.index}:${accountId}`;
 								const headers = createCodexHeaders(
 									requestInit,
 									accountId,
@@ -3650,6 +3665,15 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 										model,
 										promptCacheKey,
 										organizationId: account.organizationId,
+										serviceTier:
+											typeof transformedBody?.service_tier === "string"
+												? transformedBody.service_tier
+												: undefined,
+										turnState: turnStateStore.forRequest(
+											promptCacheKey,
+											turnStateAccountKey,
+											transformedBody?.input,
+										),
 									},
 								);
 
@@ -3855,6 +3879,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								latencyMs: fetchLatencyMs,
 								headers: Object.fromEntries(response.headers.entries()),
 							});
+							turnStateStore.capture(promptCacheKey, turnStateAccountKey, response.headers);
 							const responseCredits = parseCreditsHeaders(response.headers);
 							if (responseCredits) {
 								creditsLedger.record(getCreditsAccountKey(account), responseCredits);

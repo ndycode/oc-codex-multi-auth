@@ -18,9 +18,10 @@
  *   parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
  *
  * So for a lite model the tool definitions move *into* `input` as a leading
- * `additional_tools` developer item, the base instructions follow as a
- * developer message, top-level `instructions` becomes an empty string and
- * `tools` is omitted entirely. Codex also strips image `detail` fields and
+ * `additional_tools` developer item (function tools grouped into one
+ * `functions` namespace, and the item skipped when there are no tools), the
+ * base instructions follow as a developer message, and neither top-level
+ * `instructions` nor `tools` is sent. Codex also strips image `detail` fields and
  * sends an `x-openai-internal-codex-responses-lite: true` header.
  *
  * Sending the classic shape to a lite model is what this module exists to
@@ -131,13 +132,71 @@ function stripImageDetails(items: InputItem[]): void {
 	}
 }
 
+/** Namespace Codex groups top-level function and custom tools under. */
+export const DEFAULT_FUNCTION_NAMESPACE = "functions";
+
+/**
+ * Group function and custom tools into one `functions` namespace, mirroring
+ * `create_tools_json_for_responses_lite` (codex-rs/tools/src/tool_spec.rs):
+ * the namespace takes the position of the first function-like tool, an
+ * existing `functions` namespace is merged into it, and every other tool type
+ * (web search, image generation, foreign namespaces) passes through unchanged.
+ */
+export function groupToolsForResponsesLite(tools: unknown[]): unknown[] {
+	const functions: { type: "namespace"; name: string; description: string; tools: unknown[] } = {
+		type: "namespace",
+		name: DEFAULT_FUNCTION_NAMESPACE,
+		description: "",
+		tools: [],
+	};
+	let functionsIndex: number | undefined;
+	const out: unknown[] = [];
+	for (const tool of tools) {
+		if (isRecord(tool) && (tool.type === "function" || tool.type === "custom")) {
+			functions.tools.push(tool);
+		} else if (
+			isRecord(tool) &&
+			tool.type === "namespace" &&
+			tool.name === DEFAULT_FUNCTION_NAMESPACE
+		) {
+			if (typeof tool.description === "string" && tool.description.trim()) {
+				functions.description = tool.description;
+			}
+			if (Array.isArray(tool.tools)) functions.tools.push(...tool.tools);
+		} else {
+			out.push(tool);
+			continue;
+		}
+		functionsIndex ??= out.length;
+	}
+	if (functionsIndex !== undefined && functions.tools.length > 0) {
+		out.splice(functionsIndex, 0, functions);
+	}
+	return out;
+}
+
+/** Base instructions as the leading developer message Codex sends. */
+function instructionsMessage(instructions: string): InputItem {
+	return {
+		type: "message",
+		role: "developer",
+		content: [{ type: "input_text", text: instructions }],
+	} as unknown as InputItem;
+}
+
 /**
  * Serialize-time shaping: return the body as it should go on the wire for
  * `body.model`.
  *
- * The canonical transformed body is always kept in the classic shape. Lite is a
- * per-attempt, model-dependent view of it, derived from a deep copy so the
- * canonical body is never mutated.
+ * Since Codex 0.162 (openai/codex c9253c49) no request carries a top-level
+ * `instructions` field: the base instructions travel as the first developer
+ * message in `input` for every model, lite or classic. Lite models then add
+ * the `additional_tools` item in front of it. A `reasoning.summary` of `none`
+ * is dropped, as Codex omits the field rather than sending `none`.
+ *
+ * The canonical transformed body is always kept in the classic shape. The wire
+ * shape is a per-attempt, model-dependent view of it, derived from a deep copy
+ * so the canonical body is never mutated.
  *
  * This matters for the unsupported-model fallback: a `gpt-5.6-sol` request that
  * degrades to `gpt-5.5` must be sent in the classic shape. If the canonical
@@ -146,8 +205,32 @@ function stripImageDetails(items: InputItem[]): void {
  * `additional_tools` item that a non-lite model does not interpret.
  */
 export function shapeBodyForModel(body: RequestBody): RequestBody {
-	if (!usesResponsesLite(body.model)) return body;
-	return applyResponsesLite(structuredClone(body));
+	const lite = usesResponsesLite(body.model);
+	if (!lite && !("instructions" in body) && body.reasoning?.summary !== "none") {
+		return body;
+	}
+	const shaped = structuredClone(body);
+	if (lite) {
+		applyResponsesLite(shaped);
+	} else {
+		moveInstructionsIntoInput(shaped);
+	}
+	if (shaped.reasoning?.summary === "none") {
+		delete shaped.reasoning.summary;
+	}
+	return shaped;
+}
+
+/** Move top-level `instructions` into a leading developer message, in place. */
+function moveInstructionsIntoInput(body: RequestBody): void {
+	// Upstream checks `!text.is_empty()`, not a trimmed check.
+	const instructions = typeof body.instructions === "string" ? body.instructions : "";
+	if (instructions.length > 0) {
+		const existingInput = Array.isArray(body.input) ? body.input : [];
+		body.input = [instructionsMessage(instructions), ...existingInput];
+	}
+	// `undefined` drops the key entirely on JSON.stringify.
+	body.instructions = undefined;
 }
 
 /**
@@ -160,32 +243,30 @@ export function shapeBodyForModel(body: RequestBody): RequestBody {
 export function applyResponsesLite(body: RequestBody): RequestBody {
 	const tools = Array.isArray(body.tools) ? body.tools : [];
 
-	// Codex emits the additional_tools item even when the tool list is empty.
-	const prefix: InputItem[] = [
-		{
+	// Codex skips the additional_tools item when the turn has no tools
+	// (openai/codex 6326163b) and groups function tools into one namespace.
+	const prefix: InputItem[] = [];
+	if (tools.length > 0) {
+		prefix.push({
 			type: "additional_tools",
 			role: "developer",
-			tools,
-		} as unknown as InputItem,
-	];
+			tools: groupToolsForResponsesLite(tools),
+		} as unknown as InputItem);
+	}
 
 	// Upstream checks `!text.is_empty()`, not a trimmed check.
 	const instructions =
 		typeof body.instructions === "string" ? body.instructions : "";
 	if (instructions.length > 0) {
-		prefix.push({
-			type: "message",
-			role: "developer",
-			content: [{ type: "input_text", text: instructions }],
-		} as unknown as InputItem);
+		prefix.push(instructionsMessage(instructions));
 	}
 
 	const existingInput = Array.isArray(body.input) ? body.input : [];
 	body.input = [...prefix, ...existingInput];
 
-	// Top-level instructions become empty and tools are omitted; both now live
-	// in `input`. `undefined` drops the key entirely on JSON.stringify.
-	body.instructions = "";
+	// Top-level instructions and tools are omitted; both now live in `input`.
+	// `undefined` drops the key entirely on JSON.stringify.
+	body.instructions = undefined;
 	body.tools = undefined;
 
 	// Lite requests never fan out tool calls.

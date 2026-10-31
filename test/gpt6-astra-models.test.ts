@@ -161,11 +161,13 @@ describe("GPT-6 Astra and Daybreak Model Support", () => {
 		// Codex rewrites Ultra -> Max client-side
 		// (codex-rs/core/src/client.rs `reasoning_effort_for_request`), so ultra
 		// must never reach the backend.
-		it("collapses ultra to max", () => {
+		// Codex resolves ultra to the catalog's multi_agent_reasoning_effort
+		// (xhigh on Astra), falling back to max when a model has none.
+		it("resolves ultra like codex-rs resolve_reasoning_effort", () => {
 			for (const model of ALL) {
 				expect(
 					getReasoningConfig(model, { reasoningEffort: "ultra" }).effort,
-				).toBe("max");
+				).toBe(model === ASTRA ? "xhigh" : "max");
 			}
 		});
 
@@ -213,7 +215,7 @@ describe("GPT-6 Astra and Daybreak Model Support", () => {
 
 		it("resolves effort through the bare gpt-6 alias too", () => {
 			expect(getReasoningConfig("gpt-6", { reasoningEffort: "ultra" }).effort).toBe(
-				"max",
+				"xhigh",
 			);
 			expect(getReasoningConfig("gpt-6", { reasoningEffort: "none" }).effort).toBe(
 				"low",

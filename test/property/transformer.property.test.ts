@@ -182,7 +182,7 @@ describe("getReasoningConfig property tests", () => {
         }),
         (model, config) => {
           const result = getReasoningConfig(model, config);
-          expect(["auto", "concise", "detailed", "off", "on"]).toContain(result.summary);
+          expect(["auto", "concise", "detailed", "none"]).toContain(result.summary);
           return true;
         }
       )
