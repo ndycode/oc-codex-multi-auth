@@ -11,7 +11,8 @@
  * body: a request whose last input item is a tool result continues the
  * current turn; anything else (a new user message) starts a fresh one. State
  * is keyed per session (`prompt_cache_key`) and per account, so rotating to a
- * different account never replays another owner's token.
+ * different account never replays another owner's token, and a new turn
+ * clears the tokens of every account that served the session.
  */
 import { OPENAI_HEADERS } from "../constants.js";
 import type { InputItem } from "../types.js";
@@ -31,17 +32,15 @@ export function isTurnContinuation(input: InputItem[] | undefined): boolean {
 }
 
 export class TurnStateStore {
-	private readonly states = new Map<string, string>();
+	/** session -> (account -> token) for the session's current turn. */
+	private readonly sessions = new Map<string, Map<string, string>>();
 
-	constructor(private readonly maxEntries = 512) {}
-
-	private key(sessionKey: string, accountKey: string): string {
-		return `${accountKey}\u0000${sessionKey}`;
-	}
+	constructor(private readonly maxSessions = 512) {}
 
 	/**
 	 * Token to send on this request, if any. A request that starts a new turn
-	 * clears the stored token so the next response can seed a fresh one.
+	 * drops every account's token for the session, so no account can replay a
+	 * previous turn's routing after the pool rotates.
 	 */
 	forRequest(
 		sessionKey: string | undefined,
@@ -49,30 +48,33 @@ export class TurnStateStore {
 		input: InputItem[] | undefined,
 	): string | undefined {
 		if (!sessionKey) return undefined;
-		const key = this.key(sessionKey, accountKey);
 		if (!isTurnContinuation(input)) {
-			this.states.delete(key);
+			this.sessions.delete(sessionKey);
 			return undefined;
 		}
-		return this.states.get(key);
+		return this.sessions.get(sessionKey)?.get(accountKey);
 	}
 
-	/** Remember the token from a response; the first token of a turn wins. */
+	/** Remember the token from a response; the first token of a turn wins per account. */
 	capture(sessionKey: string | undefined, accountKey: string, headers: Headers): void {
 		if (!sessionKey) return;
 		const token = headers.get(OPENAI_HEADERS.TURN_STATE)?.trim();
 		if (!token) return;
-		const key = this.key(sessionKey, accountKey);
-		if (this.states.has(key)) return;
-		this.states.set(key, token);
-		while (this.states.size > this.maxEntries) {
-			const oldest = this.states.keys().next().value;
-			if (oldest === undefined) break;
-			this.states.delete(oldest);
+		let accounts = this.sessions.get(sessionKey);
+		if (!accounts) {
+			accounts = new Map();
+			this.sessions.set(sessionKey, accounts);
+			while (this.sessions.size > this.maxSessions) {
+				const oldest = this.sessions.keys().next().value;
+				if (oldest === undefined) break;
+				this.sessions.delete(oldest);
+			}
 		}
+		if (!accounts.has(accountKey)) accounts.set(accountKey, token);
 	}
 
+	/** Number of sessions holding turn state. */
 	get size(): number {
-		return this.states.size;
+		return this.sessions.size;
 	}
 }

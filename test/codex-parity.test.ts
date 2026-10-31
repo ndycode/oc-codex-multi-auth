@@ -211,6 +211,21 @@ describe("Codex 0.166 catalog parity", () => {
 			expect(store.forRequest("s", "a", toolResult)).toBeUndefined();
 		});
 
+		it("drops every account's token when the session starts a new turn (pool rotation)", () => {
+			const store = new TurnStateStore();
+			// Turn 1 served by account A.
+			store.forRequest("s", "A", user);
+			store.capture("s", "A", new Headers({ "x-codex-turn-state": "turn1-A" }));
+			// Turn 2's user message lands on account B.
+			expect(store.forRequest("s", "B", user)).toBeUndefined();
+			store.capture("s", "B", new Headers({ "x-codex-turn-state": "turn2-B" }));
+			// A tool continuation rotates back to A: no stale turn-1 token.
+			expect(store.forRequest("s", "A", toolResult)).toBeUndefined();
+			store.capture("s", "A", new Headers({ "x-codex-turn-state": "turn2-A" }));
+			expect(store.forRequest("s", "A", toolResult)).toBe("turn2-A");
+			expect(store.forRequest("s", "B", toolResult)).toBe("turn2-B");
+		});
+
 		it("ignores requests without a session key and bounds its size", () => {
 			const store = new TurnStateStore(2);
 			store.capture(undefined, "a", new Headers({ "x-codex-turn-state": "t" }));
