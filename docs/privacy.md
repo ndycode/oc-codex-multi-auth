@@ -45,7 +45,9 @@ Two deliberate overrides can change where traffic goes:
 - `Authorization: Bearer <access-token>`, `chatgpt-account-id`, `OpenAI-Beta: responses=experimental`, `accept: text/event-stream`.
 - `originator` + `user-agent`: `codex_cli_rs/<version> (<os> <release>; <arch>)` for standard models, or `opencode/<version> (<platform> <release>; <arch>)` for responses-lite models (GPT-5.6, GPT-6, Daybreak). `CODEX_AUTH_CLIENT_IDENTITY=codex|opencode` forces one identity; `CODEX_AUTH_DISABLE_CODEX_USER_AGENT=1` suppresses the UA rewrite.
 - `x-openai-internal-codex-responses-lite: true` on responses-lite models.
-- `conversation_id` / `session_id` when a prompt-cache key is active.
+- `session-id` / `thread-id` (current Codex names) and `conversation_id` / `session_id` (legacy names) when a prompt-cache key is active.
+- `x-codex-routing-hint: model=<id>[;tier=<tier>]` naming the model and service tier, and `x-codex-turn-state` replaying the backend's own sticky-routing token within a turn.
+- `version: <codex client version>` only under the Codex CLI identity.
 - `openai-organization` only when `CODEX_AUTH_SEND_ORGANIZATION_HEADER=1` (off by default).
 - Any inbound `x-api-key` header is deleted, not forwarded.
 

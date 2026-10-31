@@ -18,7 +18,7 @@
         "gpt-6.1-terra": {
           "name": "GPT 6.1 Terra (OAuth)",
           "limit": {
-            "context": 872000,
+            "context": 500000,
             "output": 128000
           },
           "modalities": {
@@ -69,7 +69,7 @@
         "gpt-6.1-sol": {
           "name": "GPT 6.1 Sol (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -117,7 +117,7 @@
         "gpt-6-astra": {
           "name": "GPT 6 Astra (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -165,7 +165,7 @@
         "gpt-6-sol": {
           "name": "GPT 6 Sol (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -213,7 +213,7 @@
         "gpt-6-luna": {
           "name": "GPT 6 Luna (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -256,7 +256,7 @@
         "gpt-5.6-sol": {
           "name": "GPT 5.6 Sol (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -304,7 +304,7 @@
         "gpt-5.6-terra": {
           "name": "GPT 5.6 Terra (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -352,7 +352,7 @@
         "gpt-5.6-luna": {
           "name": "GPT 5.6 Luna (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -395,7 +395,7 @@
         "gpt-5.5": {
           "name": "GPT 5.5 (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -438,7 +438,7 @@
         "gpt-5.5-fast": {
           "name": "GPT 5.5 Fast (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
