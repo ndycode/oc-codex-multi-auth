@@ -252,6 +252,41 @@ describe("V2 compatibility adapter", () => {
 		}
 	});
 
+	it("falls back to provider-configured session affinity headers when the call carries none", async () => {
+		const h = host();
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		const configured = `ses_${"c3".repeat(32)}`;
+		const sdkEvent: AISDKHooks["sdk"] = {
+			model: h.model,
+			package: h.provider.package,
+			options: { headers: { "x-session-affinity": configured } },
+		};
+		await h.hooks.get("sdk")?.(sdkEvent);
+		const languageEvent: AISDKHooks["language"] = { model: h.model, sdk: sdkEvent.sdk! };
+		await h.hooks.get("language")?.(languageEvent);
+		const captured: Record<string, unknown>[] = [];
+		const stop = new Error("captured request");
+		transport.mockImplementation(async (_input: unknown, init?: RequestInit) => {
+			captured.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+			throw stop;
+		});
+		const prompt: Parameters<NonNullable<typeof languageEvent.language>["doGenerate"]>[0]["prompt"] = [
+			{ role: "user", content: [{ type: "text", text: "hi" }] },
+		];
+		try {
+			await expect(languageEvent.language!.doGenerate({ prompt })).rejects.toThrow("captured request");
+			// Per-call affinity headers still win over the provider-level ones.
+			await expect(languageEvent.language!.doGenerate({ prompt, headers: { "x-session-affinity": "per-call" } }))
+				.rejects.toThrow("captured request");
+			expect(captured).toHaveLength(2);
+			expect(captured[0]!.prompt_cache_key).toBe("c3".repeat(32));
+			expect(captured[1]!.prompt_cache_key).toBe("per-call");
+		} finally {
+			transport.mockImplementation(async () => new Response("ok"));
+			await cleanup();
+		}
+	});
+
 	it("normalizes session affinity headers like OpenCode's promptCacheKey", () => {
 		const hex = "0f".repeat(32);
 		expect(promptCacheKeyFromHeaders(undefined)).toBeUndefined();

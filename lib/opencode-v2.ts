@@ -30,8 +30,16 @@ const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
 if (!existsSync(providerModule)) providerModule.pathname = providerModule.pathname.replace(/\.js$/, ".ts");
 const providerPackage = `aisdk:${providerModule.href}`;
 
-/** Set stateless options before the SDK lowers history into server-side references. */
-function createV2Language(model: ReturnType<ReturnType<typeof createOpenAI>["responses"]>) {
+/**
+ * Set stateless options before the SDK lowers history into server-side references.
+ * `configuredHeaders` are the provider/model headers the SDK was built with; the
+ * SDK only applies them at HTTP assembly, so they are passed here to seed the
+ * prompt cache key when a call carries no affinity headers of its own.
+ */
+function createV2Language(
+	model: ReturnType<ReturnType<typeof createOpenAI>["responses"]>,
+	configuredHeaders?: Record<string, string>,
+) {
 	type Options = Parameters<typeof model.doGenerate>[0];
 	const stateless = (options: Options): Options => {
 		const openai: NonNullable<Options["providerOptions"]>[string] = { ...options.providerOptions?.openai, store: false };
@@ -43,7 +51,7 @@ function createV2Language(model: ReturnType<ReturnType<typeof createOpenAI>["res
 		// so cache routing is unpinned and continuations miss the cache.
 		const cacheKey = typeof openai.promptCacheKey === "string" && openai.promptCacheKey
 			? openai.promptCacheKey
-			: promptCacheKeyFromHeaders(options.headers);
+			: promptCacheKeyFromHeaders(options.headers) ?? promptCacheKeyFromHeaders(configuredHeaders);
 		if (cacheKey) openai.promptCacheKey = cacheKey;
 		return { ...options, providerOptions: { ...options.providerOptions, openai } };
 	};
@@ -401,6 +409,9 @@ async function setupScopedV2(
 			throw new Error("Connect a Codex multi-account OAuth method with /connect first");
 		};
 
+		// Headers each SDK instance was built with, so the language hook can derive
+		// the prompt cache key from provider-configured session affinity headers.
+		const sdkHeaders = new WeakMap<object, Record<string, string>>();
 		// The provider record's model inventory feeds the V1 loader's per-model
 		// config map; captured on each transform so the latest snapshot wins.
 		let providerModels: ReadonlyMap<string, Model.Info> | undefined;
@@ -451,7 +462,7 @@ async function setupScopedV2(
 			const organization = optionString("organization");
 			const project = optionString("project");
 			const name = optionString("name");
-			event.sdk = createOpenAI({
+			const sdk = createOpenAI({
 				apiKey: typeof options.apiKey === "string" ? options.apiKey : "codex-oauth",
 				baseURL: typeof options.baseURL === "string" ? options.baseURL : undefined,
 				...(organization ? { organization } : {}),
@@ -460,6 +471,8 @@ async function setupScopedV2(
 				...(Object.keys(headers).length > 0 ? { headers } : {}),
 				fetch: createV2Fetch((input, init) => run(() => fetcher(input, init)), context.app.version),
 			});
+			sdkHeaders.set(sdk, headers);
+			event.sdk = sdk;
 		}), { providerID: "openai" }));
 		track(await context.model.transform((editor) => {
 			if (!enabled) return;
@@ -473,7 +486,7 @@ async function setupScopedV2(
 		track(await context.aisdk.hook("language", (event) => {
 			if (!enabled) return;
 			const sdk = event.sdk as ReturnType<typeof createOpenAI>;
-			event.language = createV2Language(sdk.responses(event.model.modelID));
+			event.language = createV2Language(sdk.responses(event.model.modelID), sdkHeaders.get(sdk));
 		}, { providerID: "openai" }));
 
 		track(await context.tool.transform((editor) => {
