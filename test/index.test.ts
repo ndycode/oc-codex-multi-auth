@@ -5951,6 +5951,33 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			expect(mockStorage.accounts[0]?.quotaExhaustedUntil).toBe(resetAt);
 		});
 
+		it("carries the turn-state token from a first response onto a same-account empty-response retry", async () => {
+			await makeManager([accountRecord()]);
+			const sentTurnStates: Array<string | null> = [];
+			let call = 0;
+			vi.mocked(globalThis.fetch).mockImplementation(async (_url, init) => {
+				// Snapshot at call time: the retry reuses (and mutates) the same Headers.
+				sentTurnStates.push(new Headers(init?.headers).get("x-codex-turn-state"));
+				call += 1;
+				return call === 1
+					? new Response("{}", { status: 200, headers: { "x-codex-turn-state": "retry-token" } })
+					: new Response(JSON.stringify({ content: "ok" }), { status: 200 });
+			});
+			const { sdk } = await setupPlugin();
+			if (!sdk.fetch) throw new Error("Missing plugin fetch");
+			const pending = sdk.fetch("https://api.openai.com/v1/chat", {
+				method: "POST",
+				body: JSON.stringify({
+					model: "gpt-5.5",
+					prompt_cache_key: "ses-retry",
+					input: [{ type: "message", role: "user", content: "hi" }],
+				}),
+			});
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect((await pending).status).toBe(200);
+			expect(sentTurnStates).toEqual([null, "retry-token"]);
+		});
+
 		it("replays x-codex-turn-state within a turn and drops it on the next user turn", async () => {
 			await makeManager([accountRecord()]);
 			const fetchHelpers = await import("../lib/request/fetch-helpers.js");

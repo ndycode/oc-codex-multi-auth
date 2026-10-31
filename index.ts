@@ -116,6 +116,7 @@ import {
         PROVIDER_ID,
         ACCOUNT_LIMITS,
         MAX_QUOTA_FALLBACK_SWITCHES,
+	OPENAI_HEADERS,
 } from "./lib/constants.js";
 import {
 	initLogger,
@@ -3880,6 +3881,10 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								headers: Object.fromEntries(response.headers.entries()),
 							});
 							turnStateStore.capture(promptCacheKey, turnStateAccountKey, response.headers);
+							// Same-account retries (short 429, empty response) reuse `headers`;
+							// carry the token this turn now holds, like Codex's per-turn OnceLock.
+							const heldTurnState = turnStateStore.current(promptCacheKey, turnStateAccountKey);
+							if (heldTurnState) headers.set(OPENAI_HEADERS.TURN_STATE, heldTurnState);
 							const responseCredits = parseCreditsHeaders(response.headers);
 							if (responseCredits) {
 								creditsLedger.record(getCreditsAccountKey(account), responseCredits);

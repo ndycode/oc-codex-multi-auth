@@ -55,6 +55,16 @@ export class TurnStateStore {
 		return this.sessions.get(sessionKey)?.get(accountKey);
 	}
 
+	/**
+	 * The token currently held for this session and account, without treating
+	 * the request as a turn boundary. Used to refresh the header on same-account
+	 * retries of a request whose first response seeded the token.
+	 */
+	current(sessionKey: string | undefined, accountKey: string): string | undefined {
+		if (!sessionKey) return undefined;
+		return this.sessions.get(sessionKey)?.get(accountKey);
+	}
+
 	/** Remember the token from a response; the first token of a turn wins per account. */
 	capture(sessionKey: string | undefined, accountKey: string, headers: Headers): void {
 		if (!sessionKey) return;
