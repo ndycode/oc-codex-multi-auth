@@ -7,6 +7,23 @@ The current stable release line is `6.x`. This file is the complete release hist
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.30.0] - 2026-10-31
+
+### Added
+- GPT-6.1 Terra (`gpt-6.1-terra`) with `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` efforts. It has its own model family and prompt cache (and no auto-fallback chain), uses responses-lite, and ships in both config templates with a `low` default. The catalog now covers 12 bases and 65 variants. ([#299](https://github.com/ndycode/oc-codex-multi-auth/pull/299), thanks @WarGloom)
+- Codex Fast tier. A host `serviceTier`, the new per-model or global `serviceTier` option (`fast`/`priority`, `flex`, `default`), or a `-fast` model id now sends `service_tier: "priority"` to models whose Codex catalog entry offers it. Before this, `gpt-5.5-fast` was only an alias. `gpt-6-sol` and `gpt-6-luna` default to Fast as in stock Codex, and `serviceTier: "default"` opts out. The tier is re-resolved on model fallback. ([#300](https://github.com/ndycode/oc-codex-multi-auth/pull/300))
+- Codex 0.166 request headers: `x-codex-routing-hint`, `session-id`/`thread-id` (sent alongside the legacy `session_id`/`conversation_id`), `version` under the Codex CLI identity, and `x-codex-turn-state` sticky routing. The turn-state token is replayed within a turn and on same-account retries. It is tracked per session and account, and dropped at the next user message. ([#300](https://github.com/ndycode/oc-codex-multi-auth/pull/300))
+
+### Changed
+- `ultra` now resolves the way Codex does: to the catalog's multi-agent effort, which is `xhigh` on `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6.1-terra`, and to `max` elsewhere. Native mode now applies the same effort clamps as legacy mode, so `ultra` never reaches the wire. ([#299](https://github.com/ndycode/oc-codex-multi-auth/pull/299), [#300](https://github.com/ndycode/oc-codex-multi-auth/pull/300))
+- Request shape follows Codex 0.166. No request carries a top-level `instructions` field; base instructions are the first developer message in `input`. Responses-lite groups function and custom tools into the `functions` namespace and skips `additional_tools` when a turn has no tools. ([#300](https://github.com/ndycode/oc-codex-multi-auth/pull/300))
+- `text.verbosity` falls back to the Codex catalog default (`low`; `high` on Daybreak Red) in both modes. An explicit `reasoningSummary: "none"`/`"off"` now omits the field instead of becoming `auto`. ([#300](https://github.com/ndycode/oc-codex-multi-auth/pull/300))
+- Shipped templates advertise the Codex working context window: 272000, or 500000 for `gpt-6.1-terra`, instead of 1050000/872000. OpenCode now compacts when Codex would. ([#300](https://github.com/ndycode/oc-codex-multi-auth/pull/300))
+
+### Fixed
+- OpenCode V2 requests now carry `prompt_cache_key`, plus the matching `session_id`/`conversation_id`, derived from the session-affinity headers. The host's AI SDK bridge drops `promptCacheKey`, so tool-result continuations used to miss the prompt cache. Provider-configured affinity headers are honored too. ([#296](https://github.com/ndycode/oc-codex-multi-auth/issues/296), [#297](https://github.com/ndycode/oc-codex-multi-auth/pull/297))
+- A plain-string `input` is no longer dropped when instructions or `additional_tools` are prepended. ([#300](https://github.com/ndycode/oc-codex-multi-auth/pull/300))
+
 ## [6.29.0] - 2026-10-11
 
 ### Added
