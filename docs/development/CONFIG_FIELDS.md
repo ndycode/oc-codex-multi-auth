@@ -35,8 +35,9 @@ These are interpreted by OpenCode (and consumed by the plugin via
 | `plugin` | string[] | `[]` | `"oc-codex-multi-auth"` registers the OAuth provider and hooks |
 | `model` | string | host-chosen | default model id, e.g. `openai/gpt-6-sol`; installer writes it only when the templates define matching entries (`--full`/`--modern`/`--legacy`) |
 | `provider.openai.options.reasoningEffort` | `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `ultra` | `medium` | default reasoning depth; see the effort table in [configuration.md](../configuration.md#reasoning-effort) |
-| `provider.openai.options.reasoningSummary` | `auto` \| `concise` \| `detailed` (`off`/`on` normalize to `auto`) | `auto` | reasoning summary depth |
-| `provider.openai.options.textVerbosity` | `low` \| `medium` \| `high` | `medium` | response verbosity |
+| `provider.openai.options.reasoningSummary` | `auto` \| `concise` \| `detailed` \| `none` (`off` means `none`; `on` normalizes to `auto`) | `auto` | reasoning summary depth; `none` omits the field |
+| `provider.openai.options.textVerbosity` | `low` \| `medium` \| `high` | Codex catalog default (`low`; `high` on Daybreak Red), else `medium` | response verbosity |
+| `provider.openai.options.serviceTier` | `fast` (alias `priority`) \| `flex` \| `default` | Codex catalog default (Fast on `gpt-6-sol`/`gpt-6-luna`) | Codex service tier; see [Service tier (Fast)](../configuration.md#service-tier-fast) |
 | `provider.openai.options.include` | string[] | `["reasoning.encrypted_content"]` | extra response fields; encrypted reasoning is required with `store: false` and enforced on the wire |
 | `provider.openai.options.store` | `false` | `false` | `true` is not supported by the stateless ChatGPT Codex API |
 | `provider.openai.models.<id>` | object | none | model registry entry (`name`, `family`, `variant`, `context`, `output`, `reasoning`, `tool_call`, `options`, …) |
