@@ -18,6 +18,7 @@ import {
 	transformRequestBody,
 	normalizeModel,
 	upsertBackendModelIdentityMessage,
+	clampReasoningForModel,
 } from "./request-transformer.js";
 import {
 	DAYBREAK_BLUE_MODEL_ID,
@@ -1035,6 +1036,14 @@ export async function transformRequestForCodex(
 				normalizedModel,
 			);
 			body.input = upsertBackendModelIdentityMessage(body.input, normalizedModel);
+			// Native mode keeps the host's effort but still applies the
+			// family clamps legacy mode does: `ultra` is a client-side tier
+			// sent as `max`, and `none`/`max`/`xhigh` step to what the
+			// family accepts. Without this, the default mode put a host
+			// variant's `ultra` on the wire verbatim.
+			if (body.reasoning?.effort) {
+				body.reasoning = clampReasoningForModel(body.reasoning, normalizedModel);
+			}
 
 			// Native mode is a lighter transform, not a passthrough: the
 			// stateless/privacy invariants apply on EVERY Codex-bound request.

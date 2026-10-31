@@ -99,6 +99,39 @@ describe("GPT-6.1 Terra Model Support", () => {
 		const headers = createCodexHeaders(transformed!.updatedInit, "acct", "token", { model: wire.model });
 		expect(headers.get(RESPONSES_LITE_HEADER)).toBe(RESPONSES_LITE_HEADER_VALUE);
 	});
+	it.each([
+		[TERRA61, "ultra", "max"],
+		[TERRA61, "none", "low"],
+		[TERRA61, "xhigh", "xhigh"],
+		[SOL61, "ultra", "max"],
+		["gpt-5.5", "max", "xhigh"],
+	])("clamps a native-mode %s effort %s to %s on the wire", async (model, effort, expected) => {
+		const transformed = await transformRequestForCodex(
+			{ method: "POST" },
+			"https://chatgpt.com/backend-api/codex/responses",
+			{ global: {}, models: {} },
+			true,
+			{ model, input: [], reasoning: { effort, summary: "auto" } },
+			{ requestTransformMode: "native" },
+		);
+		const wire = JSON.parse(String(transformed!.updatedInit.body)) as {
+			reasoning: { effort?: string; summary?: string };
+		};
+		expect(wire.reasoning.effort).toBe(expected);
+		expect(wire.reasoning.summary).toBe("auto");
+	});
+	it("leaves a native-mode body without an effort alone", async () => {
+		const transformed = await transformRequestForCodex(
+			{ method: "POST" },
+			"https://chatgpt.com/backend-api/codex/responses",
+			{ global: {}, models: {} },
+			true,
+			{ model: "gpt-5.5", input: [] },
+			{ requestTransformMode: "native" },
+		);
+		const wire = JSON.parse(String(transformed!.updatedInit.body)) as { reasoning?: unknown };
+		expect(wire.reasoning).toBeUndefined();
+	});
 	it("ships each effort in both templates", () => {
 		const modern = JSON.parse(readFileSync("config/opencode-modern.json", "utf8"));
 		const legacy = JSON.parse(readFileSync("config/opencode-legacy.json", "utf8"));
