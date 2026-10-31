@@ -172,9 +172,9 @@ function printHelp(write = console.log) {
 		"Options:\n" +
 		"  --plugin-only      Register plugins without changing provider.openai\n" +
 		"  --v2               Register for OpenCode V2 (includes automatic quota UI loading)\n" +
-		"  --modern           Force compact modern config (11 base OAuth models + --variant presets)\n" +
-		"  --full             Install compact base models plus 59 explicit selector entries\n" +
-		"  --legacy           Force explicit legacy config (59 preset model entries)\n" +
+		"  --modern           Force compact modern config (12 base OAuth models + --variant presets)\n" +
+		"  --full             Install compact base models plus 65 explicit selector entries\n" +
+		"  --legacy           Force explicit legacy config (65 preset model entries)\n" +
 		"  --dry-run          Show actions without writing\n" +
 		"  --no-cache-clear   Skip clearing OpenCode cache\n" +
 		"  --version          Print the installed version\n"
@@ -3772,10 +3772,10 @@ export async function runInstaller(argv = process.argv.slice(2), options = {}) {
 	log("\nDone. Restart OpenCode to (re)install the plugin.");
 	log("Example: opencode");
 	if (!pluginOnly && configMode === "modern") {
-		log("Note: Modern config intentionally shows 11 base OAuth model entries; use the variant picker for reasoning presets.");
+		log("Note: Modern config intentionally shows 12 base OAuth model entries; use the variant picker for reasoning presets.");
 	}
 	if (!pluginOnly && configMode === "legacy") {
-		log("Note: Legacy config writes 59 explicit preset entries and is also safe for older OpenCode versions.");
+		log("Note: Legacy config writes 65 explicit preset entries and is also safe for older OpenCode versions.");
 	}
 	if (!pluginOnly && configMode === "full") {
 		log("Note: Full config installs both compact base models and explicit preset entries for direct selector IDs.");

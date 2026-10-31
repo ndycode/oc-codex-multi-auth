@@ -18,8 +18,8 @@ Codex/GPT-5/GPT-6 models through `oc-codex-multi-auth`.
 npx -y oc-codex-multi-auth@latest --modern
 ```
 
-`--modern` registers the plugin and writes the compact model catalog: 11 base
-model families with 59 variants selectable through `--variant`. Alternatives:
+`--modern` registers the plugin and writes the compact model catalog: 12 base
+model families with 65 variants selectable through `--variant`. Alternatives:
 
 | Flag | Use it when |
 | --- | --- |

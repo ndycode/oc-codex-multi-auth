@@ -67,6 +67,7 @@ either way. Per-model options override global options — see
 | model | supported values |
 | --- | --- |
 | `gpt-6.1-sol` | low, medium, high, xhigh, max, ultra |
+| `gpt-6.1-terra` | low, medium, high, xhigh, max, ultra (shipped templates default to `low`) |
 | `gpt-6-astra` | low, medium, high, xhigh, max, ultra |
 | `gpt-6-sol` | low, medium, high, xhigh, max, ultra |
 | `gpt-6-luna` | low, medium, high, xhigh, max |
@@ -115,7 +116,7 @@ it; `minimal` floors to `low` on Codex and on the GPT-5.6 / GPT-6 tiers.
 The plugin normalizes the selected id before the upstream call. Highlights:
 
 - bare `gpt-6` maps to `gpt-6-astra`; `gpt-6-astra-pro*` collapses onto `gpt-6-astra` (not a Codex-routable id)
-- bare `gpt-6.1` maps to `gpt-6.1-sol` (the only shipping 6.1 tier; GPT-6.1 Astra was cancelled 2026-09-28 before it ever got a model id)
+- bare `gpt-6.1` maps to `gpt-6.1-sol`; `gpt-6.1-terra` is a separate model.
 - `gpt-daybreak-blue*` / `gpt-daybreak-red*` map to the catalog `-latest` ids; `gpt-5.6-cyber*` maps to itself, never to Sol
 - bare `gpt-5.6` maps to `gpt-5.6-sol`; `gpt-5.6-terra*`/`gpt-5.6-luna*` map to their own tiers
 - `gpt-5.5*`, `gpt-5.5-fast*`, and `gpt-5.5-pro*` normalize to `gpt-5.5` (GPT-5.5 Pro is ChatGPT-only)
@@ -126,8 +127,8 @@ The plugin normalizes the selected id before the upstream call. Highlights:
 
 ### Catalog notes
 
-- The shipped templates carry 11 base model families and 59 variants
-  (`--modern`) or 59 explicit selector entries (`--legacy` / added by `--full`).
+- The shipped templates carry 12 base model families and 65 variants
+  (`--modern`) or 65 explicit selector entries (`--legacy` / added by `--full`).
   The default install writes no catalog at all — it registers the plugin and
   preserves `provider.openai`.
 - `gpt-5.4-mini`, `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, and
@@ -138,15 +139,15 @@ The plugin normalizes the selected id before the upstream call. Highlights:
   fail at startup for most users. Add them by hand if your workspace is
   entitled. The three cyber tiers have no fallback chain, on purpose — a
   security-specialty request must not be silently answered by a general model.
-- GPT-5.6 tiers, GPT-6 Astra/Sol/Luna, and the Daybreak tiers are sent over
-  the **responses-lite** path with default client identity `opencode`; other
+- GPT-5.6 tiers, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, and the Daybreak
+  tiers are sent over the **responses-lite** path with default client identity `opencode`; other
   models default to `codex_cli_rs`. `CODEX_AUTH_CLIENT_IDENTITY` overrides.
 - Because 5.6 and GPT-6 rolled out gradually, an unentitled account
   auto-degrades down the default chains even under the `strict` policy — see
   [auto-fallback](#unsupported-model-policy-and-fallback-chains).
-- Shipped context windows: `context=1050000`, `output=128000` for the GPT-6,
-  GPT-5.6, and 5.5 families; `gpt-5.4-nano` 400000/128000; `gpt-5.1`
-  272000/128000.
+- Shipped context windows: `context=1050000`, `output=128000` for the GPT-6
+  (except `gpt-6.1-terra`), GPT-5.6, and 5.5 families; `gpt-6.1-terra`
+  872000/128000; `gpt-5.4-nano` 400000/128000; `gpt-5.1` 272000/128000.
 
 ---
 

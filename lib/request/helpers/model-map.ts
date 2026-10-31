@@ -51,14 +51,17 @@ export const GPT_6_LUNA_MODEL_ID = "gpt-6-luna" as const;
  *
  * Its catalog entry is `use_responses_lite: true`,
  * `tool_mode: "code_mode_only"`, `multi_agent_version: "v2"`, and it lists
- * every plan Astra does including the new `promax` tier. It is the only
- * shipping 6.1: GPT-6.1 Astra was cancelled on 2026-09-28 and never got a
+ * every plan Astra does including the new `promax` tier. GPT-6.1 Astra was
+ * cancelled on 2026-09-28 and never got a
  * model id. `minimal_client_version` is 0.153.0 and no released tag carries
  * the entry yet (rust-v0.159.0 predates the commit; it lands with the next
  * release), so catalog-sourced instructions fall back to the prompt file
  * until then.
  */
 export const GPT_61_SOL_MODEL_ID = "gpt-6.1-sol" as const;
+
+/** GPT-6.1 Terra is a distinct responses-lite model with low..ultra efforts. */
+export const GPT_61_TERRA_MODEL_ID = "gpt-6.1-terra" as const;
 
 /**
  * Daybreak cyber tiers, verified in the Codex model catalog
@@ -200,8 +203,9 @@ export const MODEL_MAP: Record<string, string> = {
 	// `minimal` is accepted.
 	// ============================================================================
 	...expandEffortAliases(GPT_61_SOL_MODEL_ID, LOW_TO_ULTRA_EFFORT_SUFFIXES),
-	// Bare `gpt-6.1` mirrors `gpt-5.6` -> Sol: Sol is the only shipping 6.1.
+	// Bare `gpt-6.1` mirrors `gpt-5.6` -> Sol.
 	"gpt-6.1": GPT_61_SOL_MODEL_ID,
+	...expandEffortAliases(GPT_61_TERRA_MODEL_ID, LOW_TO_ULTRA_EFFORT_SUFFIXES),
 
 	// ============================================================================
 	// Cyber tiers (Daybreak-gated)
