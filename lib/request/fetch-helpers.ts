@@ -357,7 +357,7 @@ function canonicalizeModelName(model: string | undefined): string | undefined {
 		return GPT_6_ASTRA_MODEL_ID;
 	}
 
-	// Bare `gpt-6.1` collapses onto Sol, the only shipping 6.1, so a custom
+	// Bare `gpt-6.1` collapses onto Sol (Terra has its own id), so a custom
 	// chain or attempted list keyed that way resolves to the same node.
 	if (withoutEffort === "gpt-6.1") {
 		return GPT_61_SOL_MODEL_ID;

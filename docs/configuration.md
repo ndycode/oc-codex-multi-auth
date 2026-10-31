@@ -67,7 +67,7 @@ either way. Per-model options override global options — see
 | model | supported values |
 | --- | --- |
 | `gpt-6.1-sol` | low, medium, high, xhigh, max, ultra |
-| `gpt-6.1-terra` | low, medium, high, xhigh, max, ultra (default: low) |
+| `gpt-6.1-terra` | low, medium, high, xhigh, max, ultra (shipped templates default to `low`) |
 | `gpt-6-astra` | low, medium, high, xhigh, max, ultra |
 | `gpt-6-sol` | low, medium, high, xhigh, max, ultra |
 | `gpt-6-luna` | low, medium, high, xhigh, max |
@@ -139,15 +139,15 @@ The plugin normalizes the selected id before the upstream call. Highlights:
   fail at startup for most users. Add them by hand if your workspace is
   entitled. The three cyber tiers have no fallback chain, on purpose — a
   security-specialty request must not be silently answered by a general model.
-- GPT-5.6 tiers, GPT-6 Astra/Sol/Luna, and the Daybreak tiers are sent over
-  the **responses-lite** path with default client identity `opencode`; other
+- GPT-5.6 tiers, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, and the Daybreak
+  tiers are sent over the **responses-lite** path with default client identity `opencode`; other
   models default to `codex_cli_rs`. `CODEX_AUTH_CLIENT_IDENTITY` overrides.
 - Because 5.6 and GPT-6 rolled out gradually, an unentitled account
   auto-degrades down the default chains even under the `strict` policy — see
   [auto-fallback](#unsupported-model-policy-and-fallback-chains).
-- Shipped context windows: `context=1050000`, `output=128000` for the GPT-6,
-  GPT-5.6, and 5.5 families; `gpt-5.4-nano` 400000/128000; `gpt-5.1`
-  272000/128000.
+- Shipped context windows: `context=1050000`, `output=128000` for the GPT-6
+  (except `gpt-6.1-terra`), GPT-5.6, and 5.5 families; `gpt-6.1-terra`
+  872000/128000; `gpt-5.4-nano` 400000/128000; `gpt-5.1` 272000/128000.
 
 ---
 

@@ -3,8 +3,17 @@ import { readFileSync } from "node:fs";
 import { getNormalizedModel, MODEL_MAP } from "../lib/request/helpers/model-map.js";
 import { getModelFamily, MODEL_FAMILIES } from "../lib/prompts/codex.js";
 import { normalizeModel, getReasoningConfig, transformRequestBody } from "../lib/request/request-transformer.js";
-import { DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN } from "../lib/request/fetch-helpers.js";
-import { shapeBodyForModel, usesResponsesLite } from "../lib/request/helpers/responses-lite.js";
+import {
+	DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN,
+	createCodexHeaders,
+	transformRequestForCodex,
+} from "../lib/request/fetch-helpers.js";
+import {
+	RESPONSES_LITE_HEADER,
+	RESPONSES_LITE_HEADER_VALUE,
+	shapeBodyForModel,
+	usesResponsesLite,
+} from "../lib/request/helpers/responses-lite.js";
 import { resolveClientIdentity } from "../lib/request/helpers/client-identity.js";
 
 const TERRA61 = "gpt-6.1-terra";
@@ -55,6 +64,40 @@ describe("GPT-6.1 Terra Model Support", () => {
 		expect(shaped.reasoning?.effort).toBe("max");
 		expect(shaped.tools).toBeUndefined();
 		expect(shaped.input?.[0]).toMatchObject({ type: "additional_tools" });
+	});
+	it("serializes a native-mode Terra request with lite shaping and the lite header", async () => {
+		const transformed = await transformRequestForCodex(
+			{ method: "POST" },
+			"https://chatgpt.com/backend-api/codex/responses",
+			{ global: {}, models: {} },
+			true,
+			{
+				model: `openai/${TERRA61}-high`,
+				input: [{ type: "message", role: "user", content: "hi" }],
+				tools: [{ type: "function", name: "read_file" }],
+				store: true,
+				reasoning: { effort: "high" },
+			},
+			{ requestTransformMode: "native" },
+		);
+		expect(transformed).toBeDefined();
+		expect(transformed!.body.model).toBe(TERRA61);
+		const wire = JSON.parse(String(transformed!.updatedInit.body)) as {
+			model: string;
+			tools?: unknown;
+			input: Array<{ type?: string }>;
+			store: boolean;
+			include: string[];
+			reasoning: { effort?: string; context?: string };
+		};
+		expect(wire.model).toBe(TERRA61);
+		expect(wire.tools).toBeUndefined();
+		expect(wire.input[0]).toMatchObject({ type: "additional_tools" });
+		expect(wire.reasoning).toMatchObject({ effort: "high", context: "all_turns" });
+		expect(wire.store).toBe(false);
+		expect(wire.include).toContain("reasoning.encrypted_content");
+		const headers = createCodexHeaders(transformed!.updatedInit, "acct", "token", { model: wire.model });
+		expect(headers.get(RESPONSES_LITE_HEADER)).toBe(RESPONSES_LITE_HEADER_VALUE);
 	});
 	it("ships each effort in both templates", () => {
 		const modern = JSON.parse(readFileSync("config/opencode-modern.json", "utf8"));
