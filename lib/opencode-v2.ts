@@ -9,6 +9,7 @@
  * failing silently inside a hook.
  */
 import { createOpenAI } from "@ai-sdk/openai";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { Integration, type Credential, type Model, type Plugin } from "@opencode/plugin";
 import { z } from "zod";
@@ -29,13 +30,29 @@ const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
 if (!existsSync(providerModule)) providerModule.pathname = providerModule.pathname.replace(/\.js$/, ".ts");
 const providerPackage = `aisdk:${providerModule.href}`;
 
-/** Set stateless options before the SDK lowers history into server-side references. */
-function createV2Language(model: ReturnType<ReturnType<typeof createOpenAI>["responses"]>) {
+/**
+ * Set stateless options before the SDK lowers history into server-side references.
+ * `configuredHeaders` are the provider/model headers the SDK was built with; the
+ * SDK only applies them at HTTP assembly, so they are passed here to seed the
+ * prompt cache key when a call carries no affinity headers of its own.
+ */
+function createV2Language(
+	model: ReturnType<ReturnType<typeof createOpenAI>["responses"]>,
+	configuredHeaders?: Record<string, string>,
+) {
 	type Options = Parameters<typeof model.doGenerate>[0];
 	const stateless = (options: Options): Options => {
 		const openai: NonNullable<Options["providerOptions"]>[string] = { ...options.providerOptions?.openai, store: false };
 		delete openai.previousResponseId;
 		delete openai.conversation;
+		// OpenCode's AI SDK bridge drops LLMRequest.promptCacheKey and only
+		// forwards the session-affinity headers. Without a key the Codex
+		// backend gets no prompt_cache_key or session_id/conversation_id,
+		// so cache routing is unpinned and continuations miss the cache.
+		const cacheKey = typeof openai.promptCacheKey === "string" && openai.promptCacheKey
+			? openai.promptCacheKey
+			: promptCacheKeyFromHeaders(options.headers) ?? promptCacheKeyFromHeaders(configuredHeaders);
+		if (cacheKey) openai.promptCacheKey = cacheKey;
 		return { ...options, providerOptions: { ...options.providerOptions, openai } };
 	};
 	// The SDK only writes `strict` for tools that declare it, and the Codex
@@ -55,6 +72,22 @@ function createV2Language(model: ReturnType<ReturnType<typeof createOpenAI>["res
 			return Reflect.get(target, property, receiver);
 		},
 	});
+}
+
+const SESSION_AFFINITY_HEADERS = ["x-session-affinity", "x-opencode-session", "x-session-id"];
+const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
+
+/** Mirrors OpenCode's own promptCacheKey derivation from the session affinity id. */
+export function promptCacheKeyFromHeaders(headers: Record<string, string | undefined> | undefined): string | undefined {
+	if (!headers) return undefined;
+	const byName = new Map(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
+	const affinity = SESSION_AFFINITY_HEADERS.map((name) => byName.get(name)?.trim()).find((value) => value);
+	if (!affinity) return undefined;
+	const key = /^ses_[0-9a-f]{64}$/.test(affinity) ? affinity.slice(4) : affinity;
+	if (Array.from(key).length <= PROMPT_CACHE_KEY_MAX_LENGTH) return key;
+	// Truncation would merge distinct sessions sharing a long prefix into one
+	// cache-affinity group; a SHA-256 hex digest is exactly 64 chars.
+	return createHash("sha256").update(key).digest("hex");
 }
 
 /** V1 supplied these defaults through provider options; V2's bridge needs them on the wire. */
@@ -376,6 +409,9 @@ async function setupScopedV2(
 			throw new Error("Connect a Codex multi-account OAuth method with /connect first");
 		};
 
+		// Headers each SDK instance was built with, so the language hook can derive
+		// the prompt cache key from provider-configured session affinity headers.
+		const sdkHeaders = new WeakMap<object, Record<string, string>>();
 		// The provider record's model inventory feeds the V1 loader's per-model
 		// config map; captured on each transform so the latest snapshot wins.
 		let providerModels: ReadonlyMap<string, Model.Info> | undefined;
@@ -426,7 +462,7 @@ async function setupScopedV2(
 			const organization = optionString("organization");
 			const project = optionString("project");
 			const name = optionString("name");
-			event.sdk = createOpenAI({
+			const sdk = createOpenAI({
 				apiKey: typeof options.apiKey === "string" ? options.apiKey : "codex-oauth",
 				baseURL: typeof options.baseURL === "string" ? options.baseURL : undefined,
 				...(organization ? { organization } : {}),
@@ -435,6 +471,8 @@ async function setupScopedV2(
 				...(Object.keys(headers).length > 0 ? { headers } : {}),
 				fetch: createV2Fetch((input, init) => run(() => fetcher(input, init)), context.app.version),
 			});
+			sdkHeaders.set(sdk, headers);
+			event.sdk = sdk;
 		}), { providerID: "openai" }));
 		track(await context.model.transform((editor) => {
 			if (!enabled) return;
@@ -448,7 +486,7 @@ async function setupScopedV2(
 		track(await context.aisdk.hook("language", (event) => {
 			if (!enabled) return;
 			const sdk = event.sdk as ReturnType<typeof createOpenAI>;
-			event.language = createV2Language(sdk.responses(event.model.modelID));
+			event.language = createV2Language(sdk.responses(event.model.modelID), sdkHeaders.get(sdk));
 		}, { providerID: "openai" }));
 
 		track(await context.tool.transform((editor) => {
