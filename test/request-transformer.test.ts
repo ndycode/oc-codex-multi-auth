@@ -1443,12 +1443,31 @@ describe('Request Transformer Module', () => {
 		});
 
 		it('should apply default text verbosity', async () => {
+			// `gpt-5` resolves to gpt-6-sol, whose catalog default_verbosity is low.
 			const body: RequestBody = {
 				model: 'gpt-5',
 				input: [],
 			};
 			const result = await transformRequestBody(body, codexInstructions);
+			expect(result.text?.verbosity).toBe('low');
+		});
+
+		it('keeps medium verbosity for models outside the Codex catalog', async () => {
+			const body: RequestBody = {
+				model: 'gpt-5.1',
+				input: [],
+			};
+			const result = await transformRequestBody(body, codexInstructions);
 			expect(result.text?.verbosity).toBe('medium');
+		});
+
+		it('uses the catalog high verbosity default for Daybreak Red', async () => {
+			const body: RequestBody = {
+				model: 'gpt-daybreak-red-latest',
+				input: [],
+			};
+			const result = await transformRequestBody(body, codexInstructions);
+			expect(result.text?.verbosity).toBe('high');
 		});
 
 		it('should apply user text verbosity', async () => {

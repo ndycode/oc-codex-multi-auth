@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
 	RESPONSES_LITE_HEADER,
 	applyResponsesLite,
+	groupToolsForResponsesLite,
 	shapeBodyForModel,
 	usesResponsesLite,
 } from "../lib/request/helpers/responses-lite.js";
@@ -76,7 +77,45 @@ describe("responses-lite", () => {
 			const first = body.input?.[0] as Record<string, unknown>;
 			expect(first.type).toBe("additional_tools");
 			expect(first.role).toBe("developer");
-			expect(first.tools).toEqual([{ type: "function", name: "read_file" }]);
+			// Function tools are grouped into Codex's `functions` namespace.
+			expect(first.tools).toEqual([
+				{
+					type: "namespace",
+					name: "functions",
+					description: "",
+					tools: [{ type: "function", name: "read_file" }],
+				},
+			]);
+		});
+
+		it("groups function and custom tools at the first function's position, like tool_spec.rs", () => {
+			const tools = groupToolsForResponsesLite([
+				{ type: "web_search" },
+				{ type: "function", name: "a" },
+				{ type: "image_generation" },
+				{ type: "custom", name: "b" },
+				{ type: "namespace", name: "functions", description: "Mine", tools: [{ type: "function", name: "c" }] },
+				{ type: "namespace", name: "mcp", tools: [] },
+			]);
+			expect(tools).toEqual([
+				{ type: "web_search" },
+				{
+					type: "namespace",
+					name: "functions",
+					description: "Mine",
+					tools: [
+						{ type: "function", name: "a" },
+						{ type: "custom", name: "b" },
+						{ type: "function", name: "c" },
+					],
+				},
+				{ type: "image_generation" },
+				{ type: "namespace", name: "mcp", tools: [] },
+			]);
+		});
+
+		it("adds no namespace when there are no function-like tools", () => {
+			expect(groupToolsForResponsesLite([{ type: "web_search" }])).toEqual([{ type: "web_search" }]);
 		});
 
 		it("drops the top-level tools key entirely", () => {
@@ -85,9 +124,9 @@ describe("responses-lite", () => {
 			expect(JSON.parse(JSON.stringify(body))).not.toHaveProperty("tools");
 		});
 
-		it("empties top-level instructions and re-adds them as a developer message", () => {
+		it("drops top-level instructions and re-adds them as a developer message", () => {
 			const body = applyResponsesLite(makeBody());
-			expect(body.instructions).toBe("");
+			expect(JSON.parse(JSON.stringify(body))).not.toHaveProperty("instructions");
 			const second = body.input?.[1] as Record<string, unknown>;
 			expect(second.type).toBe("message");
 			expect(second.role).toBe("developer");
@@ -102,11 +141,12 @@ describe("responses-lite", () => {
 			expect((body.input?.[1] as Record<string, unknown>).role).toBe("user");
 		});
 
-		it("emits additional_tools even when there are no tools", () => {
+		it("skips additional_tools when there are no tools (openai/codex 6326163b)", () => {
 			const body = applyResponsesLite(makeBody({ tools: undefined }));
 			const first = body.input?.[0] as Record<string, unknown>;
-			expect(first.type).toBe("additional_tools");
-			expect(first.tools).toEqual([]);
+			expect(first.type).toBe("message");
+			expect(first.role).toBe("developer");
+			expect(JSON.stringify(body.input)).not.toContain("additional_tools");
 		});
 
 		it("preserves original input after the prefix, in order", () => {
@@ -252,13 +292,32 @@ describe("responses-lite", () => {
 	});
 
 	describe("shapeBodyForModel", () => {
-		it("returns the body untouched for a non-lite model", () => {
+		it("moves instructions into input for a non-lite model, keeping top-level tools", () => {
 			const body = makeBody({ model: "gpt-5.5" });
 			const shaped = shapeBodyForModel(body);
-			expect(shaped).toBe(body); // same reference, no copy
+			expect(shaped).not.toBe(body);
 			expect(shaped.tools).toEqual([{ type: "function", name: "read_file" }]);
-			expect(shaped.instructions).toBe("BASE INSTRUCTIONS");
+			expect(JSON.parse(JSON.stringify(shaped))).not.toHaveProperty("instructions");
+			expect(shaped.input?.[0]).toEqual({
+				type: "message",
+				role: "developer",
+				content: [{ type: "input_text", text: "BASE INSTRUCTIONS" }],
+			});
 			expect(shaped.parallel_tool_calls).toBeUndefined();
+			// The canonical body is untouched.
+			expect(body.instructions).toBe("BASE INSTRUCTIONS");
+		});
+
+		it("returns a non-lite body with no instructions untouched", () => {
+			const { instructions: _omit, ...rest } = makeBody({ model: "gpt-5.5" });
+			const body = rest as RequestBody;
+			expect(shapeBodyForModel(body)).toBe(body);
+		});
+
+		it("drops reasoning.summary none instead of sending it", () => {
+			const body = makeBody({ model: "gpt-5.5", reasoning: { effort: "low", summary: "none" } });
+			const shaped = JSON.parse(JSON.stringify(shapeBodyForModel(body)));
+			expect(shaped.reasoning).toEqual({ effort: "low" });
 		});
 
 		it("shapes a lite model without mutating the canonical body", () => {
@@ -267,7 +326,7 @@ describe("responses-lite", () => {
 
 			expect(shaped).not.toBe(body);
 			expect(shaped.tools).toBeUndefined();
-			expect(shaped.instructions).toBe("");
+			expect(shaped.instructions).toBeUndefined();
 
 			// Canonical body survives intact for a later fallback hop.
 			expect(body.tools).toEqual([{ type: "function", name: "read_file" }]);

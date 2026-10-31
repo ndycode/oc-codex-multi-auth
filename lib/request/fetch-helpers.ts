@@ -19,7 +19,14 @@ import {
 	normalizeModel,
 	upsertBackendModelIdentityMessage,
 	clampReasoningForModel,
+	getModelConfig,
 } from "./request-transformer.js";
+import {
+	SERVICE_TIER_PRIORITY,
+	buildRoutingHint,
+	getCodexCatalogEntry,
+	resolveServiceTierForModel,
+} from "./helpers/codex-catalog.js";
 import {
 	DAYBREAK_BLUE_MODEL_ID,
 	DAYBREAK_RED_MODEL_ID,
@@ -974,6 +981,42 @@ export function rewriteUrlForCodex(url: string): string {
  *   `fastSession`, `fastSessionStrategy`, and `fastSessionMaxInputItems`
  * @returns Transformed body and updated init, or undefined if no body
  */
+/**
+ * The service tier the user or host asked for, before per-model filtering.
+ * Precedence: the body's `service_tier` (the host's `serviceTier` provider
+ * option), then `providerOptions.openai.serviceTier`, then the plugin's
+ * per-model/global `serviceTier` config, then a `-fast` model selector
+ * (e.g. `gpt-5.5-fast`), which means Codex's Fast tier.
+ */
+export function getRequestedServiceTier(
+	originalModel: string | undefined,
+	body: RequestBody,
+	userConfig: UserConfig,
+): string | undefined {
+	const fromBody = body.service_tier;
+	if (typeof fromBody === "string" && fromBody.trim()) return fromBody;
+	const fromProvider = body.providerOptions?.openai?.serviceTier;
+	if (typeof fromProvider === "string" && fromProvider.trim()) return fromProvider;
+	if (originalModel) {
+		const fromConfig = getModelConfig(originalModel, userConfig).serviceTier;
+		if (typeof fromConfig === "string" && fromConfig.trim()) return fromConfig;
+		const bare = originalModel.includes("/")
+			? (originalModel.split("/").pop() ?? originalModel)
+			: originalModel;
+		if (stripEffortSuffix(bare.trim().toLowerCase()).endsWith("-fast")) {
+			return SERVICE_TIER_PRIORITY;
+		}
+	}
+	return undefined;
+}
+
+/** Put the resolved tier on the body, or remove the field when none applies. */
+export function applyServiceTier(body: RequestBody, requestedServiceTier: string | undefined): void {
+	const tier = resolveServiceTierForModel(body.model, requestedServiceTier);
+	if (tier) body.service_tier = tier;
+	else delete body.service_tier;
+}
+
 export async function transformRequestForCodex(
 	init: RequestInit | undefined,
 	url: string,
@@ -986,7 +1029,15 @@ export async function transformRequestForCodex(
 		fastSessionStrategy?: "hybrid" | "always";
 		fastSessionMaxInputItems?: number;
 	},
-): Promise<{ body: RequestBody; updatedInit: RequestInit } | undefined> {
+): Promise<
+	| {
+			body: RequestBody;
+			updatedInit: RequestInit;
+			/** Tier asked for before per-model filtering; re-resolved on model fallback. */
+			requestedServiceTier?: string;
+	  }
+	| undefined
+> {
 	const hasParsedBody =
 		parsedBody !== undefined &&
 		parsedBody !== null &&
@@ -1005,6 +1056,7 @@ export async function transformRequestForCodex(
 		}
 		const originalModel = body.model;
 		const requestTransformMode = options?.requestTransformMode ?? "legacy";
+		const requestedServiceTier = getRequestedServiceTier(originalModel, body, userConfig);
 
 		// OpenCode's AI SDK adapter omits `strict` on function tools, and the
 		// Responses backend treats an omitted flag as strict mode — making
@@ -1044,6 +1096,14 @@ export async function transformRequestForCodex(
 			if (body.reasoning?.effort) {
 				body.reasoning = clampReasoningForModel(body.reasoning, normalizedModel);
 			}
+			applyServiceTier(body, requestedServiceTier);
+			// Codex always sends the catalog default_verbosity when nothing
+			// chose one (core/src/client.rs); native mode does the same rather
+			// than leaving the backend to its own default.
+			const defaultVerbosity = getCodexCatalogEntry(normalizedModel)?.defaultVerbosity;
+			if (defaultVerbosity && !body.text?.verbosity) {
+				body.text = { ...body.text, verbosity: defaultVerbosity };
+			}
 
 			// Native mode is a lighter transform, not a passthrough: the
 			// stateless/privacy invariants apply on EVERY Codex-bound request.
@@ -1075,6 +1135,7 @@ export async function transformRequestForCodex(
 					...(init ?? {}),
 					body: JSON.stringify(shapeBodyForModel(body)),
 				},
+				requestedServiceTier,
 			};
 		}
 
@@ -1109,6 +1170,7 @@ export async function transformRequestForCodex(
 			options?.fastSessionStrategy ?? "hybrid",
 			options?.fastSessionMaxInputItems ?? 30,
 		);
+		applyServiceTier(transformedBody, requestedServiceTier);
 
 		// Log transformed request
 		logRequest(LOG_STAGES.AFTER_TRANSFORM, {
@@ -1135,6 +1197,7 @@ export async function transformRequestForCodex(
 					...(init ?? {}),
 					body: JSON.stringify(shapeBodyForModel(transformedBody)),
 				},
+				requestedServiceTier,
 			};
 	} catch (e) {
 		logError(`${ERROR_MESSAGES.REQUEST_PARSE_ERROR}`, e);
@@ -1154,7 +1217,15 @@ export function createCodexHeaders(
     init: RequestInit | undefined,
     accountId: string,
     accessToken: string,
-    opts?: { model?: string; promptCacheKey?: string; organizationId?: string },
+    opts?: {
+        model?: string;
+        promptCacheKey?: string;
+        organizationId?: string;
+        /** Resolved `service_tier` on the wire, for `x-codex-routing-hint`. */
+        serviceTier?: string;
+        /** Sticky-routing token captured earlier in the same turn. */
+        turnState?: string;
+    },
 ): Headers {
 	const headers = new Headers(init?.headers ?? {});
 	headers.delete("x-api-key"); // Remove any existing API key
@@ -1183,14 +1254,39 @@ export function createCodexHeaders(
 	if (process.env.CODEX_AUTH_DISABLE_CODEX_USER_AGENT !== "1") {
 		headers.set("user-agent", identity.userAgent);
 	}
+	// Codex's provider config sends `version: <client version>` on every
+	// request (codex-rs/model-provider-info). Only meaningful when claiming
+	// the Codex CLI identity; plain opencode does not send it.
+	const codexVersion =
+		identity.originator === OPENAI_HEADER_VALUES.ORIGINATOR_CODEX
+			? /^codex_cli_rs\/(\S+)/.exec(identity.userAgent)?.[1]
+			: undefined;
+	if (codexVersion) headers.set(OPENAI_HEADERS.VERSION, codexVersion);
+	else headers.delete(OPENAI_HEADERS.VERSION);
 
+	// Codex sends `x-codex-routing-hint: model=<slug>[;tier=<tier>]` on every
+	// ChatGPT-backend request (codex-rs/core/src/client.rs
+	// `build_routing_hint_header`).
+	if (opts?.model) {
+		headers.set(OPENAI_HEADERS.ROUTING_HINT, buildRoutingHint(opts.model, opts.serviceTier));
+	} else {
+		headers.delete(OPENAI_HEADERS.ROUTING_HINT);
+	}
+	if (opts?.turnState) headers.set(OPENAI_HEADERS.TURN_STATE, opts.turnState);
+	else headers.delete(OPENAI_HEADERS.TURN_STATE);
+
+    // Codex 0.166 sends `session-id`/`thread-id` (codex-api/src/requests/
+    // headers.rs); the underscored `session_id`/`conversation_id` pair is the
+    // pre-May-2026 form, still sent alongside for backends that key on it.
     const cacheKey = opts?.promptCacheKey;
-    if (cacheKey) {
-        headers.set(OPENAI_HEADERS.CONVERSATION_ID, cacheKey);
-        headers.set(OPENAI_HEADERS.SESSION_ID, cacheKey);
-    } else {
-        headers.delete(OPENAI_HEADERS.CONVERSATION_ID);
-        headers.delete(OPENAI_HEADERS.SESSION_ID);
+    for (const name of [
+        OPENAI_HEADERS.CONVERSATION_ID,
+        OPENAI_HEADERS.SESSION_ID,
+        OPENAI_HEADERS.SESSION_ID_V2,
+        OPENAI_HEADERS.THREAD_ID,
+    ]) {
+        if (cacheKey) headers.set(name, cacheKey);
+        else headers.delete(name);
     }
 
     // Upstream Codex never sends `openai-organization` on ChatGPT-Codex

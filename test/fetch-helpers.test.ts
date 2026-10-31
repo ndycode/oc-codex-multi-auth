@@ -1943,7 +1943,10 @@ describe('Fetch Helpers Module', () => {
 				const additionalTools = serialized.input.find(
 					(item: any) => item?.type === 'additional_tools',
 				);
-				const subagent = additionalTools?.tools?.find((t: any) => t.name === 'subagent');
+				// Function tools are grouped into Codex's `functions` namespace.
+				const namespace = additionalTools?.tools?.find((t: any) => t.type === 'namespace');
+				expect(namespace).toMatchObject({ name: 'functions', description: '' });
+				const subagent = namespace?.tools?.find((t: any) => t.name === 'subagent');
 				expect(subagent?.strict).toBe(false);
 			});
 
@@ -2002,8 +2005,12 @@ describe('Fetch Helpers Module', () => {
 				expect(serialized.include).toContain('reasoning.encrypted_content');
 				// The vendored prompt is the only instructions source here — an
 				// empty fallback used to ship a request with no instructions at all.
-				expect(serialized.instructions.length).toBeGreaterThan(0);
-				expect(serialized.instructions).toContain('backend as gpt-5-codex');
+				// Like Codex 0.162+, it travels as the leading developer message.
+				expect(serialized).not.toHaveProperty('instructions');
+				expect(serialized.input[0]).toMatchObject({ type: 'message', role: 'developer' });
+				const instructionsText = serialized.input[0].content[0].text as string;
+				expect(instructionsText.length).toBeGreaterThan(0);
+				expect(instructionsText).toContain('backend as gpt-5-codex');
 			});
 
 			it('emits the responses-lite shape end-to-end for GPT-5.6 in native mode', async () => {
@@ -2033,7 +2040,7 @@ describe('Fetch Helpers Module', () => {
 
 				const serialized = JSON.parse(result!.updatedInit.body as string);
 				expect(serialized).not.toHaveProperty('tools');
-				expect(serialized.instructions).toBe('');
+				expect(serialized).not.toHaveProperty('instructions');
 				expect(serialized.parallel_tool_calls).toBe(false);
 				expect(serialized.input[0].type).toBe('additional_tools');
 				expect(serialized.input[0].role).toBe('developer');
@@ -2063,7 +2070,7 @@ describe('Fetch Helpers Module', () => {
 				const serialized = JSON.parse(result!.updatedInit.body as string);
 				expect(serialized.model).toBe('gpt-5.6-terra');
 				expect(serialized).not.toHaveProperty('tools');
-				expect(serialized.instructions).toBe('');
+				expect(serialized).not.toHaveProperty('instructions');
 				expect(serialized.parallel_tool_calls).toBe(false);
 				expect(serialized.input[0].type).toBe('additional_tools');
 				// The assembled Codex instructions land in the developer message,
@@ -2104,9 +2111,15 @@ describe('Fetch Helpers Module', () => {
 				};
 				const wire = JSON.parse(JSON.stringify(shapeBodyForModel(fallbackBody)));
 
-				// gpt-5.5 is non-lite: it must get its tools back at the top level.
+				// gpt-5.5 is non-lite: it must get its tools back at the top level,
+				// with its instructions as the leading developer message.
 				expect(wire.tools).toEqual([{ name: 'apply_patch' }]);
-				expect(wire.instructions).toBe('GPT55 INSTRUCTIONS');
+				expect(wire).not.toHaveProperty('instructions');
+				expect(wire.input[0]).toMatchObject({
+					type: 'message',
+					role: 'developer',
+					content: [{ type: 'input_text', text: 'GPT55 INSTRUCTIONS' }],
+				});
 				expect(wire.parallel_tool_calls).toBeUndefined();
 				expect(wire.input[0].type).not.toBe('additional_tools');
 				expect(JSON.stringify(wire.input)).not.toContain('additional_tools');
@@ -2124,7 +2137,7 @@ describe('Fetch Helpers Module', () => {
 				} as any;
 
 				const wire = JSON.parse(JSON.stringify(shapeBodyForModel(canonical)));
-				expect(wire.instructions).toBe('');
+				expect(wire).not.toHaveProperty('instructions');
 				expect(wire.input[0].type).toBe('additional_tools');
 				expect(JSON.stringify(wire.input[1])).toContain('TERRA INSTRUCTIONS');
 				// The canonical body is untouched, so a later hop can reshape again.

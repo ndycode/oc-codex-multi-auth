@@ -30,21 +30,27 @@ export interface ConfigOptions {
 		| "xhigh"
 		| "max"
 		| "ultra";
-	reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on";
+	reasoningSummary?: "auto" | "concise" | "detailed" | "none" | "off" | "on";
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
+	/**
+	 * Codex service tier: `fast`/`priority` (Codex "Fast"), `flex`, or
+	 * `default` to opt out of a model's catalog default tier.
+	 */
+	serviceTier?: string;
 }
 
 /**
  * Resolved reasoning settings as they go on the wire.
  *
- * `ultra` is deliberately absent: it is a client-side tier that Codex collapses
- * to `max` before sending (codex-rs/core/src/client.rs
- * `reasoning_effort_for_request`), so it must never reach the backend.
+ * `ultra` is deliberately absent: it is a client-side tier that Codex resolves
+ * before sending (codex-rs/protocol/src/openai_models/reasoning_effort.rs
+ * `resolve_reasoning_effort`), so it must never reach the backend.
+ * `summary: "none"` is a request to omit the field; the serializer drops it.
  */
 export interface ReasoningConfig {
 	effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-	summary: "auto" | "concise" | "detailed";
+	summary: "auto" | "concise" | "detailed" | "none";
 	context?: "all_turns";
 }
 

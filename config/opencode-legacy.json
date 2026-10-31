@@ -18,7 +18,7 @@
         "gpt-6.1-terra-low": {
           "name": "GPT 6.1 Terra Low (OAuth)",
           "limit": {
-            "context": 872000,
+            "context": 500000,
             "output": 128000
           },
           "modalities": {
@@ -43,7 +43,7 @@
         "gpt-6.1-terra-medium": {
           "name": "GPT 6.1 Terra Medium (OAuth)",
           "limit": {
-            "context": 872000,
+            "context": 500000,
             "output": 128000
           },
           "modalities": {
@@ -68,7 +68,7 @@
         "gpt-6.1-terra-high": {
           "name": "GPT 6.1 Terra High (OAuth)",
           "limit": {
-            "context": 872000,
+            "context": 500000,
             "output": 128000
           },
           "modalities": {
@@ -93,7 +93,7 @@
         "gpt-6.1-terra-xhigh": {
           "name": "GPT 6.1 Terra Xhigh (OAuth)",
           "limit": {
-            "context": 872000,
+            "context": 500000,
             "output": 128000
           },
           "modalities": {
@@ -118,7 +118,7 @@
         "gpt-6.1-terra-max": {
           "name": "GPT 6.1 Terra Max (OAuth)",
           "limit": {
-            "context": 872000,
+            "context": 500000,
             "output": 128000
           },
           "modalities": {
@@ -143,7 +143,7 @@
         "gpt-6.1-terra-ultra": {
           "name": "GPT 6.1 Terra Ultra (OAuth)",
           "limit": {
-            "context": 872000,
+            "context": 500000,
             "output": 128000
           },
           "modalities": {
@@ -168,7 +168,7 @@
         "gpt-6.1-sol-low": {
           "name": "GPT 6.1 Sol Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -193,7 +193,7 @@
         "gpt-6.1-sol-medium": {
           "name": "GPT 6.1 Sol Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -218,7 +218,7 @@
         "gpt-6.1-sol-high": {
           "name": "GPT 6.1 Sol High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -243,7 +243,7 @@
         "gpt-6.1-sol-xhigh": {
           "name": "GPT 6.1 Sol Xhigh (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -268,7 +268,7 @@
         "gpt-6.1-sol-max": {
           "name": "GPT 6.1 Sol Max (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -293,7 +293,7 @@
         "gpt-6.1-sol-ultra": {
           "name": "GPT 6.1 Sol Ultra (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -318,7 +318,7 @@
         "gpt-6-astra-low": {
           "name": "GPT 6 Astra Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -343,7 +343,7 @@
         "gpt-6-astra-medium": {
           "name": "GPT 6 Astra Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -368,7 +368,7 @@
         "gpt-6-astra-high": {
           "name": "GPT 6 Astra High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -393,7 +393,7 @@
         "gpt-6-astra-xhigh": {
           "name": "GPT 6 Astra Xhigh (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -418,7 +418,7 @@
         "gpt-6-astra-max": {
           "name": "GPT 6 Astra Max (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -443,7 +443,7 @@
         "gpt-6-astra-ultra": {
           "name": "GPT 6 Astra Ultra (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -468,7 +468,7 @@
         "gpt-6-sol-low": {
           "name": "GPT 6 Sol Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -493,7 +493,7 @@
         "gpt-6-sol-medium": {
           "name": "GPT 6 Sol Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -518,7 +518,7 @@
         "gpt-6-sol-high": {
           "name": "GPT 6 Sol High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -543,7 +543,7 @@
         "gpt-6-sol-xhigh": {
           "name": "GPT 6 Sol Xhigh (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -568,7 +568,7 @@
         "gpt-6-sol-max": {
           "name": "GPT 6 Sol Max (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -593,7 +593,7 @@
         "gpt-6-sol-ultra": {
           "name": "GPT 6 Sol Ultra (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -618,7 +618,7 @@
         "gpt-6-luna-low": {
           "name": "GPT 6 Luna Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -643,7 +643,7 @@
         "gpt-6-luna-medium": {
           "name": "GPT 6 Luna Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -668,7 +668,7 @@
         "gpt-6-luna-high": {
           "name": "GPT 6 Luna High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -693,7 +693,7 @@
         "gpt-6-luna-xhigh": {
           "name": "GPT 6 Luna Xhigh (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -718,7 +718,7 @@
         "gpt-6-luna-max": {
           "name": "GPT 6 Luna Max (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -743,7 +743,7 @@
         "gpt-5.6-sol-low": {
           "name": "GPT 5.6 Sol Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -768,7 +768,7 @@
         "gpt-5.6-sol-medium": {
           "name": "GPT 5.6 Sol Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -793,7 +793,7 @@
         "gpt-5.6-sol-high": {
           "name": "GPT 5.6 Sol High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -818,7 +818,7 @@
         "gpt-5.6-sol-xhigh": {
           "name": "GPT 5.6 Sol Xhigh (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -843,7 +843,7 @@
         "gpt-5.6-sol-max": {
           "name": "GPT 5.6 Sol Max (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -868,7 +868,7 @@
         "gpt-5.6-sol-ultra": {
           "name": "GPT 5.6 Sol Ultra (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -893,7 +893,7 @@
         "gpt-5.6-terra-low": {
           "name": "GPT 5.6 Terra Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -918,7 +918,7 @@
         "gpt-5.6-terra-medium": {
           "name": "GPT 5.6 Terra Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -943,7 +943,7 @@
         "gpt-5.6-terra-high": {
           "name": "GPT 5.6 Terra High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -968,7 +968,7 @@
         "gpt-5.6-terra-xhigh": {
           "name": "GPT 5.6 Terra Xhigh (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -993,7 +993,7 @@
         "gpt-5.6-terra-max": {
           "name": "GPT 5.6 Terra Max (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1018,7 +1018,7 @@
         "gpt-5.6-terra-ultra": {
           "name": "GPT 5.6 Terra Ultra (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1043,7 +1043,7 @@
         "gpt-5.6-luna-low": {
           "name": "GPT 5.6 Luna Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1068,7 +1068,7 @@
         "gpt-5.6-luna-medium": {
           "name": "GPT 5.6 Luna Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1093,7 +1093,7 @@
         "gpt-5.6-luna-high": {
           "name": "GPT 5.6 Luna High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1118,7 +1118,7 @@
         "gpt-5.6-luna-xhigh": {
           "name": "GPT 5.6 Luna Xhigh (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1143,7 +1143,7 @@
         "gpt-5.6-luna-max": {
           "name": "GPT 5.6 Luna Max (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1168,7 +1168,7 @@
         "gpt-5.5-none": {
           "name": "GPT 5.5 None (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1193,7 +1193,7 @@
         "gpt-5.5-low": {
           "name": "GPT 5.5 Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1218,7 +1218,7 @@
         "gpt-5.5-medium": {
           "name": "GPT 5.5 Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1243,7 +1243,7 @@
         "gpt-5.5-high": {
           "name": "GPT 5.5 High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1268,7 +1268,7 @@
         "gpt-5.5-xhigh": {
           "name": "GPT 5.5 Extra High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1293,7 +1293,7 @@
         "gpt-5.5-fast-none": {
           "name": "GPT 5.5 Fast None (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1318,7 +1318,7 @@
         "gpt-5.5-fast-low": {
           "name": "GPT 5.5 Fast Low (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1343,7 +1343,7 @@
         "gpt-5.5-fast-medium": {
           "name": "GPT 5.5 Fast Medium (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1368,7 +1368,7 @@
         "gpt-5.5-fast-high": {
           "name": "GPT 5.5 Fast High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {
@@ -1393,7 +1393,7 @@
         "gpt-5.5-fast-xhigh": {
           "name": "GPT 5.5 Fast Extra High (OAuth)",
           "limit": {
-            "context": 1050000,
+            "context": 272000,
             "output": 128000
           },
           "modalities": {

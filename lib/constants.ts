@@ -46,6 +46,12 @@ export const OPENAI_HEADERS = {
 	ORIGINATOR: "originator",
 	SESSION_ID: "session_id",
 	CONVERSATION_ID: "conversation_id",
+	/** Current Codex session headers (codex-api/src/requests/headers.rs). */
+	SESSION_ID_V2: "session-id",
+	THREAD_ID: "thread-id",
+	VERSION: "version",
+	ROUTING_HINT: "x-codex-routing-hint",
+	TURN_STATE: "x-codex-turn-state",
 } as const;
 
 /** OpenAI-specific header values */

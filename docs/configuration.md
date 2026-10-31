@@ -86,8 +86,11 @@ either way. Per-model options override global options — see
 | `gpt-5.1-codex-mini` | medium, high (default: `medium`; API shutdown 2026-07-23, still routed) |
 | `gpt-5.1` | none, low, medium, high |
 
-Clamps the plugin applies before the wire: `ultra` is a client-side tier sent as
-`max`; `max` steps down to `xhigh` on families without it; `xhigh` steps down to
+Clamps the plugin applies before the wire, in both native and legacy mode:
+`ultra` is a client-side tier resolved the way Codex does it (the catalog's
+`multi_agent_reasoning_effort`, which is `xhigh` on `gpt-6-astra`,
+`gpt-6.1-sol`, and `gpt-6.1-terra`; `max` everywhere else); `max` steps down
+to `xhigh` on families without it; `xhigh` steps down to
 `high` on families without it; `none` floors to `low` on families that reject
 it; `minimal` floors to `low` on Codex and on the GPT-5.6 / GPT-6 tiers.
 
@@ -100,16 +103,49 @@ it; `minimal` floors to `low` on Codex and on the GPT-5.6 / GPT-6 tiers.
 | `high` | deep reasoning (default for `gpt-5-codex` and xhigh-capable general families) |
 | `xhigh` | max depth for complex tasks (default for `gpt-5.3-codex`/`gpt-5.2-codex`) |
 | `max` | GPT-5.6 / GPT-6 / Daybreak ceiling tier |
-| `ultra` | Codex client-side orchestration tier; sent on the wire as `max` — this plugin does not spawn subagents |
+| `ultra` | Codex client-side orchestration tier; sent as `xhigh` on GPT-6 Astra / GPT-6.1 Sol / GPT-6.1 Terra and `max` elsewhere — this plugin does not spawn subagents |
 
 ### Reasoning summary / text verbosity / include / store
 
 | option | values | default |
 | --- | --- | --- |
-| `reasoningSummary` | `auto`, `concise`, `detailed` | `auto` (legacy `off`/`on` normalize to `auto`) |
-| `textVerbosity` | `low`, `medium`, `high` | `medium` |
+| `reasoningSummary` | `auto`, `concise`, `detailed`, `none` | `auto`; `none` (or legacy `off`) omits the field like Codex does; legacy `on` normalizes to `auto` |
+| `textVerbosity` | `low`, `medium`, `high` | the Codex catalog default when nothing sets one (native and legacy mode): `low` for GPT-6.x, GPT-5.6, GPT-5.5 and Daybreak Blue, `high` for Daybreak Red. For models outside the catalog, legacy mode sends `medium` and native mode leaves it to the host |
+| `serviceTier` | `fast` (alias `priority`), `flex`, `default` | the Codex catalog default: Fast for `gpt-6-sol` and `gpt-6-luna`, standard elsewhere; see [Service tier (Fast)](#service-tier-fast) |
 | `include` | extra response fields | `reasoning.encrypted_content` is required for multi-turn with `store: false` and is always enforced |
 | `store` | `false` | `false` — stateless mode, required; `true` is not supported by the Codex API |
+
+### Service tier (Fast)
+
+Codex's **Fast** tier sends `service_tier: "priority"` plus an
+`x-codex-routing-hint: model=<id>;tier=priority` header. The plugin mirrors
+Codex's rules (`ModelInfo::service_tier_for_request`):
+
+- The tier comes from, in order: the host's `serviceTier` provider option, the
+  plugin's per-model or global `serviceTier` option, or a `-fast` model id such
+  as `gpt-5.5-fast`.
+- `priority` is sent only to models whose catalog entry offers it (GPT-6.x,
+  GPT-5.6, GPT-5.5); it is dropped for Daybreak and for models outside the
+  catalog. `flex` is always sent.
+- With no choice, the catalog default applies: `gpt-6-sol` and `gpt-6-luna`
+  run on Fast, the same as stock Codex. Set `serviceTier: "default"` to opt out.
+- On an unsupported-model fallback the tier is re-resolved for the new model.
+
+```json
+{
+  "provider": {
+    "openai": {
+      "models": {
+        "gpt-6.1-sol": { "options": { "serviceTier": "fast" } },
+        "gpt-6-sol": { "options": { "serviceTier": "default" } }
+      }
+    }
+  }
+}
+```
+
+Fast uses more of your plan's usage per request (Codex labels it "increased
+usage" on most models).
 
 ### Model normalization
 
@@ -145,9 +181,12 @@ The plugin normalizes the selected id before the upstream call. Highlights:
 - Because 5.6 and GPT-6 rolled out gradually, an unentitled account
   auto-degrades down the default chains even under the `strict` policy — see
   [auto-fallback](#unsupported-model-policy-and-fallback-chains).
-- Shipped context windows: `context=1050000`, `output=128000` for the GPT-6
-  (except `gpt-6.1-terra`), GPT-5.6, and 5.5 families; `gpt-6.1-terra`
-  872000/128000; `gpt-5.4-nano` 400000/128000; `gpt-5.1` 272000/128000.
+- Shipped context windows follow the Codex catalog's working `context_window`,
+  so OpenCode compacts when Codex would: `context=272000`, `output=128000` for
+  GPT-6 Astra/Sol/Luna, GPT-6.1 Sol, GPT-5.6, and GPT-5.5; `gpt-6.1-terra`
+  500000/128000; `gpt-5.4-nano` 400000/128000; `gpt-5.1` 272000/128000. The
+  catalog's `max_context_window` (872000) is the most you can raise a limit to
+  by hand in your own config.
 
 ---
 

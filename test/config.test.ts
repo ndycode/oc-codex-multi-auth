@@ -173,10 +173,11 @@ describe('Configuration Parsing', () => {
 		// went to the wire unclamped.
 		describe('effort case-folding', () => {
 			it('case-folds before clamping, so no capitalized effort escapes', () => {
-				// ultra is a client-side tier and must never reach the backend.
+				// ultra is a client-side tier and must never reach the backend;
+				// Astra resolves it to its catalog multi_agent_reasoning_effort.
 				expect(
 					getReasoningConfig('gpt-6-astra', { reasoningEffort: 'ULTRA' as never }).effort,
-				).toBe('max');
+				).toBe('xhigh');
 				// astra rejects "none".
 				expect(
 					getReasoningConfig('gpt-6-astra', { reasoningEffort: 'NONE' as never }).effort,
