@@ -175,6 +175,25 @@ export function groupToolsForResponsesLite(tools: unknown[]): unknown[] {
 	return out;
 }
 
+/**
+ * The request's input as a list of items. The Responses API also accepts a
+ * plain string, which is shorthand for one user message; prepending items to
+ * it must keep that prompt rather than discard it.
+ */
+function inputItems(input: unknown): InputItem[] {
+	if (Array.isArray(input)) return input as InputItem[];
+	if (typeof input === "string" && input.length > 0) {
+		return [
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: input }],
+			} as unknown as InputItem,
+		];
+	}
+	return [];
+}
+
 /** Base instructions as the leading developer message Codex sends. */
 function instructionsMessage(instructions: string): InputItem {
 	return {
@@ -226,8 +245,7 @@ function moveInstructionsIntoInput(body: RequestBody): void {
 	// Upstream checks `!text.is_empty()`, not a trimmed check.
 	const instructions = typeof body.instructions === "string" ? body.instructions : "";
 	if (instructions.length > 0) {
-		const existingInput = Array.isArray(body.input) ? body.input : [];
-		body.input = [instructionsMessage(instructions), ...existingInput];
+		body.input = [instructionsMessage(instructions), ...inputItems(body.input)];
 	}
 	// `undefined` drops the key entirely on JSON.stringify.
 	body.instructions = undefined;
@@ -261,8 +279,7 @@ export function applyResponsesLite(body: RequestBody): RequestBody {
 		prefix.push(instructionsMessage(instructions));
 	}
 
-	const existingInput = Array.isArray(body.input) ? body.input : [];
-	body.input = [...prefix, ...existingInput];
+	body.input = [...prefix, ...inputItems(body.input)];
 
 	// Top-level instructions and tools are omitted; both now live in `input`.
 	// `undefined` drops the key entirely on JSON.stringify.

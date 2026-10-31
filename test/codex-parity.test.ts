@@ -188,6 +188,44 @@ describe("Codex 0.166 catalog parity", () => {
 		});
 	});
 
+	describe("wire shape", () => {
+		it("keeps a plain string prompt when instructions move into input (classic model)", async () => {
+			const { wire } = await nativeWire({ model: "gpt-5.5", input: "hello there" });
+			expect(wire).not.toHaveProperty("instructions");
+			const input = wire.input as Array<Record<string, unknown>>;
+			expect(input[0]).toMatchObject({ type: "message", role: "developer" });
+			expect(input.at(-1)).toEqual({
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "hello there" }],
+			});
+		});
+
+		it("keeps a plain string prompt on the responses-lite path", async () => {
+			const { wire } = await nativeWire({ model: "gpt-6.1-sol", input: "hello lite" });
+			const input = wire.input as Array<Record<string, unknown>>;
+			expect(JSON.stringify(input)).toContain("hello lite");
+			expect(input.at(-1)).toMatchObject({ type: "message", role: "user" });
+		});
+	});
+
+	describe("native-mode verbosity", () => {
+		it("applies the catalog default_verbosity when the host sends none", async () => {
+			expect(((await nativeWire({ model: "gpt-6.1-sol" })).wire.text as { verbosity?: string }).verbosity).toBe("low");
+			expect(
+				((await nativeWire({ model: "gpt-daybreak-red-latest" })).wire.text as { verbosity?: string }).verbosity,
+			).toBe("high");
+		});
+
+		it("keeps a host verbosity and leaves models outside the catalog alone", async () => {
+			expect(
+				((await nativeWire({ model: "gpt-5.5", text: { verbosity: "high" } })).wire.text as { verbosity?: string })
+					.verbosity,
+			).toBe("high");
+			expect((await nativeWire({ model: "gpt-5.1" })).wire).not.toHaveProperty("text");
+		});
+	});
+
 	describe("turn-state store", () => {
 		const user: InputItem[] = [{ type: "message", role: "user", content: "hi" }];
 		const toolResult: InputItem[] = [...user, { type: "function_call_output", role: "tool", call_id: "c", output: "ok" }];
@@ -198,44 +236,63 @@ describe("Codex 0.166 catalog parity", () => {
 			expect(isTurnContinuation(toolResult)).toBe(true);
 		});
 
+		const tok = (value: string) => new Headers({ "x-codex-turn-state": value });
+
 		it("replays the first token of a turn and resets on the next user turn", () => {
 			const store = new TurnStateStore();
-			expect(store.forRequest("s", "a", user)).toBeUndefined();
-			store.capture("s", "a", new Headers({ "x-codex-turn-state": "t1" }));
-			store.capture("s", "a", new Headers({ "x-codex-turn-state": "t2" }));
-			expect(store.forRequest("s", "a", toolResult)).toBe("t1");
+			const first = store.forRequest("s", "a", user);
+			expect(first.turnState).toBeUndefined();
+			store.capture("s", "a", tok("t1"), first.generation);
+			store.capture("s", "a", tok("t2"), first.generation);
+			expect(store.forRequest("s", "a", toolResult).turnState).toBe("t1");
+			expect(store.current("s", "a")).toBe("t1");
 			// A different account never sees another owner's token.
-			expect(store.forRequest("s", "b", toolResult)).toBeUndefined();
+			expect(store.forRequest("s", "b", toolResult).turnState).toBeUndefined();
 			// A new user turn clears it.
-			expect(store.forRequest("s", "a", user)).toBeUndefined();
-			expect(store.forRequest("s", "a", toolResult)).toBeUndefined();
+			expect(store.forRequest("s", "a", user).turnState).toBeUndefined();
+			expect(store.forRequest("s", "a", toolResult).turnState).toBeUndefined();
 		});
 
 		it("drops every account's token when the session starts a new turn (pool rotation)", () => {
 			const store = new TurnStateStore();
 			// Turn 1 served by account A.
-			store.forRequest("s", "A", user);
-			store.capture("s", "A", new Headers({ "x-codex-turn-state": "turn1-A" }));
+			const turn1 = store.forRequest("s", "A", user);
+			store.capture("s", "A", tok("turn1-A"), turn1.generation);
 			// Turn 2's user message lands on account B.
-			expect(store.forRequest("s", "B", user)).toBeUndefined();
-			store.capture("s", "B", new Headers({ "x-codex-turn-state": "turn2-B" }));
+			const turn2 = store.forRequest("s", "B", user);
+			expect(turn2.turnState).toBeUndefined();
+			store.capture("s", "B", tok("turn2-B"), turn2.generation);
 			// A tool continuation rotates back to A: no stale turn-1 token.
-			expect(store.forRequest("s", "A", toolResult)).toBeUndefined();
-			store.capture("s", "A", new Headers({ "x-codex-turn-state": "turn2-A" }));
-			expect(store.forRequest("s", "A", toolResult)).toBe("turn2-A");
-			expect(store.forRequest("s", "B", toolResult)).toBe("turn2-B");
+			const cont = store.forRequest("s", "A", toolResult);
+			expect(cont.turnState).toBeUndefined();
+			store.capture("s", "A", tok("turn2-A"), cont.generation);
+			expect(store.forRequest("s", "A", toolResult).turnState).toBe("turn2-A");
+			expect(store.forRequest("s", "B", toolResult).turnState).toBe("turn2-B");
+		});
+
+		it("ignores a late response from a turn the session has moved past", () => {
+			const store = new TurnStateStore();
+			const oldTurn = store.forRequest("s", "a", user);
+			const newTurn = store.forRequest("s", "a", user);
+			// The older turn's response arrives after the new turn started.
+			store.capture("s", "a", tok("old"), oldTurn.generation);
+			expect(store.current("s", "a")).toBeUndefined();
+			store.capture("s", "a", tok("new"), newTurn.generation);
+			expect(store.forRequest("s", "a", toolResult).turnState).toBe("new");
 		});
 
 		it("ignores requests without a session key and bounds its size", () => {
 			const store = new TurnStateStore(2);
-			store.capture(undefined, "a", new Headers({ "x-codex-turn-state": "t" }));
+			expect(store.forRequest(undefined, "a", user)).toEqual({ generation: 0 });
+			store.capture(undefined, "a", tok("t"), 0);
 			expect(store.size).toBe(0);
 			for (const session of ["s1", "s2", "s3"]) {
-				store.capture(session, "a", new Headers({ "x-codex-turn-state": session }));
+				const request = store.forRequest(session, "a", user);
+				store.capture(session, "a", tok(session), request.generation);
 			}
 			expect(store.size).toBe(2);
-			expect(store.forRequest("s1", "a", toolResult)).toBeUndefined();
-			expect(store.forRequest("s3", "a", toolResult)).toBe("s3");
+			expect(store.forRequest("s1", "a", toolResult).turnState).toBeUndefined();
+			expect(store.forRequest("s3", "a", toolResult).turnState).toBe("s3");
 		});
 	});
 });

@@ -31,28 +31,58 @@ export function isTurnContinuation(input: InputItem[] | undefined): boolean {
 	return typeof last?.type === "string" && CONTINUATION_ITEM_TYPES.has(last.type);
 }
 
+interface SessionTurnState {
+	/** Bumped at every new turn; responses from an older turn are ignored. */
+	generation: number;
+	/** account -> token for the current turn. */
+	tokens: Map<string, string>;
+}
+
+export interface TurnStateRequest {
+	/** Token to send on this request, if any. */
+	turnState?: string;
+	/** Turn this request belongs to; pass back to {@link TurnStateStore.capture}. */
+	generation: number;
+}
+
 export class TurnStateStore {
-	/** session -> (account -> token) for the session's current turn. */
-	private readonly sessions = new Map<string, Map<string, string>>();
+	private readonly sessions = new Map<string, SessionTurnState>();
 
 	constructor(private readonly maxSessions = 512) {}
 
+	private session(sessionKey: string): SessionTurnState {
+		let state = this.sessions.get(sessionKey);
+		if (!state) {
+			state = { generation: 0, tokens: new Map() };
+			this.sessions.set(sessionKey, state);
+			while (this.sessions.size > this.maxSessions) {
+				const oldest = this.sessions.keys().next().value;
+				if (oldest === undefined) break;
+				this.sessions.delete(oldest);
+			}
+		}
+		return state;
+	}
+
 	/**
 	 * Token to send on this request, if any. A request that starts a new turn
-	 * drops every account's token for the session, so no account can replay a
-	 * previous turn's routing after the pool rotates.
+	 * drops every account's token for the session and advances its turn
+	 * generation, so no account can replay a previous turn's routing after the
+	 * pool rotates, and a late response from the old turn cannot seed the new one.
 	 */
 	forRequest(
 		sessionKey: string | undefined,
 		accountKey: string,
 		input: InputItem[] | undefined,
-	): string | undefined {
-		if (!sessionKey) return undefined;
+	): TurnStateRequest {
+		if (!sessionKey) return { generation: 0 };
+		const state = this.session(sessionKey);
 		if (!isTurnContinuation(input)) {
-			this.sessions.delete(sessionKey);
-			return undefined;
+			state.generation += 1;
+			state.tokens.clear();
+			return { generation: state.generation };
 		}
-		return this.sessions.get(sessionKey)?.get(accountKey);
+		return { turnState: state.tokens.get(accountKey), generation: state.generation };
 	}
 
 	/**
@@ -62,28 +92,29 @@ export class TurnStateStore {
 	 */
 	current(sessionKey: string | undefined, accountKey: string): string | undefined {
 		if (!sessionKey) return undefined;
-		return this.sessions.get(sessionKey)?.get(accountKey);
+		return this.sessions.get(sessionKey)?.tokens.get(accountKey);
 	}
 
-	/** Remember the token from a response; the first token of a turn wins per account. */
-	capture(sessionKey: string | undefined, accountKey: string, headers: Headers): void {
+	/**
+	 * Remember the token from a response; the first token of a turn wins per
+	 * account. `generation` is the value {@link forRequest} returned for the
+	 * request; a response from a turn the session has moved past is ignored.
+	 */
+	capture(
+		sessionKey: string | undefined,
+		accountKey: string,
+		headers: Headers,
+		generation: number,
+	): void {
 		if (!sessionKey) return;
 		const token = headers.get(OPENAI_HEADERS.TURN_STATE)?.trim();
 		if (!token) return;
-		let accounts = this.sessions.get(sessionKey);
-		if (!accounts) {
-			accounts = new Map();
-			this.sessions.set(sessionKey, accounts);
-			while (this.sessions.size > this.maxSessions) {
-				const oldest = this.sessions.keys().next().value;
-				if (oldest === undefined) break;
-				this.sessions.delete(oldest);
-			}
-		}
-		if (!accounts.has(accountKey)) accounts.set(accountKey, token);
+		const state = this.sessions.get(sessionKey);
+		if (!state || state.generation !== generation) return;
+		if (!state.tokens.has(accountKey)) state.tokens.set(accountKey, token);
 	}
 
-	/** Number of sessions holding turn state. */
+	/** Number of sessions tracked. */
 	get size(): number {
 		return this.sessions.size;
 	}

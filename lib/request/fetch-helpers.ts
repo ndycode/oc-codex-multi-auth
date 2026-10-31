@@ -24,6 +24,7 @@ import {
 import {
 	SERVICE_TIER_PRIORITY,
 	buildRoutingHint,
+	getCodexCatalogEntry,
 	resolveServiceTierForModel,
 } from "./helpers/codex-catalog.js";
 import {
@@ -1096,6 +1097,13 @@ export async function transformRequestForCodex(
 				body.reasoning = clampReasoningForModel(body.reasoning, normalizedModel);
 			}
 			applyServiceTier(body, requestedServiceTier);
+			// Codex always sends the catalog default_verbosity when nothing
+			// chose one (core/src/client.rs); native mode does the same rather
+			// than leaving the backend to its own default.
+			const defaultVerbosity = getCodexCatalogEntry(normalizedModel)?.defaultVerbosity;
+			if (defaultVerbosity && !body.text?.verbosity) {
+				body.text = { ...body.text, verbosity: defaultVerbosity };
+			}
 
 			// Native mode is a lighter transform, not a passthrough: the
 			// stateless/privacy invariants apply on EVERY Codex-bound request.

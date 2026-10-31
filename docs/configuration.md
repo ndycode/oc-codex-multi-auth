@@ -110,7 +110,7 @@ it; `minimal` floors to `low` on Codex and on the GPT-5.6 / GPT-6 tiers.
 | option | values | default |
 | --- | --- | --- |
 | `reasoningSummary` | `auto`, `concise`, `detailed`, `none` | `auto`; `none` (or legacy `off`) omits the field like Codex does; legacy `on` normalizes to `auto` |
-| `textVerbosity` | `low`, `medium`, `high` | the Codex catalog default: `low` for GPT-6.x, GPT-5.6, GPT-5.5 and Daybreak Blue, `high` for Daybreak Red; `medium` for models outside the catalog |
+| `textVerbosity` | `low`, `medium`, `high` | the Codex catalog default when nothing sets one (native and legacy mode): `low` for GPT-6.x, GPT-5.6, GPT-5.5 and Daybreak Blue, `high` for Daybreak Red. For models outside the catalog, legacy mode sends `medium` and native mode leaves it to the host |
 | `serviceTier` | `fast` (alias `priority`), `flex`, `default` | the Codex catalog default: Fast for `gpt-6-sol` and `gpt-6-luna`, standard elsewhere; see [Service tier (Fast)](#service-tier-fast) |
 | `include` | extra response fields | `reasoning.encrypted_content` is required for multi-turn with `store: false` and is always enforced |
 | `store` | `false` | `false` — stateless mode, required; `true` is not supported by the Codex API |

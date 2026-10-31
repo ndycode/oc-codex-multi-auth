@@ -3658,6 +3658,11 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 											}
 
 								const turnStateAccountKey = `${account.index}:${accountId}`;
+								const turnStateRequest = turnStateStore.forRequest(
+									promptCacheKey,
+									turnStateAccountKey,
+									transformedBody?.input,
+								);
 								const headers = createCodexHeaders(
 									requestInit,
 									accountId,
@@ -3670,11 +3675,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 											typeof transformedBody?.service_tier === "string"
 												? transformedBody.service_tier
 												: undefined,
-										turnState: turnStateStore.forRequest(
-											promptCacheKey,
-											turnStateAccountKey,
-											transformedBody?.input,
-										),
+										turnState: turnStateRequest.turnState,
 									},
 								);
 
@@ -3880,7 +3881,12 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								latencyMs: fetchLatencyMs,
 								headers: Object.fromEntries(response.headers.entries()),
 							});
-							turnStateStore.capture(promptCacheKey, turnStateAccountKey, response.headers);
+							turnStateStore.capture(
+								promptCacheKey,
+								turnStateAccountKey,
+								response.headers,
+								turnStateRequest.generation,
+							);
 							// Same-account retries (short 429, empty response) reuse `headers`;
 							// carry the token this turn now holds, like Codex's per-turn OnceLock.
 							const heldTurnState = turnStateStore.current(promptCacheKey, turnStateAccountKey);
