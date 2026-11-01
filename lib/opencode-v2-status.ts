@@ -1,7 +1,7 @@
 import { getCodexTuiGlyphMode, getCodexTuiMaskEmail, getCodexTuiMaskEmailInQuotaDetails, getQuotaDisplay, getQuotaStatus, loadPluginConfig } from "./config.js";
 import { fetchTuiQuotaOverview, toQuotaOverviewAccounts } from "./tui-quota-overview.js";
 import { readTuiQuotaSnapshot, readTuiQuotaOverviewSnapshot, isFreshTuiQuotaSnapshot, TUI_QUOTA_OVERVIEW_CACHE_FILE } from "./tui-quota-cache.js";
-import { formatPromptStatusText, formatQuotaDetailsText, formatQuotaCreditsStatusLines, formatQuotaOverviewStatusLines, formatQuotaResetsStatusLines, type CompactQuotaStatus } from "./tui-status.js";
+import { formatPromptStatusText, formatQuotaDetailsText, formatQuotaCreditsStatusLines, formatQuotaOverviewStatusLines, formatQuotaResetsStatusLines, withStatusPrefix, type CompactQuotaStatus } from "./tui-status.js";
 import { dirname, join } from "node:path";
 import { getStoragePath, loadAccounts } from "./storage.js";
 import { getCurrentProjectRoot } from "./storage/state.js";
@@ -73,16 +73,18 @@ export async function readV2Status({ width }: { width: number }) {
 	}
 	// `width` is the raw terminal width the TUI reported; the formatters apply
 	// their own single discount (`maxStatusChars` tiers, `maxOverviewStatusChars`
-	// reserve), so it is passed through unadjusted — discounting it again here
-	// would shrink the line twice.
-	const activeText = formatPromptStatusText({ quota, width, quotaDisplay, maskEmail, glyphMode });
+	// reserve), so it is not discounted again here — only the `quotaStatus.prefix`
+	// columns come off, as V1 takes them off its measured slot width.
+	const prefix = status.prefix;
+	const textWidth = Math.max(1, width - prefix.length);
+	const activeText = formatPromptStatusText({ quota, width: textWidth, quotaDisplay, maskEmail, glyphMode });
 	const renderScreen = (screen: (typeof status.screens)[number]): string => {
 		if (screen === "active" || !overview) return activeText;
 		const format = screen === "resets"
 			? formatQuotaResetsStatusLines
 			: screen === "credits" ? formatQuotaCreditsStatusLines : formatQuotaOverviewStatusLines;
 		return format({
-			accounts: toQuotaOverviewAccounts(overview), width, maxRows: status.rows,
+			accounts: toQuotaOverviewAccounts(overview), width: textWidth, maxRows: status.rows,
 			resetsMinUsedPercent: status.resetsMinUsedPercent,
 			options: { ...status, names: status.accountNames, mode: quotaDisplay, maskEmail },
 		}).join("\n");
@@ -90,9 +92,11 @@ export async function readV2Status({ width }: { width: number }) {
 	// Like V1, rotate only among screens with something to say: the resets
 	// screen is empty until the pool is spent and must not blank the line.
 	const rendered = status.screens.map(renderScreen).filter((text) => text.length > 0);
-	const text = rendered.length > 0
+	const current = rendered.length > 0
 		? rendered[Math.floor(Date.now() / status.rotateMs) % rendered.length] ?? ""
 		: "";
+	// Like V1, the prefix names the provider on the first row and the other rows indent under it.
+	const text = current ? withStatusPrefix(current.split("\n"), prefix).join("\n") : "";
 	return {
 		text,
 		glyphMode,

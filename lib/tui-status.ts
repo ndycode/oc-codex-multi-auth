@@ -442,6 +442,13 @@ function maxStatusChars(width: number | undefined): number {
 	return Math.min(12, width);
 }
 
+/** Puts `quotaStatus.prefix` before the first row and indents the others to line up under it. */
+export function withStatusPrefix(lines: string[], prefix: string): string[] {
+	if (!prefix) return lines;
+	const indent = " ".repeat(prefix.length);
+	return lines.map((line, index) => `${index === 0 ? prefix : indent}${line}`);
+}
+
 export function formatPromptStatusText(params: {
 	variant?: ReasoningVariant;
 	quota: CompactQuotaStatus;
