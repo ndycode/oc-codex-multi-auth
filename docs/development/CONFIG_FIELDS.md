@@ -147,6 +147,7 @@ config `fallbackOnUnsupportedCodexModel` > `strict`.
 | `accounts` | (file only) | boolean | — | — | legacy spelling; `false` = `layout: "count"` |
 | `rows` | (file only) | integer | `1` | 1–4 | row ceiling, not a height |
 | `showFor` | (file only) | `always` \| `codex-models` | `always` | — | `codex-models` hides the line unless the session runs a routed model |
+| `prefix` | (file only) | string | `""` | — | text before the first row; later rows indent under it (V1 and V2) |
 
 ### `quotaNotifications` object
 
