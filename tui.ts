@@ -61,7 +61,7 @@ import {
 } from "./lib/tui-quota-cache.js";
 import { loadAccounts } from "./lib/storage.js";
 import { protectQuotaStatusSlot } from "./lib/tui-status-slot.js";
-import { sanitizeDisplayText } from "./lib/ui/display-text.js";
+import { displayWidth, sanitizeDisplayText } from "./lib/ui/display-text.js";
 import type { UiGlyphMode } from "./lib/ui/theme.js";
 export { protectQuotaStatusSlot } from "./lib/tui-status-slot.js";
 
@@ -1030,7 +1030,7 @@ function createPromptStatus(
 		const prefix = currentOptions.quotaStatus.prefix
 		const measured = metrics().availableChars
 		const layout = {
-			availableChars: measured === undefined ? undefined : Math.max(1, measured - prefix.length),
+			availableChars: measured === undefined ? undefined : Math.max(1, measured - displayWidth(prefix)),
 			maxRows: currentOptions.quotaStatus.rows,
 		};
 		const rendered: Array<{ screen: QuotaStatusScreen; lines: string[] }> = [];

@@ -11,6 +11,7 @@ import {
 	resolveQuotaOverviewTone,
 	resolveQuotaPromptTone,
 	wrapStatusCandidate,
+	withStatusPrefix,
 	type CompactQuotaStatus,
 	type PromptStatusConfig,
 	type PromptStatusMessage,
@@ -31,6 +32,14 @@ const quota: CompactQuotaStatus = {
 };
 
 describe("TUI prompt status helpers", () => {
+	it.each([
+		["中文 ", "     "],
+		["e\u0301 ", "  "],
+	])("aligns continuation rows by display columns for %s", (prefix, indent) => {
+		expect(withStatusPrefix(["first", "second"], prefix)).toEqual([
+			`${prefix}first`, `${indent}second`,
+		]);
+	});
 
 	it("formats prompt status text from supplied quota labels", () => {
 		expect(

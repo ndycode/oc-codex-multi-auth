@@ -167,10 +167,14 @@ it("passes resetsMinUsedPercent to the V2 resets screen", async () => {
 });
 
 
-it("puts the quotaStatus prefix in front of the V2 status line, as V1 does", async () => {
+it.each([
+	["OpenAI ", 73],
+	["中文 ", 75],
+	["e\u0301 ", 78],
+])("reserves display columns for the V2 prefix %s", async (prefix, width) => {
 	mocks.overview.mockResolvedValue(null);
-	mocks.quotaStatus = { prefix: "OpenAI " };
-	expect((await readV2Status({ width: 80 })).text).toBe("OpenAI quota");
+	mocks.quotaStatus = { prefix };
+	expect((await readV2Status({ width: 80 })).text).toBe(`${prefix}quota`);
 	// The prefix takes its columns from the line, not from the terminal.
-	expect(mocks.promptStatus).toHaveBeenLastCalledWith(expect.objectContaining({ width: 73 }));
+	expect(mocks.promptStatus).toHaveBeenLastCalledWith(expect.objectContaining({ width }));
 });

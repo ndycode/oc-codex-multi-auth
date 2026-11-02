@@ -4,6 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as storage from "../lib/storage.js";
+import * as config from "../lib/config.js";
+import * as status from "../lib/tui-status.js";
 import { createUsageAccountFingerprint } from "../lib/codex-usage.js";
 import { createTuiQuotaSnapshot, getTuiQuotaCachePath, writeSessionQuotaSnapshot, writeTuiQuotaSnapshot } from "../lib/tui-quota-cache.js";
 
@@ -71,6 +73,22 @@ afterEach(() => {
 });
 
 describe("TUI status slot lifecycle", () => {
+	it.each([["中文 ", 75], ["e\u0301 ", 78]])("reserves display columns for the mounted V1 prefix %s", async (prefix, availableChars) => {
+		vi.useFakeTimers();
+		vi.spyOn(config, "getQuotaStatus").mockReturnValue({ ...config.getQuotaStatus({}), prefix });
+		const format = vi.spyOn(status, "formatPromptStatusText");
+		const h = harness();
+		await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
+		const render = h.plugin()?.slots["session_prompt_right"];
+		if (!render) throw new Error("missing prompt slot");
+		const node = render({}, { session_id: "FAKE_SESSION" });
+		if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
+		Object.assign(node, { parent: { primaryAxis: "row", width: 120, getChildren: () => [node, {}] } });
+		await vi.advanceTimersByTimeAsync(500);
+		expect(node.content).toBeTypeOf("string");
+		expect(format).toHaveBeenLastCalledWith(expect.objectContaining({ availableChars }));
+	});
+
 	it("renders concurrent prompt slots with their own account and quota, and global fallback for a new session", async () => {
 		// Given two bound sessions and a global snapshot from the second session.
 		const dir = await mkdtemp(join(tmpdir(), "tui-session-slots-"));

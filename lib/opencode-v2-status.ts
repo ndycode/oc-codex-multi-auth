@@ -7,7 +7,7 @@ import { getStoragePath, loadAccounts } from "./storage.js";
 import { getCurrentProjectRoot } from "./storage/state.js";
 import { createUsageAccountFingerprint } from "./codex-usage.js";
 import { resolveDisplayEmail } from "./account-display.js";
-import { sanitizeDisplayText } from "./ui/display-text.js";
+import { displayWidth, sanitizeDisplayText } from "./ui/display-text.js";
 
 /** Same cadence as the V1 prompt status poll. */
 const OVERVIEW_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -76,7 +76,7 @@ export async function readV2Status({ width }: { width: number }) {
 	// reserve), so it is not discounted again here — only the `quotaStatus.prefix`
 	// columns come off, as V1 takes them off its measured slot width.
 	const prefix = status.prefix;
-	const textWidth = Math.max(1, width - prefix.length);
+	const textWidth = Math.max(1, width - displayWidth(prefix));
 	const activeText = formatPromptStatusText({ quota, width: textWidth, quotaDisplay, maskEmail, glyphMode });
 	const renderScreen = (screen: (typeof status.screens)[number]): string => {
 		if (screen === "active" || !overview) return activeText;
