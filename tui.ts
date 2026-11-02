@@ -59,7 +59,7 @@ import {
 	writeTuiQuotaSnapshot,
 	type TuiQuotaSnapshot,
 } from "./lib/tui-quota-cache.js";
-import { loadAccounts } from "./lib/storage.js";
+import { getStoragePath, loadAccounts } from "./lib/storage.js";
 import { protectQuotaStatusSlot } from "./lib/tui-status-slot.js";
 import { displayWidth, sanitizeDisplayText } from "./lib/ui/display-text.js";
 import type { UiGlyphMode } from "./lib/ui/theme.js";
@@ -90,6 +90,7 @@ type SolidRuntime = Pick<
 	Pick<typeof import("solid-js"), "createSignal" | "onCleanup">;
 
 let inFlightRefresh: Promise<CompactQuotaStatus> | undefined;
+const inFlightUsage = new Map<string, Promise<ReturnType<typeof parseCodexUsagePayload>>>();
 
 type QuotaOverviewState =
 	| { type: "loading" }
@@ -338,22 +339,29 @@ export async function refreshQuotaStatusInner(
 				: stored;
 
 		try {
-			const credentials = await ensureCodexUsageAccessToken({
-				storage,
-				account: selection.account,
-			});
-			const accountId = resolveCodexUsageAccountId({
-				account: selection.account,
-				accessToken: credentials.accessToken,
-			});
-			if (!accountId) throw new Error("Missing account id");
-
-			const payload = await fetchCodexUsage({
-				accountId,
-				accessToken: credentials.accessToken,
-				organizationId: selection.account.organizationId,
-			});
-			const usage = parseCodexUsagePayload(payload);
+			const readKey = JSON.stringify([getStoragePath(), getSharedQuotaCachePath(api), fingerprint]);
+			let read = inFlightUsage.get(readKey);
+			if (!read) {
+				read = (async () => {
+					const credentials = await ensureCodexUsageAccessToken({
+						storage,
+						account: selection.account,
+					});
+					const accountId = resolveCodexUsageAccountId({
+						account: selection.account,
+						accessToken: credentials.accessToken,
+					});
+					if (!accountId) throw new Error("Missing account id");
+					const payload = await fetchCodexUsage({
+						accountId,
+						accessToken: credentials.accessToken,
+						organizationId: selection.account.organizationId,
+					});
+					return parseCodexUsagePayload(payload);
+				})().finally(() => { inFlightUsage.delete(readKey); });
+				inFlightUsage.set(readKey, read);
+			}
+			const usage = await read;
 			const limits = [
 				toCompactQuotaLimit(usage.primary),
 				toCompactQuotaLimit(usage.secondary),

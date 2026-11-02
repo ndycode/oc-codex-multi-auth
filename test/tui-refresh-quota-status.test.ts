@@ -7,7 +7,8 @@ import type { AccountStorageV3 } from "../lib/storage.js";
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
 import { createUsageAccountFingerprint, ensureCodexUsageAccessToken, fetchCodexUsage, resolveCodexUsageActiveAccount } from "../lib/codex-usage.js";
 
-vi.mock("../lib/storage.js", () => ({
+vi.mock("../lib/storage.js", async (original) => ({
+	...await original<typeof import("../lib/storage.js")>(),
 	loadAccounts: vi.fn(),
 }));
 

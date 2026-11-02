@@ -6,6 +6,7 @@ import { join } from "node:path";
 import * as storage from "../lib/storage.js";
 import * as config from "../lib/config.js";
 import * as status from "../lib/tui-status.js";
+import { createStorageScope, setStoragePathDirect } from "../lib/storage/state.js";
 import { createUsageAccountFingerprint } from "../lib/codex-usage.js";
 import { createTuiQuotaSnapshot, getTuiQuotaCachePath, writeSessionQuotaSnapshot, writeTuiQuotaSnapshot } from "../lib/tui-quota-cache.js";
 
@@ -74,6 +75,70 @@ afterEach(() => {
 });
 
 describe("TUI status slot lifecycle", () => {
+	it.each([
+		["same account and scope", false, false, 1],
+		["different accounts", true, false, 2],
+		["different storage scopes", false, true, 2],
+	] as const)("shares only matching in-flight usage reads for mounted slots: %s", async (_name, differentAccounts, differentScopes, expectedReads) => {
+		vi.useFakeTimers();
+		const dir = await mkdtemp(join(tmpdir(), "tui-inflight-slots-"));
+		vi.stubEnv("OPENCODE_STATE_DIR", dir);
+		const accounts = ["FIRST", "SECOND"].map((name) => ({
+			accountId: `FAKE_${name}`, refreshToken: `FAKE_REFRESH_${name}`, accessToken: `FAKE_ACCESS_${name}`,
+			expiresAt: Date.now() + 3_600_000, email: `${name.toLowerCase()}@example.com`, addedAt: 1, lastUsed: 1,
+		}));
+		vi.spyOn(storage, "loadAccounts").mockResolvedValue({ version: 3, activeIndex: 0, accounts });
+		const prepared = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const ready = Promise.withResolvers<void>();
+		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+			started.resolve();
+			await release.promise;
+			const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+			return new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: accountId === "FAKE_SECOND" ? 50 : 20, limit_window_seconds: 18_000 } } }), { status: 200 });
+		});
+		try {
+			for (const index of [0, 1]) {
+				const account = accounts[differentAccounts ? index : 0];
+				if (!account) throw new Error("missing account fixture");
+				await writeSessionQuotaSnapshot(`FAKE_SESSION_${index}`, createTuiQuotaSnapshot({ fingerprint: createUsageAccountFingerprint(account), source: "headers", limits: [] }), dir);
+			}
+			const h = harness(dir);
+			let cacheReads = 0;
+			Object.assign(h.api.kv, { ready: true, get: () => { if (++cacheReads === 2) prepared.resolve(); }, set: () => {} });
+			let readySlots = 0;
+			mocks.onSignal = (value) => {
+				if (value && typeof value === "object" && "type" in value && value.type === "ready" && ++readySlots === 2) ready.resolve();
+			};
+			await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
+			const render = h.plugin()?.slots["session_prompt_right"];
+			if (!render) throw new Error("missing prompt slot");
+			const scopes = [createStorageScope(), createStorageScope()];
+			const nodes = [0, 1].map((index) => {
+				const scope = scopes[differentScopes ? index : 0];
+				if (!scope) throw new Error("missing storage scope");
+				return scope(() => {
+					setStoragePathDirect(join(dir, `FAKE_ACCOUNTS_${differentScopes ? index : 0}.json`));
+					return render({}, { session_id: `FAKE_SESSION_${index}` });
+				});
+			});
+			await Promise.all([prepared.promise, started.promise]);
+			release.resolve();
+			await ready.promise;
+			expect(fetch).toHaveBeenCalledTimes(expectedReads);
+			for (const [index, node] of nodes.entries()) {
+				if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
+				expect(node.content).toContain(differentAccounts && index === 1 ? "50%" : "80%");
+				expect(node.content).toContain(differentAccounts && index === 1 ? "second@example.com" : "first@example.com");
+			}
+		} finally {
+			release.resolve();
+			for (const cleanup of mocks.cleanups.splice(0)) cleanup();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("polls global limits without losing an empty session snapshot's account binding", async () => {
 		vi.useFakeTimers();
 		const dir = await mkdtemp(join(tmpdir(), "tui-empty-session-"));
