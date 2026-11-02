@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_PORT } from "../lib/oauth-constants.js";
 import { transformRequestBody } from "../lib/request/request-transformer.js";
 import type { RequestBody, UserConfig } from "../lib/types.js";
+import { PluginConfigSchema } from "../lib/schemas.js";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -381,6 +382,18 @@ describe("runtime documentation parity", () => {
 				expect(fileContents).toContain(fragment);
 			}
 		}
+	});
+
+	it.each([
+		["docs/configuration.md", "quotaStatus.prefix"],
+		["docs/development/CONFIG_FIELDS.md", "prefix"],
+	])("keeps the prefix bound in %s aligned with the schema", (file, key) => {
+		const row = readRepoFile(file).split("\n").find((line) => line.startsWith(`| \`${key}\` |`));
+		const bounds = row?.split("|")[5]?.trim().match(/^0–(\d+) characters$/);
+		expect(bounds).toBeDefined();
+		const maximum = Number(bounds?.[1]);
+		expect(PluginConfigSchema.safeParse({ quotaStatus: { prefix: "x".repeat(maximum) } }).success).toBe(true);
+		expect(PluginConfigSchema.safeParse({ quotaStatus: { prefix: "x".repeat(maximum + 1) } }).success).toBe(false);
 	});
 
 	it("keeps codex-help advertised topics aligned with implemented sections", () => {

@@ -308,7 +308,7 @@ config `fallbackOnUnsupportedCodexModel` > `strict`.
 | `quotaStatus.accounts` | (file only) | boolean | — | — | legacy spelling; `false` behaves as `layout: "count"` |
 | `quotaStatus.rows` | (file only) | integer | `1` | 1–4 | row ceiling for the line — a ceiling, not a height |
 | `quotaStatus.showFor` | (file only) | `always` \| `codex-models` | `always` | — | `codex-models` hides the line unless the session runs a model this plugin routes |
-| `quotaStatus.prefix` | (file only) | string | `""` | — | text before the first row (for example `"OpenAI "`); later rows indent under it. OpenCode V1 and V2 |
+| `quotaStatus.prefix` | (file only) | string | `""` | 0–40 characters | text before the first row (for example `"OpenAI "`); later rows indent under it. OpenCode V1 and V2 |
 
 #### `quotaNotifications` object
 
