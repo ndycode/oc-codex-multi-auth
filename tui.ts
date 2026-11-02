@@ -468,6 +468,7 @@ export function samePromptStatusOptions(
 		leftStatus.recovery === rightStatus.recovery &&
 		leftStatus.resetsMinUsedPercent === rightStatus.resetsMinUsedPercent &&
 		leftStatus.rows === rightStatus.rows &&
+		leftStatus.prefix === rightStatus.prefix &&
 		leftStatus.showFor === rightStatus.showFor
 	);
 }
