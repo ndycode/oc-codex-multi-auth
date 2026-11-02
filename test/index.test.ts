@@ -1327,6 +1327,30 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(sentHeaders.has("x-oc-codex-tui-session")).toBe(false);
 		});
 
+		it.each(["session", "global"] as const)("still attempts both quota snapshot writes when the %s write fails", async (failure) => {
+			mockStorage.accounts = [{ accountId: "FAKE_ACCOUNT", refreshToken: "FAKE_REFRESH", accessToken: "FAKE_ACCESS", expiresAt: Date.now() + 60_000 }];
+			const cache = await import("../lib/tui-quota-cache.js");
+			const sessionWrite = vi.spyOn(cache, "writeSessionQuotaSnapshot").mockResolvedValue();
+			const globalWrite = vi.spyOn(cache, "writeTuiQuotaSnapshot").mockResolvedValue();
+			const failedWrite = failure === "session" ? sessionWrite : globalWrite;
+			failedWrite.mockRejectedValue(new Error("FAKE_STORAGE_FAILURE"));
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), {
+				status: 200, headers: { "x-codex-primary-used-percent": "20", "x-codex-primary-window-minutes": "300" },
+			}));
+			const headers = { headers: {} };
+			await plugin["chat.headers"]({ sessionID: "FAKE_SESSION", model: { providerID: "openai" } }, headers);
+			const sdk = await plugin.auth.loader(async () => ({ type: "oauth", access: "FAKE_ACCESS", refresh: "FAKE_REFRESH", expires: Date.now() + 60_000, multiAccount: true }), {});
+			if (!sdk.fetch) throw new Error("missing SDK fetch");
+			const response = await sdk.fetch("https://api.openai.com/v1/responses", {
+				method: "POST", headers: headers.headers, body: JSON.stringify({ model: "gpt-5.4", input: [] }),
+			});
+			expect(response.ok).toBe(true);
+			expect(sessionWrite).toHaveBeenCalledWith("FAKE_SESSION", expect.objectContaining({ limits: [expect.objectContaining({ leftPercent: 80 })] }));
+			expect(globalWrite).toHaveBeenCalledWith(expect.objectContaining({ limits: [expect.objectContaining({ leftPercent: 80 })] }));
+			const logger = await import("../lib/logger.js");
+			expect(logger.logDebug).toHaveBeenCalledWith(expect.stringContaining("FAKE_STORAGE_FAILURE"));
+		});
+
 		it("uses OPENAI_BASE_URL for multiAccount OAuth requests", async () => {
 			vi.stubEnv("OPENAI_BASE_URL", "https://gateway.example/v1");
 			vi.stubEnv("CODEX_AUTH_ALLOW_OPENAI_BASE_URL", "1");

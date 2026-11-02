@@ -1040,9 +1040,15 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 				};
 				const snapshot = parseTuiQuotaSnapshotFromHeaders(response.headers, identity);
 				if (sessionID && response.ok) {
-					await writeSessionQuotaSnapshot(sessionID, snapshot ?? createTuiQuotaSnapshot({
-						...identity, source: "headers", limits: [],
-					}));
+					try {
+						await writeSessionQuotaSnapshot(sessionID, snapshot ?? createTuiQuotaSnapshot({
+							...identity, source: "headers", limits: [],
+						}));
+					} catch (error) {
+						logDebug(
+							`[${PLUGIN_NAME}] Failed to record session quota snapshot: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
 				}
 				if (!snapshot) return;
 				await writeTuiQuotaSnapshot(snapshot);
