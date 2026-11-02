@@ -146,6 +146,18 @@ describe("refreshQuotaStatusInner", () => {
 		expect(status).toMatchObject({ type: "ready", accountIndex: hasShared ? 2 : 1, limits: [{ leftPercent: hasShared ? 50 : 80 }] });
 	});
 
+	it("falls back to global limits when a newer session binding has no limits and usage fails", async () => {
+		const api = createFakeApi(stateDir);
+		const account = storage.accounts[1];
+		if (!account) throw new Error("missing account fixture");
+		const identity = { fingerprint: createUsageAccountFingerprint(account), source: "headers" as const, accountIndex: 2 };
+		await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({ ...identity, fetchedAt: Date.now() - 1_000, limits: [{ label: "5h", leftPercent: 50 }] }), getTuiQuotaCachePath(stateDir));
+		await writeSessionQuotaSnapshot("FAKE_SESSION", createTuiQuotaSnapshot({ ...identity, limits: [] }), stateDir);
+		vi.mocked(ensureCodexUsageAccessToken).mockRejectedValueOnce(new Error("FAKE_USAGE_FAILURE"));
+		expect(await refreshQuotaStatusInner(api, "FAKE_SESSION")).toMatchObject({ type: "ready", accountIndex: 2, stale: true, limits: [{ leftPercent: 50 }] });
+		expect(await resolveQuotaPollFingerprint(api, "FAKE_SESSION")).toBe(identity.fingerprint);
+	});
+
 	it("refreshes stale session quota for its serving account instead of the global active account", async () => {
 		// Given a session binding whose quota is stale, plus a fresh response for another account.
 		const api = createFakeApi(stateDir);

@@ -9,7 +9,7 @@ import * as status from "../lib/tui-status.js";
 import { createUsageAccountFingerprint } from "../lib/codex-usage.js";
 import { createTuiQuotaSnapshot, getTuiQuotaCachePath, writeSessionQuotaSnapshot, writeTuiQuotaSnapshot } from "../lib/tui-quota-cache.js";
 
-const mocks = vi.hoisted(() => ({ cleanups: [] as Array<() => void> }));
+const mocks = vi.hoisted(() => ({ cleanups: [] as Array<() => void>, onSignal: (_value: unknown): void => {} }));
 vi.mock("@opentui/solid", () => ({
 	createElement: () => ({}),
 	spread: (element: object, props: object) => Object.defineProperties(element, Object.getOwnPropertyDescriptors(props)),
@@ -17,7 +17,7 @@ vi.mock("@opentui/solid", () => ({
 vi.mock("solid-js", () => ({
 	createSignal: <T>(initial: T) => {
 		let value = initial;
-		return [() => value, (next: T) => { value = next; }];
+		return [() => value, (next: T) => { value = next; mocks.onSignal(next); }];
 	},
 	onCleanup: (cleanup: () => void) => mocks.cleanups.push(cleanup),
 }));
@@ -70,9 +70,44 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
+	mocks.onSignal = () => {};
 });
 
 describe("TUI status slot lifecycle", () => {
+	it("polls global limits without losing an empty session snapshot's account binding", async () => {
+		vi.useFakeTimers();
+		const dir = await mkdtemp(join(tmpdir(), "tui-empty-session-"));
+		vi.stubEnv("OPENCODE_STATE_DIR", dir);
+		const account = { accountId: "FAKE_ACCOUNT", refreshToken: "FAKE_REFRESH", email: "bound@example.com", addedAt: 1, lastUsed: 1 };
+		vi.spyOn(storage, "loadAccounts").mockResolvedValue({ version: 3, activeIndex: 0, accounts: [account] });
+		const identity = { fingerprint: createUsageAccountFingerprint(account), source: "headers" as const, accountIndex: 1, accountEmail: account.email };
+		const initial = createTuiQuotaSnapshot({ ...identity, limits: [{ label: "5h", leftPercent: 80 }] });
+		try {
+			await writeSessionQuotaSnapshot("FAKE_SESSION", initial, dir);
+			const first = Promise.withResolvers<void>();
+			mocks.onSignal = (value) => { if (value && typeof value === "object" && "type" in value && value.type === "ready") first.resolve(); };
+			const h = harness(dir);
+			await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
+			const render = h.plugin()?.slots["session_prompt_right"];
+			if (!render) throw new Error("missing prompt slot");
+			const node = render({}, { session_id: "FAKE_SESSION" });
+			await first.promise;
+			const fetchedAt = initial.fetchedAt + 1;
+			await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({ ...identity, fetchedAt, limits: [{ label: "5h", leftPercent: 50 }] }), getTuiQuotaCachePath(dir));
+			await writeSessionQuotaSnapshot("FAKE_SESSION", createTuiQuotaSnapshot({ ...identity, fetchedAt: fetchedAt + 1, limits: [] }), dir);
+			const updated = Promise.withResolvers<void>();
+			mocks.onSignal = (value) => { if (value && typeof value === "object" && "fetchedAt" in value && value.fetchedAt === fetchedAt) updated.resolve(); };
+			await vi.advanceTimersByTimeAsync(1_000);
+			await updated.promise;
+			if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
+			expect(node.content).toContain("50%");
+			expect(node.content).toContain("bound@example.com");
+		} finally {
+			for (const cleanup of mocks.cleanups.splice(0)) cleanup();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it.each([["中文 ", 75], ["e\u0301 ", 78]])("reserves display columns for the mounted V1 prefix %s", async (prefix, availableChars) => {
 		vi.useFakeTimers();
 		vi.spyOn(config, "getQuotaStatus").mockReturnValue({ ...config.getQuotaStatus({}), prefix });

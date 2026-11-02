@@ -329,7 +329,7 @@ export async function refreshQuotaStatusInner(
 		if (!selection) return { type: "missing" };
 		const fingerprint = createUsageAccountFingerprint(selection.account);
 		const globalShared = await readSharedQuotaStatus(api, fingerprint);
-		const shared = sessionAccount && session && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
+		const shared = sessionAccount && session && session.limits.length > 0 && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
 			? session : globalShared;
 		const stored = readStoredQuotaStatus(api, fingerprint);
 		const cached =
@@ -769,7 +769,7 @@ function createActiveQuotaController(
 			}
 			const session = await readSessionQuotaStatus(api, sessionID);
 			const globalShared = await readSharedQuotaStatus(api, fingerprint);
-			const shared = session?.fingerprint === fingerprint && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
+			const shared = session?.fingerprint === fingerprint && session.limits.length > 0 && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
 				? session : globalShared;
 			if (!shared || shared.limits.length === 0) return;
 			const current = quota();
