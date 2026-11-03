@@ -1,6 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui";
 
-import { measureStatusSlot, showsQuotaForSession, withStatusPrefix } from "../tui.js";
+// The node export of solid-js is the non-reactive server build. The browser
+// build tracks dependencies, so a render below happens only when a real Solid
+// render effect would re-run.
+vi.mock("solid-js", async () => await import("../node_modules/solid-js/dist/solid.js"));
+const renders = vi.hoisted(() => [] as string[]);
+vi.mock("@opentui/solid", async () => {
+	const solid = await import("../node_modules/solid-js/dist/solid.js");
+	return {
+		createElement: () => ({}),
+		spread: (_element: object, props: { content: string }) => {
+			solid.createRenderEffect(() => { renders.push(props.content); });
+		},
+	};
+});
+import { createRoot } from "solid-js";
+import tuiModule, { measureStatusSlot, showsQuotaForSession, withStatusPrefix } from "../tui.js";
+import * as status from "../lib/tui-status.js";
+import * as storage from "../lib/storage.js";
 import { formatPromptStatusText, type CompactQuotaStatus } from "../lib/tui-status.js";
 
 /**
@@ -154,5 +172,51 @@ describe("withStatusPrefix", () => {
 
 	it("leaves the line unchanged without a prefix", () => {
 		expect(withStatusPrefix(["[a@b] 7d 24%"], "")).toEqual(["[a@b] 7d 24%"]);
+	});
+});
+
+describe("relative reset text on a mounted slot", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		renders.splice(0);
+	});
+
+	it("keeps counting down while nothing else changes", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(2026, 8, 5, 12, 0));
+		const quota: CompactQuotaStatus = {
+			type: "ready", stale: false,
+			limits: [{ label: "5h", leftPercent: 10, resetAtMs: Date.now() + 120_000 }],
+		};
+		const format = status.formatPromptStatusText;
+		vi.spyOn(status, "formatPromptStatusText").mockImplementation((params) => format({ ...params, quota }));
+		vi.spyOn(storage, "loadAccounts").mockResolvedValue(null);
+		let render: ((ctx: unknown, props: { session_id: string }) => unknown) | undefined;
+		const api = {
+			renderer: { width: 100 },
+			state: { path: { state: undefined }, config: {}, session: { messages: () => [] } },
+			kv: { ready: false },
+			slots: { register: (plugin: { slots: { session_prompt_right: typeof render } }) => { render = plugin.slots.session_prompt_right; return "slot-1"; } },
+			command: { register: () => () => {} },
+			lifecycle: { signal: new AbortController().signal, onDispose: () => () => {} },
+			event: { on: () => () => {} },
+			theme: { current: {} },
+		} as unknown as TuiPluginApi;
+		await tuiModule.tui(api, undefined, {} as TuiPluginMeta);
+		const dispose = createRoot((disposeRoot) => {
+			render?.({}, { session_id: "FAKE_SESSION" });
+			return disposeRoot;
+		});
+		try {
+			await vi.advanceTimersByTimeAsync(0);
+			expect(renders.at(-1)).toBe("5h 10% resets in 2m");
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(renders.at(-1)).toBe("5h 10% resets in 1m");
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(renders.at(-1)).toBe("5h 10%");
+		} finally {
+			dispose();
+		}
 	});
 });

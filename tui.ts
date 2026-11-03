@@ -965,6 +965,10 @@ function createPromptStatus(
 	const [options, setOptions] = solid.createSignal(initialOptions);
 	const [metrics, setMetrics] = solid.createSignal<StatusSlotMetrics>({});
 	const [rotation, setRotation] = solid.createSignal(0);
+	const [minute, setMinute] = solid.createSignal(0);
+	const clockInterval = setInterval(() => {
+		setMinute((tick) => tick + 1);
+	}, 60_000);
 	let controllers = createQuotaControllers(
 		api,
 		solid,
@@ -1026,6 +1030,7 @@ function createPromptStatus(
 	solid.onCleanup(() => {
 		clearInterval(configInterval);
 		clearInterval(measureInterval);
+		clearInterval(clockInterval);
 		restoreSlotShrink?.();
 		if (rotationInterval) clearInterval(rotationInterval);
 		for (const controller of controllers) controller.dispose();
@@ -1047,6 +1052,8 @@ function createPromptStatus(
 		) {
 			return undefined;
 		}
+		// `resets in 2m` counts down against the clock, so an idle line still has to re-render.
+		minute();
 		const prefix = currentOptions.quotaStatus.prefix;
 		const layout = {
 			availableChars: metrics().availableChars,
