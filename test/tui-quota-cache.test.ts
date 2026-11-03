@@ -2,7 +2,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 import {
 	clearTuiQuotaSnapshot,
@@ -50,6 +51,36 @@ describe("TUI quota cache", () => {
 			expect(raw).not.toContain("FAKE_SECRET");
 			expect(raw).not.toContain("ses_129");
 		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
+	it("keeps a session file another writer refreshes while pruning picks it for eviction", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "tui-session-quota-prune-"));
+		const sessionDir = join(dir, "oc-codex-multi-auth-tui-sessions");
+		const entry = (accountKey: string) => ({ accountKey, snapshot: createTuiQuotaSnapshot({
+			fingerprint: "FAKE_FINGERPRINT", source: "headers", limits: [{ label: "5h", leftPercent: 80 }],
+		}) });
+		const victim = join(sessionDir, `${createHash("sha256").update("ses_0").digest("hex")}.json`);
+		const realStat = fs.stat.bind(fs);
+		let refreshed = false;
+		const stat = vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+			const stats = await realStat(...args);
+			if (!refreshed && String(args[0]) === victim) {
+				refreshed = true;
+				await writeSessionQuotaEntry("ses_0", entry("FAKE_FRESH_KEY"), dir);
+			}
+			return stats;
+		});
+		try {
+			for (let index = 0; index < 128; index++) await writeSessionQuotaEntry(`ses_${index}`, entry("FAKE_OLD_KEY"), dir);
+			const old = new Date("2000-01-01T00:00:00Z");
+			await fs.utimes(victim, old, old);
+			await writeSessionQuotaEntry("ses_128", entry("FAKE_OLD_KEY"), dir);
+			expect(refreshed).toBe(true);
+			expect(await readSessionQuotaEntry("ses_0", dir)).toMatchObject({ accountKey: "FAKE_FRESH_KEY" });
+		} finally {
+			stat.mockRestore();
 			await rm(dir, { recursive: true, force: true });
 		}
 	}, 30_000);

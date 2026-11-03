@@ -99,8 +99,12 @@ async function pruneSessionQuotaFiles(dir: string): Promise<void> {
 		return { path, mtimeMs: stats?.mtimeMs ?? 0 };
 	}));
 	files.sort((left, right) => left.mtimeMs - right.mtimeMs);
-	await Promise.all(files.slice(0, files.length - MAX_SESSION_QUOTA_FILES)
-		.map((file) => fs.unlink(file.path).catch(() => undefined)));
+	await Promise.all(files.slice(0, files.length - MAX_SESSION_QUOTA_FILES).map(async (file) => {
+		// Another writer may have refreshed this session since the listing; its rename leaves a newer mtime.
+		const current = await fs.stat(file.path).catch(() => undefined);
+		if (current?.mtimeMs !== file.mtimeMs) return;
+		await fs.unlink(file.path).catch(() => undefined);
+	}));
 }
 
 export async function writeSessionQuotaEntry(
