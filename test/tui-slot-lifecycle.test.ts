@@ -125,7 +125,10 @@ describe("TUI status slot lifecycle", () => {
 			});
 			await Promise.all([prepared.promise, started.promise]);
 			release.resolve();
-			await ready.promise;
+			let settled = false;
+			void ready.promise.then(() => { settled = true; });
+			// Both slots write the shared cache; on Windows the losing rename retries on a (fake) timer.
+			while (!settled) await vi.advanceTimersByTimeAsync(10);
 			expect(fetch).toHaveBeenCalledTimes(expectedReads);
 			for (const [index, node] of nodes.entries()) {
 				if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
