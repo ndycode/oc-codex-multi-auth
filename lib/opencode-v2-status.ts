@@ -73,18 +73,18 @@ export async function readV2Status({ width }: { width: number }) {
 	}
 	// `width` is the raw terminal width the TUI reported; the formatters apply
 	// their own single discount (`maxStatusChars` tiers, `maxOverviewStatusChars`
-	// reserve), so it is not discounted again here — only the `quotaStatus.prefix`
-	// columns come off, as V1 takes them off its measured slot width.
+	// reserve), so it is passed through unadjusted — discounting it again here
+	// would shrink the line twice.
 	const prefix = status.prefix;
-	const textWidth = Math.max(1, width - displayWidth(prefix));
-	const activeText = formatPromptStatusText({ quota, width: textWidth, quotaDisplay, maskEmail, glyphMode });
+	const reservedChars = displayWidth(prefix);
+	const activeText = formatPromptStatusText({ quota, width, reservedChars, quotaDisplay, maskEmail, glyphMode });
 	const renderScreen = (screen: (typeof status.screens)[number]): string => {
 		if (screen === "active" || !overview) return activeText;
 		const format = screen === "resets"
 			? formatQuotaResetsStatusLines
 			: screen === "credits" ? formatQuotaCreditsStatusLines : formatQuotaOverviewStatusLines;
 		return format({
-			accounts: toQuotaOverviewAccounts(overview), width: textWidth, maxRows: status.rows,
+			accounts: toQuotaOverviewAccounts(overview), width, reservedChars, maxRows: status.rows,
 			resetsMinUsedPercent: status.resetsMinUsedPercent,
 			options: { ...status, names: status.accountNames, mode: quotaDisplay, maskEmail },
 		}).join("\n");
