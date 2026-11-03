@@ -11,7 +11,6 @@ import {
 	type CodexQuotaWindowKind,
 } from "./quota-windows.js";
 import { renameWithWindowsRetry } from "./storage/atomic-write.js";
-import { withStorageTransaction } from "./storage/transaction-lock.js";
 import type { CreditsBalance } from "./codex-credits.js";
 import type { CompactQuotaLimit } from "./tui-status.js";
 
@@ -62,25 +61,12 @@ type RecentTuiQuotaWrite = {
 
 const recentTuiQuotaWrites = new Map<string, RecentTuiQuotaWrite>();
 
-const SESSION_QUOTA_CACHE_FILE = "oc-codex-multi-auth-tui-sessions.json";
-const MAX_SESSION_QUOTA_ENTRIES = 128;
-type SessionQuotaEntry = {
-	readonly sessionKey: string;
-	readonly snapshot: TuiQuotaSnapshot;
-};
+const SESSION_QUOTA_CACHE_DIR = "oc-codex-multi-auth-tui-sessions";
+const MAX_SESSION_QUOTA_FILES = 128;
 
-async function readSessionQuotaEntries(target: string): Promise<SessionQuotaEntry[]> {
-	try {
-		const parsed: unknown = JSON.parse(await fs.readFile(target, "utf-8"));
-		if (!Array.isArray(parsed)) return [];
-		return parsed.filter((entry: unknown): entry is SessionQuotaEntry =>
-			isRecord(entry) && typeof entry.sessionKey === "string" &&
-			isTuiQuotaSnapshot(entry.snapshot),
-		).slice(-MAX_SESSION_QUOTA_ENTRIES);
-	} catch {
-		// This display-only cache can be absent or left by an incompatible build.
-		return [];
-	}
+function getSessionQuotaPath(sessionID: string, stateDir?: string): string {
+	const name = createHash("sha256").update(sessionID).digest("hex");
+	return join(resolveStateDir(stateDir), SESSION_QUOTA_CACHE_DIR, `${name}.json`);
 }
 
 export async function readSessionQuotaSnapshot(
@@ -88,10 +74,25 @@ export async function readSessionQuotaSnapshot(
 	stateDir?: string,
 ): Promise<TuiQuotaSnapshot | undefined> {
 	if (!sessionID) return undefined;
-	const sessionKey = createHash("sha256").update(sessionID).digest("hex");
-	const entries = await readSessionQuotaEntries(join(resolveStateDir(stateDir), SESSION_QUOTA_CACHE_FILE));
-	const snapshot = entries.find((entry) => entry.sessionKey === sessionKey)?.snapshot;
-	return snapshot ? sanitizeTuiQuotaSnapshot(snapshot) : undefined;
+	try {
+		const parsed: unknown = JSON.parse(await fs.readFile(getSessionQuotaPath(sessionID, stateDir), "utf-8"));
+		return isTuiQuotaSnapshot(parsed) ? sanitizeTuiQuotaSnapshot(parsed) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function pruneSessionQuotaFiles(dir: string): Promise<void> {
+	const names = (await fs.readdir(dir)).filter((name) => name.endsWith(".json"));
+	if (names.length <= MAX_SESSION_QUOTA_FILES) return;
+	const files = await Promise.all(names.map(async (name) => {
+		const path = join(dir, name);
+		const stats = await fs.stat(path).catch(() => undefined);
+		return { path, mtimeMs: stats?.mtimeMs ?? 0 };
+	}));
+	files.sort((left, right) => left.mtimeMs - right.mtimeMs);
+	await Promise.all(files.slice(0, files.length - MAX_SESSION_QUOTA_FILES)
+		.map((file) => fs.unlink(file.path).catch(() => undefined)));
 }
 
 export async function writeSessionQuotaSnapshot(
@@ -99,32 +100,20 @@ export async function writeSessionQuotaSnapshot(
 	snapshot: TuiQuotaSnapshot,
 	stateDir?: string,
 ): Promise<void> {
-	const target = join(resolveStateDir(stateDir), SESSION_QUOTA_CACHE_FILE);
-	const sessionKey = createHash("sha256").update(sessionID).digest("hex");
+	const target = getSessionQuotaPath(sessionID, stateDir);
 	// Reuse the explicit display-field allowlist; never persist credentials or extra fields.
 	const display: unknown = JSON.parse(getSnapshotWriteKey(snapshot));
 	if (!isRecord(display)) return;
 	const safeSnapshot = { ...display, version: snapshot.version, fetchedAt: snapshot.fetchedAt };
 	if (!isTuiQuotaSnapshot(safeSnapshot)) return;
-	await withStorageTransaction({
-		storagePath: target,
-		load: () => readSessionQuotaEntries(target),
-		persist: async (entries: SessionQuotaEntry[]) => {
-			const temporary = createTemporaryPath(target, Date.now());
-			try {
-				await writeSnapshotFile(target, temporary, entries);
-			} catch (error) {
-				await fs.unlink(temporary).catch(() => undefined);
-				throw error;
-			}
-		},
-		handler: async (entries, persist) => {
-			await persist([
-				...entries.filter((entry) => entry.sessionKey !== sessionKey).slice(-(MAX_SESSION_QUOTA_ENTRIES - 1)),
-				{ sessionKey, snapshot: safeSnapshot },
-			]);
-		},
-	});
+	const temporary = createTemporaryPath(target, Date.now());
+	try {
+		await writeSnapshotFile(target, temporary, safeSnapshot);
+	} catch (error) {
+		await fs.unlink(temporary).catch(() => undefined);
+		throw error;
+	}
+	await pruneSessionQuotaFiles(dirname(target)).catch(() => undefined);
 }
 
 function getDefaultOpenCodeStateDir(): string {

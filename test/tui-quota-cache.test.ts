@@ -19,33 +19,58 @@ import {
 } from "../lib/tui-quota-cache.js";
 import { formatQuotaDetailsText, type CompactQuotaStatus } from "../lib/tui-status.js";
 import { getQuotaExhaustedResetAtMs, MAX_QUOTA_RESET_HORIZON_MS } from "../lib/quota-windows.js";
+import { withStorageLock } from "../lib/storage/state.js";
 
 describe("TUI quota cache", () => {
-	it("bounds session storage and preserves concurrent sessions without credentials", async () => {
-		// Given more sessions than the cache can retain and a credential-bearing input.
+	it("bounds session files and preserves concurrent sessions without credentials", async () => {
+		// Given more sessions than the cache retains, the two oldest written first, and a credential-bearing input.
 		const dir = await mkdtemp(join(tmpdir(), "tui-session-quota-"));
+		const sessionDir = join(dir, "oc-codex-multi-auth-tui-sessions");
 		const snapshot = { ...createTuiQuotaSnapshot({
 			fingerprint: "FAKE_FINGERPRINT", source: "headers", limits: [{ label: "5h", leftPercent: 80 }],
 		}), accessToken: "FAKE_SECRET_ACCESS", refreshToken: "FAKE_SECRET_REFRESH" };
 		try {
-			for (let index = 0; index < 128; index++) await writeSessionQuotaSnapshot(`ses_${index}`, snapshot, dir);
+			for (const id of ["ses_0", "ses_1"]) await writeSessionQuotaSnapshot(id, snapshot, dir);
+			const old = new Date("2000-01-01T00:00:00Z");
+			for (const file of await fs.readdir(sessionDir)) await fs.utimes(join(sessionDir, file), old, old);
+			for (let index = 2; index < 128; index++) await writeSessionQuotaSnapshot(`ses_${index}`, snapshot, dir);
 			// When concurrent writers add two sessions and update a retained session.
 			await Promise.all(["ses_128", "ses_129", "ses_64"].map((id) => writeSessionQuotaSnapshot(id, snapshot, dir)));
 			// Then the oldest sessions are evicted, both new sessions survive, and no tokens reach disk.
 			expect(await readSessionQuotaSnapshot("ses_0", dir)).toBeUndefined();
 			expect(await readSessionQuotaSnapshot("ses_1", dir)).toBeUndefined();
-			for (const id of ["ses_64", "ses_128", "ses_129"]) {
+			for (const id of ["ses_2", "ses_64", "ses_128", "ses_129"]) {
 				expect(await readSessionQuotaSnapshot(id, dir)).toMatchObject({ fingerprint: "FAKE_FINGERPRINT" });
 			}
-			const files = await fs.readdir(dir);
-			expect(files).toHaveLength(1);
-			const file = files[0];
-			if (!file) throw new Error("missing session cache");
-			const raw = await fs.readFile(join(dir, file), "utf-8");
-			expect(JSON.parse(raw)).toHaveLength(128);
+			const files = await fs.readdir(sessionDir);
+			expect(files).toHaveLength(128);
+			const raw = (await Promise.all(files.map((file) => fs.readFile(join(sessionDir, file), "utf-8")))).join("\n");
 			expect(raw).not.toContain("FAKE_SECRET");
 			expect(raw).not.toContain("ses_129");
 		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
+	it("records a session snapshot while account storage is locked", async () => {
+		// Given account storage work in progress in this process.
+		const dir = await mkdtemp(join(tmpdir(), "tui-session-quota-lock-"));
+		const release = Promise.withResolvers<void>();
+		const held = withStorageLock(() => release.promise);
+		try {
+			// When the request path records a session snapshot.
+			const write = writeSessionQuotaSnapshot(
+				"ses_FAKE",
+				createTuiQuotaSnapshot({ fingerprint: "FAKE_FINGERPRINT", source: "headers", limits: [] }),
+				dir,
+			).then(() => "recorded");
+			// Then the display cache neither waits for nor holds the account storage lock.
+			const outcome = await Promise.race([write, new Promise((resolve) => setTimeout(() => resolve("blocked"), 2_000))]);
+			expect(outcome).toBe("recorded");
+			expect(await readSessionQuotaSnapshot("ses_FAKE", dir)).toMatchObject({ fingerprint: "FAKE_FINGERPRINT" });
+		} finally {
+			release.resolve();
+			await held;
 			await rm(dir, { recursive: true, force: true });
 		}
 	});
