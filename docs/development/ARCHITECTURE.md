@@ -128,7 +128,7 @@ Key mechanics:
 
 ## TUI Quota Status
 
-`tui.ts` registers one `session_prompt_right` slot plus the `codex.quota.details` command; `dispose`/`onDispose` flips a flag so nothing renders or polls into a dead api. The status line reads the shared cache (`lib/tui-quota-cache.ts`) and refreshes `/wham/usage` when stale; the request path writes the same cache from response quota headers, so the line reflects the account that served the last request.
+`tui.ts` registers one `session_prompt_right` slot plus the `codex.quota.details` command; `dispose`/`onDispose` flips a flag so nothing renders or polls into a dead api. The status line reads the shared cache (`lib/tui-quota-cache.ts`) and refreshes `/wham/usage` when stale; the request path writes the same cache from response quota headers, so the line reflects the account that served the last request. Each V1 slot is bound to its session: `chat.headers` adds the internal `x-oc-codex-tui-session` header, the request path strips it and writes `oc-codex-multi-auth-tui-sessions/<sha256(sessionID)>.json` (display fields plus a rotation-stable account key), and the slot shows that session's serving account.
 
 `quotaStatus.mode` selects the screen — `active` (single serving account), `overview` or `resets` (pool-wide; `lib/quota-overview.ts` formats, `lib/tui-quota-overview.ts` gathers/caches in `oc-codex-multi-auth-tui-quota-overview.json` and merges the live single-account read), or a list rotated every `rotateMs`. A screen that renders nothing is skipped; `resets` appears only at `resetsMinUsedPercent` (default 100) weighted usage for known applicable credits, forecast by `lib/quota-recovery.ts` + `lib/quota-capacity.ts`.
 
