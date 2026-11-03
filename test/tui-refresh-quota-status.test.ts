@@ -152,7 +152,7 @@ describe("refreshQuotaStatusInner", () => {
 		const account = storage.accounts[1];
 		if (!account) throw new Error("missing account fixture");
 		const identity = { fingerprint: createUsageAccountFingerprint(account), source: "headers" as const, accountIndex: 2 };
-		await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({ ...identity, fetchedAt: Date.now() - 1_000, limits: [{ label: "5h", leftPercent: 50 }] }), getTuiQuotaCachePath(stateDir));
+		await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({ ...identity, fetchedAt: Date.now() - TUI_QUOTA_SNAPSHOT_FRESH_MS, limits: [{ label: "5h", leftPercent: 50 }] }), getTuiQuotaCachePath(stateDir));
 		await writeSessionQuotaEntry("FAKE_SESSION", { accountKey: createUsageAccountKey(account), snapshot: createTuiQuotaSnapshot({ ...identity, limits: [] }) }, stateDir);
 		vi.mocked(ensureCodexUsageAccessToken).mockRejectedValueOnce(new Error("FAKE_USAGE_FAILURE"));
 		expect(await refreshQuotaStatusInner(api, "FAKE_SESSION")).toMatchObject({ type: "ready", accountIndex: 2, stale: true, limits: [{ leftPercent: 50 }] });
@@ -202,6 +202,23 @@ describe("refreshQuotaStatusInner", () => {
 		expect((await resolveQuotaPollTarget(api, "FAKE_SESSION"))?.fingerprint).toBe(createUsageAccountFingerprint(rotated));
 		expect(await refreshQuotaStatusInner(api, "FAKE_SESSION")).toMatchObject({
 			type: "ready", accountIndex: 2, accountEmail: "serving@example.com", limits: [{ leftPercent: 70 }],
+		});
+	});
+
+	it("shows the newest quota for the bound account when another session on that account published later", async () => {
+		// Given this session's older reading and a newer global reading of the same account.
+		const api = createFakeApi(stateDir);
+		const account = storage.accounts[1]!;
+		const identity = { fingerprint: createUsageAccountFingerprint(account), source: "headers" as const, accountIndex: 2 };
+		await writeSessionQuotaEntry("FAKE_SESSION_A", { accountKey: createUsageAccountKey(account), snapshot: createTuiQuotaSnapshot({
+			...identity, fetchedAt: Date.now() - 60_000, limits: [{ label: "5h", leftPercent: 80 }],
+		}) }, stateDir);
+		await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({
+			...identity, fetchedAt: Date.now() - 1_000, limits: [{ label: "5h", leftPercent: 50 }],
+		}), getTuiQuotaCachePath(stateDir));
+		// When the session refreshes, then it shows the newer reading instead of rolling back.
+		expect(await refreshQuotaStatusInner(api, "FAKE_SESSION_A")).toMatchObject({
+			type: "ready", accountIndex: 2, stale: false, limits: [{ leftPercent: 50 }],
 		});
 	});
 

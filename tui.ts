@@ -276,6 +276,17 @@ async function readSessionQuotaBinding(
 	return { index, account, snapshot: { ...entry.snapshot, fingerprint: createUsageAccountFingerprint(account) } };
 }
 
+async function readSlotQuotaStatus(
+	api: TuiPluginApi,
+	fingerprint: string,
+	session: StoredQuotaStatus | undefined,
+): Promise<StoredQuotaStatus | undefined> {
+	const global = await readSharedQuotaStatus(api, fingerprint);
+	return session && session.limits.length > 0 && (!global || session.fetchedAt >= global.fetchedAt)
+		? session
+		: global;
+}
+
 async function writeSharedQuotaStatus(
 	api: TuiPluginApi,
 	status: StoredQuotaStatus,
@@ -323,7 +334,9 @@ export async function refreshQuotaStatusInner(
 		}
 
 		const binding = await readSessionQuotaBinding(api, storage, sessionID);
-		const latestShared = binding ? binding.snapshot : await readSharedQuotaStatus(api);
+		const latestShared = binding
+			? await readSlotQuotaStatus(api, binding.snapshot.fingerprint, binding.snapshot)
+			: await readSharedQuotaStatus(api);
 		const now = Date.now();
 		// A shared snapshot only proves freshness while requests flow: the
 		// request path pushes it per response, but during an idle gap nothing
@@ -339,9 +352,7 @@ export async function refreshQuotaStatusInner(
 		const selection = binding ?? resolveCodexUsageActiveAccount(storage);
 		if (!selection) return { type: "missing" };
 		const fingerprint = createUsageAccountFingerprint(selection.account);
-		const globalShared = await readSharedQuotaStatus(api, fingerprint);
-		const shared = binding && binding.snapshot.limits.length > 0 && (!globalShared || binding.snapshot.fetchedAt >= globalShared.fetchedAt)
-			? binding.snapshot : globalShared;
+		const shared = binding ? latestShared : await readSharedQuotaStatus(api, fingerprint);
 		const stored = readStoredQuotaStatus(api, fingerprint);
 		const cached =
 			shared && (!stored || shared.fetchedAt >= stored.fetchedAt)
@@ -786,10 +797,7 @@ function createActiveQuotaController(
 				refresh();
 				return;
 			}
-			const { session } = target;
-			const globalShared = await readSharedQuotaStatus(api, fingerprint);
-			const shared = session && session.limits.length > 0 && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
-				? session : globalShared;
+			const shared = await readSlotQuotaStatus(api, fingerprint, target.session);
 			if (!shared || shared.limits.length === 0) return;
 			const current = quota();
 			if (current.type === "ready" && current.fetchedAt !== undefined && shared.fetchedAt < current.fetchedAt) return;
