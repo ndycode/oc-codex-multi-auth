@@ -90,7 +90,6 @@ type SolidRuntime = Pick<
 > &
 	Pick<typeof import("solid-js"), "createSignal" | "onCleanup">;
 
-let inFlightRefresh: Promise<CompactQuotaStatus> | undefined;
 const inFlightUsage = new Map<string, Promise<ReturnType<typeof parseCodexUsagePayload>>>();
 
 type QuotaOverviewState =
@@ -410,14 +409,6 @@ export async function refreshQuotaStatusInner(
 	} catch {
 		return { type: "unavailable" };
 	}
-}
-
-function refreshQuotaStatus(api: TuiPluginApi): Promise<CompactQuotaStatus> {
-	if (inFlightRefresh) return inFlightRefresh;
-	inFlightRefresh = refreshQuotaStatusInner(api).finally(() => {
-		inFlightRefresh = undefined;
-	});
-	return inFlightRefresh;
 }
 
 export function shouldRefreshQuotaForEvent(event: Event): boolean {
@@ -1113,7 +1104,10 @@ function showQuotaDetails(api: TuiPluginApi): void {
 	// the line it explains, and the two disagreeing about `used` vs `free`
 	// after an edit would be worse than either being stale alone.
 	const options = readPromptStatusOptions();
-	void refreshQuotaStatus(api).then(
+	const route = api.route.current;
+	const params = "params" in route ? route.params : undefined;
+	const sessionID = route.name === "session" && typeof params?.sessionID === "string" ? params.sessionID : undefined;
+	void refreshQuotaStatusInner(api, sessionID).then(
 		(status) => {
 			api.ui.dialog.replace(() =>
 				api.ui.DialogAlert({
