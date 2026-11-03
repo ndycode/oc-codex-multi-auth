@@ -98,7 +98,6 @@ const variantSuffixes: ReasoningVariant[] = [
 function statusSeparator(mode: UiGlyphMode | undefined): string {
 	return ` ${resolveUiGlyphs(mode ?? "unicode").separator} `;
 }
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const WARNING_LIMIT_LEFT_PERCENT = 25;
 const DANGER_LIMIT_LEFT_PERCENT = 10;
 const MASKED_EMAIL = "*****";
@@ -418,11 +417,11 @@ function formatQuota(
 /**
  * Return the character budget for the prompt status line at a given terminal
  * width. Budgets scale to about 54% of each tier's minimum width so the
- * day-context reset labels and typical account hints fit.
+ * reset labels and typical account hints fit.
  */
 function maxStatusChars(width: number | undefined): number {
 	// Budgets are ~54% of each named tier's minimum width (up from ~40%): the
-	// day-context reset labels and typical account hints no longer fit at
+	// reset labels and typical account hints no longer fit at
 	// 40%, which degraded informative candidates on mid-width terminals. The
 	// last branch is the exception and stays at 12, because 54% of a
 	// 40-column terminal leaves nothing for the prompt itself.
@@ -747,57 +746,29 @@ export function resolveQuotaPromptTone(
 	return "warning";
 }
 
-type ResetParts = {
-	date: Date;
-	/** Fixed 24-hour clock time, e.g. `02:25` — identical under every locale. */
-	time: string;
-	sameDay: boolean;
-	/**
-	 * Calendar days from today, not elapsed milliseconds: a DST transition
-	 * makes a seven-calendar-day gap span 167 or 169 hours, which a fixed 24h
-	 * division would misclassify and repeat today's weekday.
-	 */
-	dayDiff: number;
-};
-
-/**
- * Decompose a reset timestamp once for both renderings below.
- *
- * The compact status line and the quota details dialog word the same instant
- * differently - `Sep 15 02:25` against `02:25 on Sep 15` - but they agree on
- * every decision behind it: the same validity guard, the same 24-hour clock,
- * the same same-day test. Keeping those in one place is what stops the two
- * surfaces drifting apart on which reset is "today".
- */
-function describeReset(resetAtMs: number | undefined): ResetParts | undefined {
-	if (!resetAtMs || !Number.isFinite(resetAtMs) || resetAtMs <= 0) {
-		return undefined;
-	}
-	const date = new Date(resetAtMs);
-	if (!Number.isFinite(date.getTime())) return undefined;
-	const now = new Date();
-	return {
-		date,
-		time: formatClockTime(date),
-		sameDay:
-			now.getFullYear() === date.getFullYear() &&
-			now.getMonth() === date.getMonth() &&
-			now.getDate() === date.getDate(),
-		dayDiff: calendarDayDiff(now, date),
-	};
-}
-
 function formatResetDay(date: Date): string {
 	// Fixed English `Sep 05` — no `toLocaleDateString`, so the line reads the
 	// same under every configured locale.
 	return formatShortDate(date);
 }
 
+/**
+ * Format a reset timestamp for the quota details dialog on a fixed 24-hour
+ * clock: `02:25` for a same-day reset, otherwise `02:25 on Sep 15`.
+ */
 function formatReset(resetAtMs: number | undefined): string | undefined {
-	const parts = describeReset(resetAtMs);
-	if (!parts) return undefined;
-	if (parts.sameDay) return parts.time;
-	return `${parts.time} on ${formatResetDay(parts.date)}`;
+	if (!resetAtMs || !Number.isFinite(resetAtMs) || resetAtMs <= 0) {
+		return undefined;
+	}
+	const date = new Date(resetAtMs);
+	if (!Number.isFinite(date.getTime())) return undefined;
+	const now = new Date();
+	const time = formatClockTime(date);
+	const sameDay =
+		now.getFullYear() === date.getFullYear() &&
+		now.getMonth() === date.getMonth() &&
+		now.getDate() === date.getDate();
+	return sameDay ? time : `${time} on ${formatResetDay(date)}`;
 }
 
 /**
@@ -809,21 +780,6 @@ function formatResetTime(resetAtMs: number | undefined): string | undefined {
 	if (!resetAtMs || !Number.isFinite(new Date(resetAtMs).getTime())) return undefined;
 	const left = formatCompactDuration(resetAtMs - Date.now());
 	return left ? `in ${left}` : undefined;
-}
-
-/**
- * Count calendar days between two dates, ignoring wall-clock length. Comparing
- * UTC-normalized year/month/day makes the count immune to DST transitions,
- * which make a seven-day gap span 167 or 169 hours.
- */
-function calendarDayDiff(from: Date, to: Date): number {
-	const fromDay = Date.UTC(
-		from.getFullYear(),
-		from.getMonth(),
-		from.getDate(),
-	);
-	const toDay = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate());
-	return Math.round((toDay - fromDay) / MS_PER_DAY);
 }
 
 function formatUpdatedAge(fetchedAt: number | undefined, now: number): string {
