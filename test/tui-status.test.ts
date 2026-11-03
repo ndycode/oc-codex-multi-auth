@@ -617,8 +617,20 @@ describe("formatResetTime time left", () => {
 	});
 
 	it("#given a reset days away #when formatted #then it shows days", () => {
-		expect(resetLine("7d", new Date(2026, 8, 8, 2, 25).getTime())).toBe("7d 0% resets in 3d");
-		expect(resetLine("7d", new Date(2026, 8, 15, 2, 25).getTime())).toBe("7d 0% resets in 10d");
+		expect(resetLine("7d", new Date(2026, 8, 8, 2, 25).getTime())).toBe("7d 0% resets in 2d");
+		expect(resetLine("7d", new Date(2026, 8, 15, 2, 25).getTime())).toBe("7d 0% resets in 9d");
+	});
+
+	it("#given a reset part way into a unit #when formatted #then it rounds down like the overview countdown", () => {
+		const at = (ms: number) => resetLine("5h", now.getTime() + ms);
+		expect(at(23 * 3_600_000 + 40 * 60_000)).toBe("5h 0% resets in 23h");
+		expect(at(3_600_000 + 50 * 60_000)).toBe("5h 0% resets in 1h");
+		expect(at(40 * 60_000 + 30_000)).toBe("5h 0% resets in 40m");
+		expect(at(30_000)).toBe("5h 0% resets in 1m");
+	});
+
+	it("#given a reset no Date can hold #when formatted #then no reset is shown", () => {
+		expect(resetLine("5h", 1e300)).toBe("5h 0%");
 	});
 
 	it("#given a reset already in the past #when formatted #then no reset is shown", () => {
