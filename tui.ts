@@ -604,7 +604,7 @@ type QuotaStatusController = {
 	lines(
 		screen: QuotaStatusScreen,
 		options: PromptStatusOptions,
-		layout: { availableChars?: number; maxRows: number },
+		layout: { availableChars?: number; reservedChars: number; maxRows: number },
 	): string[];
 	tone(screen: QuotaStatusScreen): QuotaPromptTone;
 	dispose(): void;
@@ -705,6 +705,7 @@ function createOverviewQuotaController(
 				resetsMinUsedPercent: options.quotaStatus.resetsMinUsedPercent,
 				width: api.renderer.width,
 				availableChars: layout.availableChars,
+				reservedChars: layout.reservedChars,
 				maxRows: layout.maxRows,
 			});
 		},
@@ -835,6 +836,7 @@ function createActiveQuotaController(
 				// prompt row is narrower than the terminal (sidebar open, wide
 				// model label) the tier table would over-budget the line.
 				availableChars: layout.availableChars,
+				reservedChars: layout.reservedChars,
 				maskEmail: options.maskEmail,
 				quotaDisplay: options.quotaDisplay,
 				glyphMode: options.glyphMode,
@@ -1045,10 +1047,10 @@ function createPromptStatus(
 		) {
 			return undefined;
 		}
-		const prefix = currentOptions.quotaStatus.prefix
-		const measured = metrics().availableChars
+		const prefix = currentOptions.quotaStatus.prefix;
 		const layout = {
-			availableChars: measured === undefined ? undefined : Math.max(1, measured - displayWidth(prefix)),
+			availableChars: metrics().availableChars,
+			reservedChars: displayWidth(prefix),
 			maxRows: currentOptions.quotaStatus.rows,
 		};
 		const rendered: Array<{ screen: QuotaStatusScreen; lines: string[] }> = [];

@@ -173,20 +173,40 @@ describe("TUI status slot lifecycle", () => {
 		}
 	});
 
-	it.each([["中文 ", 75], ["e\u0301 ", 78]])("reserves display columns for the mounted V1 prefix %s", async (prefix, availableChars) => {
-		vi.useFakeTimers();
-		vi.spyOn(config, "getQuotaStatus").mockReturnValue({ ...config.getQuotaStatus({}), prefix });
-		const format = vi.spyOn(status, "formatPromptStatusText");
-		const h = harness();
-		await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
-		const render = h.plugin()?.slots["session_prompt_right"];
-		if (!render) throw new Error("missing prompt slot");
-		const node = render({}, { session_id: "FAKE_SESSION" });
-		if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
-		Object.assign(node, { parent: { primaryAxis: "row", width: 120, getChildren: () => [node, {}] } });
-		await vi.advanceTimersByTimeAsync(500);
-		expect(node.content).toBeTypeOf("string");
-		expect(format).toHaveBeenLastCalledWith(expect.objectContaining({ availableChars }));
+	describe("quotaStatus.prefix on the mounted line", () => {
+		const now = new Date(2026, 8, 5, 12, 0).getTime();
+		const served: status.CompactQuotaStatus = {
+			type: "ready", stale: false, accountIndex: 1, accountCount: 2, accountEmail: "someone@example.com",
+			limits: [{ label: "5h", leftPercent: 8, resetAtMs: now + 2 * 3_600_000 + 60_000 }, { label: "7d", leftPercent: 83 }],
+		};
+		const full = "[someone@example.com] · 5h 8% resets in 2h · 7d 83%";
+		const shorter = "[someone@example.com] · 5h 8% resets in 2h";
+		const formatPromptStatusText = status.formatPromptStatusText;
+		// The renderer reports 100 columns (a 52-column budget); a 92-column prompt row measures 52.
+		const mount = async (prefix: string, rowWidth?: number): Promise<string> => {
+			vi.useFakeTimers();
+			vi.setSystemTime(now);
+			vi.spyOn(config, "getQuotaStatus").mockReturnValue({ ...config.getQuotaStatus({}), prefix });
+			vi.spyOn(status, "formatPromptStatusText").mockImplementation((params) => formatPromptStatusText({ ...params, quota: served, glyphMode: "unicode" }));
+			const h = harness();
+			await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
+			const node = h.plugin()?.slots["session_prompt_right"]?.({}, { session_id: "FAKE_SESSION" });
+			if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
+			if (rowWidth) Object.assign(node, { parent: { primaryAxis: "row", width: rowWidth, getChildren: () => [node, {}] } });
+			await vi.advanceTimersByTimeAsync(500);
+			return String(node.content);
+		};
+
+		it.each([[undefined], [92]])("spends the prefix from the line's own budget (row width %s)", async (rowWidth) => {
+			expect(await mount("", rowWidth)).toBe(full);
+			for (const prefix of ["OpenAI ", "中文 ", "e\u0301 "]) {
+				expect(await mount(prefix, rowWidth)).toBe(`${prefix}${shorter}`);
+			}
+		});
+
+		it("hides the line when the prefix leaves no room", async () => {
+			expect(await mount("x".repeat(40), 80)).toBe("");
+		});
 	});
 
 	it("renders concurrent prompt slots with their own account and quota, and global fallback for a new session", async () => {
