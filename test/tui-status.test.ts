@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	fitStatusLines,
 	formatPromptStatusText,
+	formatQuotaCreditsStatusLines,
 	formatQuotaDetailsText,
 	formatQuotaOverviewStatusLines,
 	formatQuotaOverviewStatusText,
@@ -636,6 +637,35 @@ describe("formatResetTime time left", () => {
 	it("#given a reset already in the past #when formatted #then no reset is shown", () => {
 		expect(resetLine("7d", now.getTime() - 60_000)).not.toContain("resets");
 	});
+
+	describe("reserved prefix columns", () => {
+		const served: CompactQuotaStatus = {
+			...quota,
+			accountIndex: 1,
+			accountCount: 2,
+			accountEmail: "someone@example.com",
+			limits: [
+				{ label: "5h", leftPercent: 8, resetAtMs: now.getTime() + 2 * 3_600_000 },
+				{ label: "7d", leftPercent: 83 },
+			],
+		};
+		const full = `[someone@example.com]${sep}5h 8% resets in 2h${sep}7d 83%`;
+		const shorter = `[someone@example.com]${sep}5h 8% resets in 2h`;
+
+		it("takes the prefix out of the terminal-width budget", () => {
+			expect(formatPromptStatusText({ quota: served, width: 100 })).toBe(full);
+			expect(formatPromptStatusText({ quota: served, width: 100, reservedChars: 7 })).toBe(shorter);
+		});
+
+		it("takes the prefix out of the measured slot", () => {
+			expect(formatPromptStatusText({ quota: served, width: 200, availableChars: 52, reservedChars: 7 })).toBe(shorter);
+		});
+
+		it("renders nothing when the prefix leaves no room", () => {
+			expect(formatPromptStatusText({ quota: served, availableChars: 9, reservedChars: 5 })).toBe("");
+			expect(formatPromptStatusText({ quota: served, width: 100, reservedChars: 60 })).toBe("");
+		});
+	});
 });
 
 describe("tui quota status hostile inputs", () => {
@@ -775,6 +805,33 @@ describe("pool-wide prompt status", () => {
 				availableChars: 14,
 			}),
 		).toBe("80%: 3 acct.");
+	});
+
+	it("takes reserved prefix columns out of the pool line's budget", () => {
+		expect(
+			formatQuotaOverviewStatusText({ accounts: pool, options, availableChars: 60, reservedChars: 46 }),
+		).toBe("80%: 3 acct.");
+		expect(
+			formatQuotaOverviewStatusText({ accounts: pool, options, width: 200, reservedChars: 106 }),
+		).toBe("80%: 3 acct.");
+	});
+
+	it("hides the pool, resets, and credits lines when the prefix leaves no room", () => {
+		const spent: QuotaOverviewAccount[] = [{
+			index: 1, planType: "plus", resetCredits: 1,
+			credits: { hasCredits: true, unlimited: false, balance: 5 },
+			windows: [{ leftPercent: 0, resetAtMs: NOW + 6 * DAY }],
+		}];
+		const renders = (reservedChars: number) => {
+			const layout = { options, availableChars: 40, reservedChars, maxRows: 4 };
+			return [
+				formatQuotaOverviewStatusLines({ accounts: pool, ...layout }),
+				formatQuotaResetsStatusLines({ accounts: spent, ...layout }),
+				formatQuotaCreditsStatusLines({ accounts: spent, ...layout }),
+			];
+		};
+		for (const lines of renders(0)) expect(lines).not.toEqual([]);
+		expect(renders(40)).toEqual([[], [], []]);
 	});
 
 	it("stays conservative when the width is unknown", () => {
@@ -931,8 +988,9 @@ describe("fitStatusLines", () => {
 		expect(fitStatusLines(["aaaa, bbbb", "cc"], 5, 1)).toEqual(["cc"]);
 	});
 
-	it("falls back to the shortest rung rather than rendering nothing", () => {
-		expect(fitStatusLines(["aaaaaa", "bbbb"], 2, 1)).toEqual(["bbbb"]);
+	it("renders nothing rather than a rung wider than the budget", () => {
+		expect(fitStatusLines(["aaaaaa", "bbbb"], 2, 1)).toEqual([]);
+		expect(fitStatusLines(["a"], 0, 1)).toEqual([]);
 	});
 
 	it("renders nothing for an empty ladder", () => {

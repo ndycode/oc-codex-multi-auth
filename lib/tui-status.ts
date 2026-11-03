@@ -459,6 +459,8 @@ export function formatPromptStatusText(params: {
 	 * other content, and only the measurement knows how much.
 	 */
 	availableChars?: number;
+	/** Columns of the budget already spent, e.g. on `quotaStatus.prefix`. */
+	reservedChars?: number;
 	maskEmail?: boolean;
 	quotaDisplay?: QuotaDisplayMode;
 	/** `codexTuiGlyphMode`; `auto` resolves against the environment. */
@@ -503,11 +505,11 @@ export function formatPromptStatusText(params: {
 	// eligible if its grapheme-aware width fits, so CJK labels and emoji
 	// cannot overflow a terminal `string.length` would call short enough.
 	const maxChars =
-		typeof available === "number" &&
+		(typeof available === "number" &&
 		Number.isFinite(available) &&
 		available > 0
 			? Math.floor(available)
-			: maxStatusChars(params.width);
+			: maxStatusChars(params.width)) - (params.reservedChars ?? 0);
 	return (
 		candidates.find((candidate) => displayWidth(candidate) <= maxChars) ?? ""
 	);
@@ -556,17 +558,16 @@ function maxOverviewStatusChars(width: number | undefined): number {
  * needs no reserve at all, so it is used verbatim.
  */
 function resolveOverviewChars(
-	width: number | undefined,
-	availableChars: number | undefined,
+	params: { width?: number; availableChars?: number; reservedChars?: number },
 ): number {
-	if (
+	const { availableChars } = params;
+	const base =
 		typeof availableChars === "number" &&
 		Number.isFinite(availableChars) &&
 		availableChars > 0
-	) {
-		return Math.floor(availableChars);
-	}
-	return maxOverviewStatusChars(width);
+			? Math.floor(availableChars)
+			: maxOverviewStatusChars(params.width);
+	return base - (params.reservedChars ?? 0);
 }
 
 /**
@@ -614,7 +615,8 @@ export function wrapStatusCandidate(
  *
  * The ladder is walked once, and the first rung that fits wins - whether it
  * fits on one row or has to be broken across two. Trying every rung on one row
- * before allowing a second would shed detail the reader has room for.
+ * before allowing a second would shed detail the reader has room for. When no
+ * rung fits, nothing renders: an overflowing line wraps or gets ellipsized.
  */
 export function fitStatusLines(
 	candidates: readonly string[],
@@ -625,8 +627,7 @@ export function fitStatusLines(
 		const rows = wrapStatusCandidate(candidate, maxChars, maxRows);
 		if (rows) return rows;
 	}
-	const last = candidates.at(-1);
-	return last ? [last] : [];
+	return [];
 }
 
 /**
@@ -638,11 +639,12 @@ export function formatQuotaOverviewStatusLines(params: {
 	options: QuotaOverviewOptions;
 	width?: number;
 	availableChars?: number;
+	reservedChars?: number;
 	maxRows?: number;
 }): string[] {
 	return fitStatusLines(
 		formatQuotaOverviewCandidates(params.accounts, params.options),
-		resolveOverviewChars(params.width, params.availableChars),
+		resolveOverviewChars(params),
 		params.maxRows ?? 1,
 	);
 }
@@ -652,6 +654,7 @@ export function formatQuotaOverviewStatusText(params: {
 	options: QuotaOverviewOptions;
 	width?: number;
 	availableChars?: number;
+	reservedChars?: number;
 }): string {
 	return formatQuotaOverviewStatusLines(params)[0] ?? "";
 }
@@ -663,6 +666,7 @@ export function formatQuotaResetsStatusLines(params: {
 	resetsMinUsedPercent?: number;
 	width?: number;
 	availableChars?: number;
+	reservedChars?: number;
 	maxRows?: number;
 }): string[] {
 	const candidates = formatQuotaResetsCandidates(params.accounts, {
@@ -674,7 +678,7 @@ export function formatQuotaResetsStatusLines(params: {
 	if (candidates.length === 0) return [];
 	return fitStatusLines(
 		candidates,
-		resolveOverviewChars(params.width, params.availableChars),
+		resolveOverviewChars(params),
 		params.maxRows ?? 1,
 	);
 }
@@ -686,6 +690,7 @@ export function formatQuotaCreditsStatusLines(params: {
 	resetsMinUsedPercent?: number;
 	width?: number;
 	availableChars?: number;
+	reservedChars?: number;
 	maxRows?: number;
 }): string[] {
 	const candidates = formatQuotaCreditsCandidates(params.accounts, {
@@ -696,7 +701,7 @@ export function formatQuotaCreditsStatusLines(params: {
 	if (candidates.length === 0) return [];
 	return fitStatusLines(
 		candidates,
-		resolveOverviewChars(params.width, params.availableChars),
+		resolveOverviewChars(params),
 		params.maxRows ?? 1,
 	);
 }
