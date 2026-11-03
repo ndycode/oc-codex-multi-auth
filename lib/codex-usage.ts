@@ -35,6 +35,7 @@ import {
 	MAX_QUOTA_RESET_HORIZON_MS,
 } from "./quota-windows.js";
 import { coordinatePersistedRefresh } from "./storage/coordinated-refresh.js";
+import { getWorkspaceIdentityKey } from "./storage/identity.js";
 import {
 	createCodexHeaders,
 	isDeactivatedWorkspaceError,
@@ -1292,4 +1293,12 @@ export function createUsageAccountFingerprint(
 		account.refreshToken ?? "",
 	].join("\0");
 	return createHash("sha256").update(fingerprintSource).digest("hex").slice(0, 16);
+}
+
+export function createUsageAccountKey(account: AccountMetadataV3): string {
+	const identity = getWorkspaceIdentityKey({
+		...account,
+		accountUserId: account.accountUserId?.trim() || extractAccountUserId(account.accessToken),
+	});
+	return createHash("sha256").update(identity).digest("hex").slice(0, 16);
 }

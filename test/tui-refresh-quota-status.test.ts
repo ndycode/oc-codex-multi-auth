@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccountStorageV3 } from "../lib/storage.js";
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
-import { createUsageAccountFingerprint, ensureCodexUsageAccessToken, fetchCodexUsage, resolveCodexUsageActiveAccount } from "../lib/codex-usage.js";
+import { createUsageAccountFingerprint, createUsageAccountKey, ensureCodexUsageAccessToken, fetchCodexUsage, resolveCodexUsageActiveAccount } from "../lib/codex-usage.js";
 
 vi.mock("../lib/storage.js", async (original) => ({
 	...await original<typeof import("../lib/storage.js")>(),
@@ -31,10 +31,10 @@ import {
 	getTuiQuotaCachePath,
 	TUI_QUOTA_SNAPSHOT_FRESH_MS,
 	writeTuiQuotaSnapshot,
-	writeSessionQuotaSnapshot,
+	writeSessionQuotaEntry,
 	type TuiQuotaSnapshot,
 } from "../lib/tui-quota-cache.js";
-import { refreshQuotaStatusInner, resolveQuotaPollFingerprint } from "../tui.js";
+import { refreshQuotaStatusInner, resolveQuotaPollTarget } from "../tui.js";
 
 const storage: AccountStorageV3 = {
 	version: 3,
@@ -113,7 +113,7 @@ describe("refreshQuotaStatusInner", () => {
 			});
 		});
 		for (const [index, snapshot] of snapshots.entries()) {
-			await writeSessionQuotaSnapshot(`ses_${index}`, snapshot, stateDir);
+			await writeSessionQuotaEntry(`ses_${index}`, { accountKey: createUsageAccountKey(storage.accounts[index]!), snapshot }, stateDir);
 			await writeTuiQuotaSnapshot(snapshot, getTuiQuotaCachePath(stateDir));
 		}
 		// When both sessions refresh concurrently.
@@ -124,7 +124,7 @@ describe("refreshQuotaStatusInner", () => {
 			{ type: "ready", accountIndex: 2, limits: [{ leftPercent: 50 }] },
 		]);
 		for (const [index, snapshot] of snapshots.entries()) {
-			expect(await resolveQuotaPollFingerprint(api, `ses_${index}`)).toBe(snapshot.fingerprint);
+			expect((await resolveQuotaPollTarget(api, `ses_${index}`))?.fingerprint).toBe(snapshot.fingerprint);
 		}
 	});
 
@@ -153,10 +153,10 @@ describe("refreshQuotaStatusInner", () => {
 		if (!account) throw new Error("missing account fixture");
 		const identity = { fingerprint: createUsageAccountFingerprint(account), source: "headers" as const, accountIndex: 2 };
 		await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({ ...identity, fetchedAt: Date.now() - 1_000, limits: [{ label: "5h", leftPercent: 50 }] }), getTuiQuotaCachePath(stateDir));
-		await writeSessionQuotaSnapshot("FAKE_SESSION", createTuiQuotaSnapshot({ ...identity, limits: [] }), stateDir);
+		await writeSessionQuotaEntry("FAKE_SESSION", { accountKey: createUsageAccountKey(account), snapshot: createTuiQuotaSnapshot({ ...identity, limits: [] }) }, stateDir);
 		vi.mocked(ensureCodexUsageAccessToken).mockRejectedValueOnce(new Error("FAKE_USAGE_FAILURE"));
 		expect(await refreshQuotaStatusInner(api, "FAKE_SESSION")).toMatchObject({ type: "ready", accountIndex: 2, stale: true, limits: [{ leftPercent: 50 }] });
-		expect(await resolveQuotaPollFingerprint(api, "FAKE_SESSION")).toBe(identity.fingerprint);
+		expect((await resolveQuotaPollTarget(api, "FAKE_SESSION"))?.fingerprint).toBe(identity.fingerprint);
 	});
 
 	it("refreshes stale session quota for its serving account instead of the global active account", async () => {
@@ -165,11 +165,11 @@ describe("refreshQuotaStatusInner", () => {
 		const account = storage.accounts[1];
 		const globalAccount = storage.accounts[0];
 		if (!account || !globalAccount) throw new Error("missing account fixture");
-		await writeSessionQuotaSnapshot("ses_stale", createTuiQuotaSnapshot({
+		await writeSessionQuotaEntry("ses_stale", { accountKey: createUsageAccountKey(account), snapshot: createTuiQuotaSnapshot({
 			fingerprint: createUsageAccountFingerprint(account), source: "headers", accountIndex: 2,
 			fetchedAt: Date.now() - TUI_QUOTA_SNAPSHOT_FRESH_MS,
 			limits: [{ label: "5h", leftPercent: 50 }],
-		}), stateDir);
+		}) }, stateDir);
 		await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({
 			fingerprint: createUsageAccountFingerprint(globalAccount), source: "headers", accountIndex: 1,
 			limits: [{ label: "5h", leftPercent: 10 }],
@@ -181,7 +181,28 @@ describe("refreshQuotaStatusInner", () => {
 		// Then usage comes from its bound account, and polling retains that binding.
 		expect(status).toMatchObject({ type: "ready", accountIndex: 2, limits: [{ leftPercent: 70 }] });
 		expect(ensureCodexUsageAccessToken).toHaveBeenCalledWith({ storage, account });
-		expect(await resolveQuotaPollFingerprint(api, "ses_stale")).toBe(createUsageAccountFingerprint(account));
+		expect((await resolveQuotaPollTarget(api, "ses_stale"))?.fingerprint).toBe(createUsageAccountFingerprint(account));
+	});
+
+	it("keeps an idle session on its serving account after that account's refresh token rotates", async () => {
+		// Given a session bound to the serving account before its refresh token rotates.
+		const api = createFakeApi(stateDir);
+		const serving = { ...storage.accounts[1]!, refreshToken: "FAKE_REFRESH_SERVING_V1" };
+		await writeSessionQuotaEntry("FAKE_SESSION", { accountKey: createUsageAccountKey(serving), snapshot: createTuiQuotaSnapshot({
+			fingerprint: createUsageAccountFingerprint(serving), source: "headers", accountIndex: 2, accountCount: 3,
+			accountEmail: serving.email, fetchedAt: Date.now() - TUI_QUOTA_SNAPSHOT_FRESH_MS,
+			limits: [{ label: "5h", leftPercent: 50 }],
+		}) }, stateDir);
+		// When a refresh rotates the serving account's token.
+		const rotated = { ...serving, refreshToken: "FAKE_REFRESH_SERVING_V2" };
+		vi.mocked(loadAccounts).mockResolvedValue({ ...storage, accounts: [storage.accounts[0]!, rotated] });
+		vi.mocked(ensureCodexUsageAccessToken).mockResolvedValueOnce({ accessToken: "FAKE_ACCESS", refreshed: false, persisted: false });
+		vi.mocked(fetchCodexUsage).mockResolvedValueOnce({ rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 18_000 } } });
+		// Then polling and refresh still follow the serving account, not the active one.
+		expect((await resolveQuotaPollTarget(api, "FAKE_SESSION"))?.fingerprint).toBe(createUsageAccountFingerprint(rotated));
+		expect(await refreshQuotaStatusInner(api, "FAKE_SESSION")).toMatchObject({
+			type: "ready", accountIndex: 2, accountEmail: "serving@example.com", limits: [{ leftPercent: 70 }],
+		});
 	});
 
 	it.each(["expires", "account is removed"])("keeps the serving account across polls until its snapshot %s", async (invalidation) => {
@@ -219,7 +240,7 @@ describe("refreshQuotaStatusInner", () => {
 
 		for (const elapsedMs of [1_000, 2_000]) {
 			vi.setSystemTime(servingSnapshot.fetchedAt + elapsedMs);
-			const pollFingerprint = await resolveQuotaPollFingerprint(api);
+			const pollFingerprint = (await resolveQuotaPollTarget(api))?.fingerprint;
 			expect(pollFingerprint).toBe(result.fingerprint);
 			expect(pollFingerprint).not.toBe(activeFingerprint);
 			expect(ensureCodexUsageAccessToken).not.toHaveBeenCalled();
@@ -234,7 +255,7 @@ describe("refreshQuotaStatusInner", () => {
 			invalidation === "expires" ? TUI_QUOTA_SNAPSHOT_FRESH_MS : 3_000
 		));
 
-		const nextFingerprint = await resolveQuotaPollFingerprint(api);
+		const nextFingerprint = (await resolveQuotaPollTarget(api))?.fingerprint;
 		expect(nextFingerprint).toBe(activeFingerprint);
 		expect(nextFingerprint).not.toBe(result.fingerprint);
 		expect(ensureCodexUsageAccessToken).not.toHaveBeenCalled();
@@ -271,7 +292,7 @@ describe("refreshQuotaStatusInner", () => {
 		});
 
 		vi.setSystemTime(Date.now() + 1_000);
-		expect(await resolveQuotaPollFingerprint(api)).toBe(nextFingerprint);
+		expect((await resolveQuotaPollTarget(api))?.fingerprint).toBe(nextFingerprint);
 		expect(ensureCodexUsageAccessToken).toHaveBeenCalledTimes(1);
 		expect(fetchCodexUsage).toHaveBeenCalledTimes(1);
 	});

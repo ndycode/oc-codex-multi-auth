@@ -26,6 +26,7 @@ import {
 } from "./lib/tui-quota-overview.js";
 import {
 	createUsageAccountFingerprint,
+	createUsageAccountKey,
 	ensureCodexUsageAccessToken,
 	fetchCodexUsage,
 	formatUsageWindowLabel,
@@ -55,11 +56,11 @@ import {
 	isFreshTuiQuotaSnapshot,
 	isTuiQuotaSnapshot,
 	readTuiQuotaSnapshot,
-	readSessionQuotaSnapshot,
+	readSessionQuotaEntry,
 	writeTuiQuotaSnapshot,
 	type TuiQuotaSnapshot,
 } from "./lib/tui-quota-cache.js";
-import { getStoragePath, loadAccounts } from "./lib/storage.js";
+import { getStoragePath, loadAccounts, type AccountStorageV3 } from "./lib/storage.js";
 import { protectQuotaStatusSlot } from "./lib/tui-status-slot.js";
 import { displayWidth, sanitizeDisplayText } from "./lib/ui/display-text.js";
 import type { UiGlyphMode } from "./lib/ui/theme.js";
@@ -255,9 +256,24 @@ async function readSharedQuotaStatus(
 		: undefined;
 }
 
-async function readSessionQuotaStatus(api: TuiPluginApi, sessionID: string | undefined): Promise<StoredQuotaStatus | undefined> {
-	return await readSessionQuotaSnapshot(sessionID, api.state.path.state) ??
-		await readSessionQuotaSnapshot(sessionID);
+type SessionQuotaBinding = {
+	index: number;
+	account: AccountStorageV3["accounts"][number];
+	snapshot: StoredQuotaStatus;
+};
+
+async function readSessionQuotaBinding(
+	api: TuiPluginApi,
+	storage: AccountStorageV3,
+	sessionID: string | undefined,
+): Promise<SessionQuotaBinding | undefined> {
+	const entry = await readSessionQuotaEntry(sessionID, api.state.path.state) ??
+		await readSessionQuotaEntry(sessionID);
+	if (!entry) return undefined;
+	const index = storage.accounts.findIndex((account) => createUsageAccountKey(account) === entry.accountKey);
+	const account = storage.accounts[index];
+	if (!account) return undefined;
+	return { index, account, snapshot: { ...entry.snapshot, fingerprint: createUsageAccountFingerprint(account) } };
 }
 
 async function writeSharedQuotaStatus(
@@ -272,16 +288,14 @@ async function writeSharedQuotaStatus(
 	}
 }
 
-export async function resolveQuotaPollFingerprint(
+export async function resolveQuotaPollTarget(
 	api: TuiPluginApi,
 	sessionID?: string,
-): Promise<string | undefined> {
+): Promise<{ fingerprint: string; session?: StoredQuotaStatus } | undefined> {
 	const storage = await loadAccounts();
 	if (!storage || storage.accounts.length === 0) return undefined;
-	const session = await readSessionQuotaStatus(api, sessionID);
-	if (session && storage.accounts.some((account) => createUsageAccountFingerprint(account) === session.fingerprint)) {
-		return session.fingerprint;
-	}
+	const binding = await readSessionQuotaBinding(api, storage, sessionID);
+	if (binding) return { fingerprint: binding.snapshot.fingerprint, session: binding.snapshot };
 	const shared = await readSharedQuotaStatus(api);
 	if (
 		shared?.source === "headers" &&
@@ -290,11 +304,11 @@ export async function resolveQuotaPollFingerprint(
 			(account) => createUsageAccountFingerprint(account) === shared.fingerprint,
 		)
 	) {
-		return shared.fingerprint;
+		return { fingerprint: shared.fingerprint };
 	}
 	const selection = resolveCodexUsageActiveAccount(storage);
 	return selection
-		? createUsageAccountFingerprint(selection.account)
+		? { fingerprint: createUsageAccountFingerprint(selection.account) }
 		: undefined;
 }
 
@@ -308,12 +322,8 @@ export async function refreshQuotaStatusInner(
 			return { type: "missing" };
 		}
 
-		const session = await readSessionQuotaStatus(api, sessionID);
-		const sessionIndex = session
-			? storage.accounts.findIndex((account) => createUsageAccountFingerprint(account) === session.fingerprint)
-			: -1;
-		const sessionAccount = storage.accounts[sessionIndex];
-		const latestShared = sessionAccount ? session : await readSharedQuotaStatus(api);
+		const binding = await readSessionQuotaBinding(api, storage, sessionID);
+		const latestShared = binding ? binding.snapshot : await readSharedQuotaStatus(api);
 		const now = Date.now();
 		// A shared snapshot only proves freshness while requests flow: the
 		// request path pushes it per response, but during an idle gap nothing
@@ -326,12 +336,12 @@ export async function refreshQuotaStatusInner(
 			writeStoredQuotaStatus(api, latestShared);
 			return toCompactQuotaStatus(latestShared, false);
 		}
-		const selection = sessionAccount ? { account: sessionAccount, index: sessionIndex } : resolveCodexUsageActiveAccount(storage);
+		const selection = binding ?? resolveCodexUsageActiveAccount(storage);
 		if (!selection) return { type: "missing" };
 		const fingerprint = createUsageAccountFingerprint(selection.account);
 		const globalShared = await readSharedQuotaStatus(api, fingerprint);
-		const shared = sessionAccount && session && session.limits.length > 0 && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
-			? session : globalShared;
+		const shared = binding && binding.snapshot.limits.length > 0 && (!globalShared || binding.snapshot.fetchedAt >= globalShared.fetchedAt)
+			? binding.snapshot : globalShared;
 		const stored = readStoredQuotaStatus(api, fingerprint);
 		const cached =
 			shared && (!stored || shared.fetchedAt >= stored.fetchedAt)
@@ -763,11 +773,12 @@ function createActiveQuotaController(
 		if (cachePollInFlight) return;
 		cachePollInFlight = true;
 		void (async () => {
-			const fingerprint = await resolveQuotaPollFingerprint(api, sessionID);
-			if (!fingerprint) {
+			const target = await resolveQuotaPollTarget(api, sessionID);
+			if (!target) {
 				if (currentFingerprint) applyQuota({ type: "missing" });
 				return;
 			}
+			const { fingerprint } = target;
 			if (fingerprint !== currentFingerprint) {
 				currentFingerprint = fingerprint;
 				currentSnapshotRevision = undefined;
@@ -775,9 +786,9 @@ function createActiveQuotaController(
 				refresh();
 				return;
 			}
-			const session = await readSessionQuotaStatus(api, sessionID);
+			const { session } = target;
 			const globalShared = await readSharedQuotaStatus(api, fingerprint);
-			const shared = session?.fingerprint === fingerprint && session.limits.length > 0 && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
+			const shared = session && session.limits.length > 0 && (!globalShared || session.fetchedAt >= globalShared.fetchedAt)
 				? session : globalShared;
 			if (!shared || shared.limits.length === 0) return;
 			const current = quota();

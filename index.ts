@@ -274,6 +274,7 @@ import {
 } from "./lib/tools/index.js";
 import {
 	createUsageAccountFingerprint,
+	createUsageAccountKey,
 	fetchCodexUsage,
 	formatUsageLimitSummary,
 	formatUsageLimitTitle,
@@ -300,7 +301,7 @@ import {
 	clearTuiQuotaSnapshot,
 	createTuiQuotaSnapshot,
 	parseTuiQuotaSnapshotFromHeaders,
-	writeSessionQuotaSnapshot,
+	writeSessionQuotaEntry,
 	writeTuiQuotaSnapshot,
 } from "./lib/tui-quota-cache.js";
 
@@ -1041,9 +1042,10 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 				const snapshot = parseTuiQuotaSnapshotFromHeaders(response.headers, identity);
 				if (sessionID && response.ok) {
 					try {
-						await writeSessionQuotaSnapshot(sessionID, snapshot ?? createTuiQuotaSnapshot({
-							...identity, source: "headers", limits: [],
-						}));
+						await writeSessionQuotaEntry(sessionID, {
+							accountKey: createUsageAccountKey(account),
+							snapshot: snapshot ?? createTuiQuotaSnapshot({ ...identity, source: "headers", limits: [] }),
+						});
 					} catch (error) {
 						logDebug(
 							`[${PLUGIN_NAME}] Failed to record session quota snapshot: ${error instanceof Error ? error.message : String(error)}`,

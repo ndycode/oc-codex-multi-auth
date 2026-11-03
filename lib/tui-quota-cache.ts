@@ -64,19 +64,27 @@ const recentTuiQuotaWrites = new Map<string, RecentTuiQuotaWrite>();
 const SESSION_QUOTA_CACHE_DIR = "oc-codex-multi-auth-tui-sessions";
 const MAX_SESSION_QUOTA_FILES = 128;
 
+export type SessionQuotaEntry = {
+	/** Rotation-stable account identity hash; the snapshot's fingerprint changes with each refresh token. */
+	accountKey: string;
+	snapshot: TuiQuotaSnapshot;
+};
+
 function getSessionQuotaPath(sessionID: string, stateDir?: string): string {
 	const name = createHash("sha256").update(sessionID).digest("hex");
 	return join(resolveStateDir(stateDir), SESSION_QUOTA_CACHE_DIR, `${name}.json`);
 }
 
-export async function readSessionQuotaSnapshot(
+export async function readSessionQuotaEntry(
 	sessionID: string | undefined,
 	stateDir?: string,
-): Promise<TuiQuotaSnapshot | undefined> {
+): Promise<SessionQuotaEntry | undefined> {
 	if (!sessionID) return undefined;
 	try {
 		const parsed: unknown = JSON.parse(await fs.readFile(getSessionQuotaPath(sessionID, stateDir), "utf-8"));
-		return isTuiQuotaSnapshot(parsed) ? sanitizeTuiQuotaSnapshot(parsed) : undefined;
+		return isRecord(parsed) && typeof parsed.accountKey === "string" && isTuiQuotaSnapshot(parsed.snapshot)
+			? { accountKey: parsed.accountKey, snapshot: sanitizeTuiQuotaSnapshot(parsed.snapshot) }
+			: undefined;
 	} catch {
 		return undefined;
 	}
@@ -95,20 +103,20 @@ async function pruneSessionQuotaFiles(dir: string): Promise<void> {
 		.map((file) => fs.unlink(file.path).catch(() => undefined)));
 }
 
-export async function writeSessionQuotaSnapshot(
+export async function writeSessionQuotaEntry(
 	sessionID: string,
-	snapshot: TuiQuotaSnapshot,
+	entry: SessionQuotaEntry,
 	stateDir?: string,
 ): Promise<void> {
 	const target = getSessionQuotaPath(sessionID, stateDir);
 	// Reuse the explicit display-field allowlist; never persist credentials or extra fields.
-	const display: unknown = JSON.parse(getSnapshotWriteKey(snapshot));
+	const display: unknown = JSON.parse(getSnapshotWriteKey(entry.snapshot));
 	if (!isRecord(display)) return;
-	const safeSnapshot = { ...display, version: snapshot.version, fetchedAt: snapshot.fetchedAt };
-	if (!isTuiQuotaSnapshot(safeSnapshot)) return;
+	const snapshot = { ...display, version: entry.snapshot.version, fetchedAt: entry.snapshot.fetchedAt };
+	if (!isTuiQuotaSnapshot(snapshot)) return;
 	const temporary = createTemporaryPath(target, Date.now());
 	try {
-		await writeSnapshotFile(target, temporary, safeSnapshot);
+		await writeSnapshotFile(target, temporary, { accountKey: entry.accountKey, snapshot });
 	} catch (error) {
 		await fs.unlink(temporary).catch(() => undefined);
 		throw error;

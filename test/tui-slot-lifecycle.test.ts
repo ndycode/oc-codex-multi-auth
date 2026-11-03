@@ -7,8 +7,8 @@ import * as storage from "../lib/storage.js";
 import * as config from "../lib/config.js";
 import * as status from "../lib/tui-status.js";
 import { createStorageScope, setStoragePathDirect } from "../lib/storage/state.js";
-import { createUsageAccountFingerprint } from "../lib/codex-usage.js";
-import { createTuiQuotaSnapshot, getTuiQuotaCachePath, writeSessionQuotaSnapshot, writeTuiQuotaSnapshot } from "../lib/tui-quota-cache.js";
+import { createUsageAccountFingerprint, createUsageAccountKey } from "../lib/codex-usage.js";
+import { createTuiQuotaSnapshot, getTuiQuotaCachePath, writeSessionQuotaEntry, writeTuiQuotaSnapshot } from "../lib/tui-quota-cache.js";
 
 const mocks = vi.hoisted(() => ({ cleanups: [] as Array<() => void>, onSignal: (_value: unknown): void => {} }));
 vi.mock("@opentui/solid", () => ({
@@ -102,7 +102,7 @@ describe("TUI status slot lifecycle", () => {
 			for (const index of [0, 1]) {
 				const account = accounts[differentAccounts ? index : 0];
 				if (!account) throw new Error("missing account fixture");
-				await writeSessionQuotaSnapshot(`FAKE_SESSION_${index}`, createTuiQuotaSnapshot({ fingerprint: createUsageAccountFingerprint(account), source: "headers", limits: [] }), dir);
+				await writeSessionQuotaEntry(`FAKE_SESSION_${index}`, { accountKey: createUsageAccountKey(account), snapshot: createTuiQuotaSnapshot({ fingerprint: createUsageAccountFingerprint(account), source: "headers", limits: [] }) }, dir);
 			}
 			const h = harness(dir);
 			let cacheReads = 0;
@@ -148,7 +148,7 @@ describe("TUI status slot lifecycle", () => {
 		const identity = { fingerprint: createUsageAccountFingerprint(account), source: "headers" as const, accountIndex: 1, accountEmail: account.email };
 		const initial = createTuiQuotaSnapshot({ ...identity, limits: [{ label: "5h", leftPercent: 80 }] });
 		try {
-			await writeSessionQuotaSnapshot("FAKE_SESSION", initial, dir);
+			await writeSessionQuotaEntry("FAKE_SESSION", { accountKey: createUsageAccountKey(account), snapshot: initial }, dir);
 			const first = Promise.withResolvers<void>();
 			mocks.onSignal = (value) => { if (value && typeof value === "object" && "type" in value && value.type === "ready") first.resolve(); };
 			const h = harness(dir);
@@ -159,7 +159,7 @@ describe("TUI status slot lifecycle", () => {
 			await first.promise;
 			const fetchedAt = initial.fetchedAt + 1;
 			await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({ ...identity, fetchedAt, limits: [{ label: "5h", leftPercent: 50 }] }), getTuiQuotaCachePath(dir));
-			await writeSessionQuotaSnapshot("FAKE_SESSION", createTuiQuotaSnapshot({ ...identity, fetchedAt: fetchedAt + 1, limits: [] }), dir);
+			await writeSessionQuotaEntry("FAKE_SESSION", { accountKey: createUsageAccountKey(account), snapshot: createTuiQuotaSnapshot({ ...identity, fetchedAt: fetchedAt + 1, limits: [] }) }, dir);
 			const updated = Promise.withResolvers<void>();
 			mocks.onSignal = (value) => { if (value && typeof value === "object" && "fetchedAt" in value && value.fetchedAt === fetchedAt) updated.resolve(); };
 			await vi.advanceTimersByTimeAsync(1_000);
@@ -198,7 +198,7 @@ describe("TUI status slot lifecycle", () => {
 		try {
 			for (const [index, account] of accounts.entries()) {
 				const snapshot = createTuiQuotaSnapshot({ fingerprint: createUsageAccountFingerprint(account), source: "headers", accountIndex: index + 1, accountEmail: account.email, limits: [{ label: "5h", leftPercent: 80 - index * 30 }] });
-				await writeSessionQuotaSnapshot(`ses_${index}`, snapshot, dir);
+				await writeSessionQuotaEntry(`ses_${index}`, { accountKey: createUsageAccountKey(account), snapshot }, dir);
 				await writeTuiQuotaSnapshot(snapshot, getTuiQuotaCachePath(dir));
 			}
 			const h = harness(dir);

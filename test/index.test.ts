@@ -1306,9 +1306,11 @@ describe("OpenAIOAuthPlugin", () => {
 
 		it.each([true, false])("records the host session's serving account without forwarding the internal header (quota headers: %s)", async (hasQuota) => {
 			// Given a host session and one eligible account.
-			mockStorage.accounts = [{ accountId: "account-1", refreshToken: "FAKE_REFRESH", accessToken: "FAKE_ACCESS", expiresAt: Date.now() + 60_000 }];
+			const account = { accountId: "account-1", refreshToken: "FAKE_REFRESH", accessToken: "FAKE_ACCESS", expiresAt: Date.now() + 60_000, addedAt: 1, lastUsed: 1 };
+			mockStorage.accounts = [account];
 			const cache = await import("../lib/tui-quota-cache.js");
-			const record = vi.spyOn(cache, "writeSessionQuotaSnapshot").mockResolvedValue();
+			const { createUsageAccountKey } = await import("../lib/codex-usage.js");
+			const record = vi.spyOn(cache, "writeSessionQuotaEntry").mockResolvedValue();
 			vi.spyOn(cache, "writeTuiQuotaSnapshot").mockResolvedValue();
 			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), {
 				status: 200, headers: hasQuota ? { "x-codex-primary-used-percent": "20", "x-codex-primary-window-minutes": "300" } : {},
@@ -1321,8 +1323,11 @@ describe("OpenAIOAuthPlugin", () => {
 			await sdk.fetch("https://api.openai.com/v1/responses", {
 				method: "POST", headers: output.headers, body: JSON.stringify({ model: "gpt-5.4", input: [] }),
 			});
-			// Then the session receives only display data and the marker never reaches the backend.
-			expect(record).toHaveBeenCalledWith("ses_host_session", expect.objectContaining({ accountIndex: 1, limits: hasQuota ? [expect.objectContaining({ leftPercent: 80 })] : [] }));
+			// Then the session receives the account's stable key and only display data, and the marker never reaches the backend.
+			expect(record).toHaveBeenCalledWith("ses_host_session", {
+				accountKey: createUsageAccountKey(account),
+				snapshot: expect.objectContaining({ accountIndex: 1, limits: hasQuota ? [expect.objectContaining({ leftPercent: 80 })] : [] }),
+			});
 			const sentHeaders = new Headers(fetchSpy.mock.calls[0]?.[1]?.headers);
 			expect(sentHeaders.has("x-oc-codex-tui-session")).toBe(false);
 		});
@@ -1330,7 +1335,7 @@ describe("OpenAIOAuthPlugin", () => {
 		it.each(["session", "global"] as const)("still attempts both quota snapshot writes when the %s write fails", async (failure) => {
 			mockStorage.accounts = [{ accountId: "FAKE_ACCOUNT", refreshToken: "FAKE_REFRESH", accessToken: "FAKE_ACCESS", expiresAt: Date.now() + 60_000 }];
 			const cache = await import("../lib/tui-quota-cache.js");
-			const sessionWrite = vi.spyOn(cache, "writeSessionQuotaSnapshot").mockResolvedValue();
+			const sessionWrite = vi.spyOn(cache, "writeSessionQuotaEntry").mockResolvedValue();
 			const globalWrite = vi.spyOn(cache, "writeTuiQuotaSnapshot").mockResolvedValue();
 			const failedWrite = failure === "session" ? sessionWrite : globalWrite;
 			failedWrite.mockRejectedValue(new Error("FAKE_STORAGE_FAILURE"));
@@ -1345,7 +1350,7 @@ describe("OpenAIOAuthPlugin", () => {
 				method: "POST", headers: headers.headers, body: JSON.stringify({ model: "gpt-5.4", input: [] }),
 			});
 			expect(response.ok).toBe(true);
-			expect(sessionWrite).toHaveBeenCalledWith("FAKE_SESSION", expect.objectContaining({ limits: [expect.objectContaining({ leftPercent: 80 })] }));
+			expect(sessionWrite).toHaveBeenCalledWith("FAKE_SESSION", expect.objectContaining({ snapshot: expect.objectContaining({ limits: [expect.objectContaining({ leftPercent: 80 })] }) }));
 			expect(globalWrite).toHaveBeenCalledWith(expect.objectContaining({ limits: [expect.objectContaining({ leftPercent: 80 })] }));
 			const logger = await import("../lib/logger.js");
 			expect(logger.logDebug).toHaveBeenCalledWith(expect.stringContaining("FAKE_STORAGE_FAILURE"));
