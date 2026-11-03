@@ -548,6 +548,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 	initLogger(client ?? {});
 	let customBaseURLWarningShown = false;
 	let customBaseURLErrorShown = false;
+	let customFetchInstalled = false;
 	let cachedAccountManager: AccountManager | null = null;
 	let accountManagerPromise: Promise<AccountManager> | null = null;
 	let loaderMutex: Promise<void> | null = null;
@@ -2476,7 +2477,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
                 event: eventHandler,
                 dispose: disposeRuntime,
 		"chat.headers": (input, output) => {
-			if (input.model.providerID === PROVIDER_ID) {
+			if (customFetchInstalled && input.sessionID && input.model.providerID === PROVIDER_ID) {
 				output.headers[TUI_SESSION_HEADER] = input.sessionID;
 			}
 			return Promise.resolve();
@@ -2689,6 +2690,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 			await runStartupPreflight();
 
 
+				customFetchInstalled = true;
 				// Return SDK configuration
 				return {
 					apiKey: DUMMY_API_KEY,
@@ -2868,9 +2870,10 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 
 								const normalizedInit = await normalizeRequestInit(input, init);
 								const requestHeaders = new Headers(normalizedInit?.headers ?? (input instanceof Request ? input.headers : undefined));
-								const sessionID = requestHeaders.get(TUI_SESSION_HEADER) || undefined;
+								const sessionHeader = requestHeaders.get(TUI_SESSION_HEADER);
+								const sessionID = sessionHeader || undefined;
 								requestHeaders.delete(TUI_SESSION_HEADER);
-								const baseInit = sessionID ? { ...normalizedInit, headers: requestHeaders } : normalizedInit;
+								const baseInit = sessionHeader === null ? normalizedInit : { ...normalizedInit, headers: requestHeaders };
 								const originalBody = await parseRequestBodyFromInit(baseInit?.body);
 								const isStreaming = originalBody.stream === true;
 								const parsedBody =

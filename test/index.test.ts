@@ -1315,10 +1315,10 @@ describe("OpenAIOAuthPlugin", () => {
 			vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), {
 				status: 200, headers: hasQuota ? { "x-codex-primary-used-percent": "20", "x-codex-primary-window-minutes": "300" } : {},
 			}));
-			const output = { headers: {} };
-			await plugin["chat.headers"]({ sessionID: "ses_host_session", model: { providerID: "openai" } }, output);
 			const sdk = await plugin.auth.loader(async () => ({ type: "oauth", access: "a", refresh: "r", expires: Date.now() + 60_000, multiAccount: true }), {});
 			if (!sdk.fetch) throw new Error("missing SDK fetch");
+			const output = { headers: {} };
+			await plugin["chat.headers"]({ sessionID: "ses_host_session", model: { providerID: "openai" } }, output);
 			// When the SDK sends a response request with the host hook's headers.
 			await sdk.fetch("https://api.openai.com/v1/responses", {
 				method: "POST", headers: output.headers, body: JSON.stringify({ model: "gpt-5.4", input: [] }),
@@ -1340,10 +1340,10 @@ describe("OpenAIOAuthPlugin", () => {
 			vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), {
 				status: 200, headers: { "x-codex-primary-used-percent": "20", "x-codex-primary-window-minutes": "300" },
 			}));
-			const headers = { headers: {} };
-			await plugin["chat.headers"]({ sessionID: "FAKE_SESSION", model: { providerID: "openai" } }, headers);
 			const sdk = await plugin.auth.loader(async () => ({ type: "oauth", access: "FAKE_ACCESS", refresh: "FAKE_REFRESH", expires: Date.now() + 60_000, multiAccount: true }), {});
 			if (!sdk.fetch) throw new Error("missing SDK fetch");
+			const headers = { headers: {} };
+			await plugin["chat.headers"]({ sessionID: "FAKE_SESSION", model: { providerID: "openai" } }, headers);
 			const response = await sdk.fetch("https://api.openai.com/v1/responses", {
 				method: "POST", headers: headers.headers, body: JSON.stringify({ model: "gpt-5.4", input: [] }),
 			});

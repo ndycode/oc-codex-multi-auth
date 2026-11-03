@@ -93,4 +93,19 @@ describe("TUI session header with the real Codex header builder", () => {
 		expect(sent.get("authorization")).toBe("Bearer FAKE_ACCESS");
 		expect(sent.has(MARKER)).toBe(false);
 	});
+
+	it("strips an empty marker before the upstream request", async () => {
+		const sent = await sendUpstream(await loadFetch(), { [MARKER]: "" });
+		expect(sent.get("authorization")).toBe("Bearer FAKE_ACCESS");
+		expect(sent.has(MARKER)).toBe(false);
+	});
+
+	it("does not mark a request before this plugin's fetch is installed", async () => {
+		expect(await chatHeaders("ses_FAKE")).not.toHaveProperty(MARKER);
+	});
+
+	it("does not mark a request without a session ID", async () => {
+		await loadFetch();
+		expect(await chatHeaders("")).not.toHaveProperty(MARKER);
+	});
 });
