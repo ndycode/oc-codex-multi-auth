@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
@@ -59,6 +60,73 @@ type RecentTuiQuotaWrite = {
 };
 
 const recentTuiQuotaWrites = new Map<string, RecentTuiQuotaWrite>();
+
+const SESSION_QUOTA_CACHE_DIR = "oc-codex-multi-auth-tui-sessions";
+const MAX_SESSION_QUOTA_FILES = 128;
+
+export type SessionQuotaEntry = {
+	/** Rotation-stable account identity hash; the snapshot's fingerprint changes with each refresh token. */
+	accountKey: string;
+	snapshot: TuiQuotaSnapshot;
+};
+
+function getSessionQuotaPath(sessionID: string, stateDir?: string): string {
+	const name = createHash("sha256").update(sessionID).digest("hex");
+	return join(resolveStateDir(stateDir), SESSION_QUOTA_CACHE_DIR, `${name}.json`);
+}
+
+export async function readSessionQuotaEntry(
+	sessionID: string | undefined,
+	stateDir?: string,
+): Promise<SessionQuotaEntry | undefined> {
+	if (!sessionID) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(await fs.readFile(getSessionQuotaPath(sessionID, stateDir), "utf-8"));
+		return isRecord(parsed) && typeof parsed.accountKey === "string" && isTuiQuotaSnapshot(parsed.snapshot)
+			? { accountKey: parsed.accountKey, snapshot: sanitizeTuiQuotaSnapshot(parsed.snapshot) }
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function pruneSessionQuotaFiles(dir: string): Promise<void> {
+	const names = (await fs.readdir(dir)).filter((name) => name.endsWith(".json"));
+	if (names.length <= MAX_SESSION_QUOTA_FILES) return;
+	const files = await Promise.all(names.map(async (name) => {
+		const path = join(dir, name);
+		const stats = await fs.stat(path).catch(() => undefined);
+		return { path, mtimeMs: stats?.mtimeMs ?? 0 };
+	}));
+	files.sort((left, right) => left.mtimeMs - right.mtimeMs);
+	await Promise.all(files.slice(0, files.length - MAX_SESSION_QUOTA_FILES).map(async (file) => {
+		// Another writer may have refreshed this session since the listing; its rename leaves a newer mtime.
+		const current = await fs.stat(file.path).catch(() => undefined);
+		if (current?.mtimeMs !== file.mtimeMs) return;
+		await fs.unlink(file.path).catch(() => undefined);
+	}));
+}
+
+export async function writeSessionQuotaEntry(
+	sessionID: string,
+	entry: SessionQuotaEntry,
+	stateDir?: string,
+): Promise<void> {
+	const target = getSessionQuotaPath(sessionID, stateDir);
+	// Reuse the explicit display-field allowlist; never persist credentials or extra fields.
+	const display: unknown = JSON.parse(getSnapshotWriteKey(entry.snapshot));
+	if (!isRecord(display)) return;
+	const snapshot = { ...display, version: entry.snapshot.version, fetchedAt: entry.snapshot.fetchedAt };
+	if (!isTuiQuotaSnapshot(snapshot)) return;
+	const temporary = createTemporaryPath(target, Date.now());
+	try {
+		await writeSnapshotFile(target, temporary, { accountKey: entry.accountKey, snapshot });
+	} catch (error) {
+		await fs.unlink(temporary).catch(() => undefined);
+		throw error;
+	}
+	await pruneSessionQuotaFiles(dirname(target)).catch(() => undefined);
+}
 
 function getDefaultOpenCodeStateDir(): string {
 	// Match OpenCode's xdg-basedir resolution: an absolute XDG_STATE_HOME

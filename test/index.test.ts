@@ -688,6 +688,7 @@ vi.mock("../lib/accounts.js", () => {
 type ToolExecute<T = void> = { execute: (args: T) => Promise<string> };
 type OptionalToolExecute<T> = { execute: (args?: T) => Promise<string> };
 type PluginType = {
+	"chat.headers": (input: { sessionID: string; model: { providerID: string } }, output: { headers: Record<string, string> }) => Promise<void>;
 	event: (input: { event: { type: string; properties?: unknown } }) => Promise<void>;
 	auth: {
 		provider: string;
@@ -1301,6 +1302,56 @@ describe("OpenAIOAuthPlugin", () => {
 			expect(result.apiKey).toBeDefined();
 			expect(result.baseURL).toBeDefined();
 			expect(result.fetch).toBeDefined();
+		});
+
+		it.each([true, false])("records the host session's serving account (quota headers: %s)", async (hasQuota) => {
+			// Given a host session and one eligible account.
+			const account = { accountId: "account-1", refreshToken: "FAKE_REFRESH", accessToken: "FAKE_ACCESS", expiresAt: Date.now() + 60_000, addedAt: 1, lastUsed: 1 };
+			mockStorage.accounts = [account];
+			const cache = await import("../lib/tui-quota-cache.js");
+			const { createUsageAccountKey } = await import("../lib/codex-usage.js");
+			const record = vi.spyOn(cache, "writeSessionQuotaEntry").mockResolvedValue();
+			vi.spyOn(cache, "writeTuiQuotaSnapshot").mockResolvedValue();
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), {
+				status: 200, headers: hasQuota ? { "x-codex-primary-used-percent": "20", "x-codex-primary-window-minutes": "300" } : {},
+			}));
+			const sdk = await plugin.auth.loader(async () => ({ type: "oauth", access: "a", refresh: "r", expires: Date.now() + 60_000, multiAccount: true }), {});
+			if (!sdk.fetch) throw new Error("missing SDK fetch");
+			const output = { headers: {} };
+			await plugin["chat.headers"]({ sessionID: "ses_host_session", model: { providerID: "openai" } }, output);
+			// When the SDK sends a response request with the host hook's headers.
+			await sdk.fetch("https://api.openai.com/v1/responses", {
+				method: "POST", headers: output.headers, body: JSON.stringify({ model: "gpt-5.4", input: [] }),
+			});
+			// Then the session receives the account's stable key and only display data.
+			expect(record).toHaveBeenCalledWith("ses_host_session", {
+				accountKey: createUsageAccountKey(account),
+				snapshot: expect.objectContaining({ accountIndex: 1, limits: hasQuota ? [expect.objectContaining({ leftPercent: 80 })] : [] }),
+			});
+		});
+
+		it.each(["session", "global"] as const)("still attempts both quota snapshot writes when the %s write fails", async (failure) => {
+			mockStorage.accounts = [{ accountId: "FAKE_ACCOUNT", refreshToken: "FAKE_REFRESH", accessToken: "FAKE_ACCESS", expiresAt: Date.now() + 60_000 }];
+			const cache = await import("../lib/tui-quota-cache.js");
+			const sessionWrite = vi.spyOn(cache, "writeSessionQuotaEntry").mockResolvedValue();
+			const globalWrite = vi.spyOn(cache, "writeTuiQuotaSnapshot").mockResolvedValue();
+			const failedWrite = failure === "session" ? sessionWrite : globalWrite;
+			failedWrite.mockRejectedValue(new Error("FAKE_STORAGE_FAILURE"));
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: "ok" }), {
+				status: 200, headers: { "x-codex-primary-used-percent": "20", "x-codex-primary-window-minutes": "300" },
+			}));
+			const sdk = await plugin.auth.loader(async () => ({ type: "oauth", access: "FAKE_ACCESS", refresh: "FAKE_REFRESH", expires: Date.now() + 60_000, multiAccount: true }), {});
+			if (!sdk.fetch) throw new Error("missing SDK fetch");
+			const headers = { headers: {} };
+			await plugin["chat.headers"]({ sessionID: "FAKE_SESSION", model: { providerID: "openai" } }, headers);
+			const response = await sdk.fetch("https://api.openai.com/v1/responses", {
+				method: "POST", headers: headers.headers, body: JSON.stringify({ model: "gpt-5.4", input: [] }),
+			});
+			expect(response.ok).toBe(true);
+			expect(sessionWrite).toHaveBeenCalledWith("FAKE_SESSION", expect.objectContaining({ snapshot: expect.objectContaining({ limits: [expect.objectContaining({ leftPercent: 80 })] }) }));
+			expect(globalWrite).toHaveBeenCalledWith(expect.objectContaining({ limits: [expect.objectContaining({ leftPercent: 80 })] }));
+			const logger = await import("../lib/logger.js");
+			expect(logger.logDebug).toHaveBeenCalledWith(expect.stringContaining("FAKE_STORAGE_FAILURE"));
 		});
 
 		it("uses OPENAI_BASE_URL for multiAccount OAuth requests", async () => {

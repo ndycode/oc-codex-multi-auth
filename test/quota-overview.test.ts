@@ -766,6 +766,7 @@ describe("getQuotaStatus", () => {
 			recovery: false,
 			rows: 1,
 			showFor: "always",
+			prefix: "",
 		});
 	});
 
@@ -785,6 +786,7 @@ describe("getQuotaStatus", () => {
 					recovery: true,
 					rows: 2,
 					showFor: "codex-models",
+					prefix: "OpenAI ",
 				},
 			}),
 		).toEqual({
@@ -801,6 +803,7 @@ describe("getQuotaStatus", () => {
 			recovery: true,
 			rows: 2,
 			showFor: "codex-models",
+			prefix: "OpenAI ",
 		});
 	});
 

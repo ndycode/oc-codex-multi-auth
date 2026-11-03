@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	fitStatusLines,
 	formatPromptStatusText,
+	formatQuotaCreditsStatusLines,
 	formatQuotaDetailsText,
 	formatQuotaOverviewStatusLines,
 	formatQuotaOverviewStatusText,
@@ -11,6 +12,7 @@ import {
 	resolveQuotaOverviewTone,
 	resolveQuotaPromptTone,
 	wrapStatusCandidate,
+	withStatusPrefix,
 	type CompactQuotaStatus,
 	type PromptStatusConfig,
 	type PromptStatusMessage,
@@ -31,6 +33,14 @@ const quota: CompactQuotaStatus = {
 };
 
 describe("TUI prompt status helpers", () => {
+	it.each([
+		["中文 ", "     "],
+		["e\u0301 ", "  "],
+	])("aligns continuation rows by display columns for %s", (prefix, indent) => {
+		expect(withStatusPrefix(["first", "second"], prefix)).toEqual([
+			`${prefix}first`, `${indent}second`,
+		]);
+	});
 
 	it("formats prompt status text from supplied quota labels", () => {
 		expect(
@@ -210,7 +220,7 @@ describe("TUI prompt status helpers", () => {
 				width: 120,
 			});
 
-			expect(resetStatus).toMatch(/5h 8% resets \d{2}:\d{2}/);
+			expect(resetStatus).toMatch(/5h 8% resets in 1m/);
 			expect(resetStatus).toContain("7d 83%");
 			expect(
 				formatPromptStatusText({
@@ -535,28 +545,10 @@ describe("TUI prompt status helpers", () => {
 	});
 });
 
-describe("formatResetTime day context", () => {
+describe("formatResetTime time left", () => {
 	// Fake timers freeze both Date.now() and new Date() so the formatter's
 	// "now" and the fixed reset timestamps land on deterministic dates.
 	const now = new Date(2026, 8, 5, 12, 0); // 2026-09-05T12:00 local
-	// Expected labels are derived from the runtime's own Intl formatting so
-	// the assertions hold under any default locale.
-	const weekdayLabel = new Date(2026, 8, 8, 2, 25).toLocaleDateString(
-		undefined,
-		{ weekday: "short" },
-	);
-	const dateLabel = new Date(2026, 8, 15, 2, 25).toLocaleDateString(undefined, {
-		month: "short",
-		day: "2-digit",
-	});
-	const timeLabel = (h: number, m: number) =>
-		new Date(2026, 8, 5, h, m)
-			.toLocaleTimeString(undefined, {
-				hour: "2-digit",
-				minute: "2-digit",
-				hour12: false,
-			})
-			.replace(/^24/, "00");
 
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -611,62 +603,68 @@ describe("formatResetTime day context", () => {
 		expect(out).not.toBe("");
 	});
 
-	it("keeps time-only format for same-day resets", () => {
-		const out = formatPromptStatusText({
-			quota: {
-				...quota,
-				limits: [
-					{ label: "5h", leftPercent: 8, resetAtMs: new Date(2026, 8, 5, 18, 30).getTime() },
-				],
-			},
+	const resetLine = (label: string, resetAtMs: number) =>
+		formatPromptStatusText({
+			quota: { ...quota, limits: [{ label, leftPercent: 0, resetAtMs }] },
 			width: 120,
 		});
-		expect(out).toBe(`5h 8% resets ${timeLabel(18, 30)}`);
+
+	it("#given a reset under an hour away #when formatted #then it shows minutes", () => {
+		expect(resetLine("5h", now.getTime() + 40 * 60_000)).toBe("5h 0% resets in 40m");
 	});
 
-	it("adds weekday for resets within the coming week", () => {
-		const out = formatPromptStatusText({
-			quota: {
-				...quota,
-				limits: [
-					{ label: "7d", leftPercent: 0, resetAtMs: new Date(2026, 8, 8, 2, 25).getTime() },
-				],
-			},
-			width: 120,
-		});
-		expect(out).toBe(`7d 0% resets ${weekdayLabel} ${timeLabel(2, 25)}`);
+	it("#given a reset under a day away #when formatted #then it shows hours", () => {
+		expect(resetLine("5h", new Date(2026, 8, 5, 17, 10).getTime())).toBe("5h 0% resets in 5h");
 	});
 
-	it("uses absolute date beyond a week", () => {
-		const out = formatPromptStatusText({
-			quota: {
-				...quota,
-				limits: [
-					{ label: "7d", leftPercent: 0, resetAtMs: new Date(2026, 8, 15, 2, 25).getTime() },
-				],
-			},
-			width: 120,
-		});
-		expect(out).toBe(`7d 0% resets ${dateLabel} ${timeLabel(2, 25)}`);
+	it("#given a reset days away #when formatted #then it shows days", () => {
+		expect(resetLine("7d", new Date(2026, 8, 8, 2, 25).getTime())).toBe("7d 0% resets in 2d");
+		expect(resetLine("7d", new Date(2026, 8, 15, 2, 25).getTime())).toBe("7d 0% resets in 9d");
 	});
 
-	it("uses absolute date at exactly seven calendar days over a DST weekend", () => {
-		// 2026-03-02 -> 2026-03-09 is seven calendar days. In a zone that
-		// springs forward that weekend (America/New_York among them) the same
-		// gap is 167 hours, and a millisecond division reads it as six days
-		// and renders "Mon", repeating today's weekday. The assertion holds in
-		// any zone; it only exercises the DST path when the runner is in one.
-		vi.setSystemTime(new Date(2026, 2, 2, 12, 0));
-		const reset = new Date(2026, 2, 9, 2, 25);
-		const expected = `${reset.toLocaleDateString(undefined, { month: "short", day: "2-digit" })} ${reset.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}`;
-		const out = formatPromptStatusText({
-			quota: {
-				...quota,
-				limits: [{ label: "7d", leftPercent: 0, resetAtMs: reset.getTime() }],
-			},
-			width: 120,
+	it("#given a reset part way into a unit #when formatted #then it rounds down like the overview countdown", () => {
+		const at = (ms: number) => resetLine("5h", now.getTime() + ms);
+		expect(at(23 * 3_600_000 + 40 * 60_000)).toBe("5h 0% resets in 23h");
+		expect(at(3_600_000 + 50 * 60_000)).toBe("5h 0% resets in 1h");
+		expect(at(40 * 60_000 + 30_000)).toBe("5h 0% resets in 40m");
+		expect(at(30_000)).toBe("5h 0% resets in 1m");
+	});
+
+	it("#given a reset no Date can hold #when formatted #then no reset is shown", () => {
+		expect(resetLine("5h", 1e300)).toBe("5h 0%");
+	});
+
+	it("#given a reset already in the past #when formatted #then no reset is shown", () => {
+		expect(resetLine("7d", now.getTime() - 60_000)).not.toContain("resets");
+	});
+
+	describe("reserved prefix columns", () => {
+		const served: CompactQuotaStatus = {
+			...quota,
+			accountIndex: 1,
+			accountCount: 2,
+			accountEmail: "someone@example.com",
+			limits: [
+				{ label: "5h", leftPercent: 8, resetAtMs: now.getTime() + 2 * 3_600_000 },
+				{ label: "7d", leftPercent: 83 },
+			],
+		};
+		const full = `[someone@example.com]${sep}5h 8% resets in 2h${sep}7d 83%`;
+		const shorter = `[someone@example.com]${sep}5h 8% resets in 2h`;
+
+		it("takes the prefix out of the terminal-width budget", () => {
+			expect(formatPromptStatusText({ quota: served, width: 100 })).toBe(full);
+			expect(formatPromptStatusText({ quota: served, width: 100, reservedChars: 7 })).toBe(shorter);
 		});
-		expect(out).toBe(`7d 0% resets ${expected}`);
+
+		it("takes the prefix out of the measured slot", () => {
+			expect(formatPromptStatusText({ quota: served, width: 200, availableChars: 52, reservedChars: 7 })).toBe(shorter);
+		});
+
+		it("renders nothing when the prefix leaves no room", () => {
+			expect(formatPromptStatusText({ quota: served, availableChars: 9, reservedChars: 5 })).toBe("");
+			expect(formatPromptStatusText({ quota: served, width: 100, reservedChars: 60 })).toBe("");
+		});
 	});
 });
 
@@ -807,6 +805,33 @@ describe("pool-wide prompt status", () => {
 				availableChars: 14,
 			}),
 		).toBe("80%: 3 acct.");
+	});
+
+	it("takes reserved prefix columns out of the pool line's budget", () => {
+		expect(
+			formatQuotaOverviewStatusText({ accounts: pool, options, availableChars: 60, reservedChars: 46 }),
+		).toBe("80%: 3 acct.");
+		expect(
+			formatQuotaOverviewStatusText({ accounts: pool, options, width: 200, reservedChars: 106 }),
+		).toBe("80%: 3 acct.");
+	});
+
+	it("hides the pool, resets, and credits lines when the prefix leaves no room", () => {
+		const spent: QuotaOverviewAccount[] = [{
+			index: 1, planType: "plus", resetCredits: 1,
+			credits: { hasCredits: true, unlimited: false, balance: 5 },
+			windows: [{ leftPercent: 0, resetAtMs: NOW + 6 * DAY }],
+		}];
+		const renders = (reservedChars: number) => {
+			const layout = { options, availableChars: 40, reservedChars, maxRows: 4 };
+			return [
+				formatQuotaOverviewStatusLines({ accounts: pool, ...layout }),
+				formatQuotaResetsStatusLines({ accounts: spent, ...layout }),
+				formatQuotaCreditsStatusLines({ accounts: spent, ...layout }),
+			];
+		};
+		for (const lines of renders(0)) expect(lines).not.toEqual([]);
+		expect(renders(40)).toEqual([[], [], []]);
 	});
 
 	it("stays conservative when the width is unknown", () => {
@@ -963,8 +988,9 @@ describe("fitStatusLines", () => {
 		expect(fitStatusLines(["aaaa, bbbb", "cc"], 5, 1)).toEqual(["cc"]);
 	});
 
-	it("falls back to the shortest rung rather than rendering nothing", () => {
-		expect(fitStatusLines(["aaaaaa", "bbbb"], 2, 1)).toEqual(["bbbb"]);
+	it("renders nothing rather than a rung wider than the budget", () => {
+		expect(fitStatusLines(["aaaaaa", "bbbb"], 2, 1)).toEqual([]);
+		expect(fitStatusLines(["a"], 0, 1)).toEqual([]);
 	});
 
 	it("renders nothing for an empty ladder", () => {

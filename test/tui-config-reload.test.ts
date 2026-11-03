@@ -88,6 +88,15 @@ describe("TUI status configuration reload", () => {
 		expect(same(before, after)).toBe(false);
 	});
 
+	it("reloads a prefix-only edit without restarting the TUI module", () => {
+		writeConfig({ quotaStatus: { prefix: "Before " } });
+		const before = read();
+		writeConfig({ quotaStatus: { prefix: "After " } });
+		const after = read();
+		expect(after.quotaStatus.prefix).toBe("After ");
+		expect(same(before, after)).toBe(false);
+	});
+
 	it("follows a switch back to the serving-account line", () => {
 		writeConfig({ quotaStatus: { mode: "overview" } });
 		expect(read().quotaStatus.screens).toEqual(["overview"]);

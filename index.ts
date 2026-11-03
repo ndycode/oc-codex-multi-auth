@@ -274,6 +274,7 @@ import {
 } from "./lib/tools/index.js";
 import {
 	createUsageAccountFingerprint,
+	createUsageAccountKey,
 	fetchCodexUsage,
 	formatUsageLimitSummary,
 	formatUsageLimitTitle,
@@ -298,9 +299,13 @@ import {
 } from "./lib/codex-credits.js";
 import {
 	clearTuiQuotaSnapshot,
+	createTuiQuotaSnapshot,
 	parseTuiQuotaSnapshotFromHeaders,
+	writeSessionQuotaEntry,
 	writeTuiQuotaSnapshot,
 } from "./lib/tui-quota-cache.js";
+
+const TUI_SESSION_HEADER = "x-oc-codex-tui-session";
 
 /**
  * IPv6 loopback literal. WHATWG URL parsing compresses every equivalent
@@ -543,6 +548,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 	initLogger(client ?? {});
 	let customBaseURLWarningShown = false;
 	let customBaseURLErrorShown = false;
+	let customFetchInstalled = false;
 	let cachedAccountManager: AccountManager | null = null;
 	let accountManagerPromise: Promise<AccountManager> | null = null;
 	let loaderMutex: Promise<void> | null = null;
@@ -1022,9 +1028,10 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 			account: TuiQuotaAccount,
 			accountCount: number,
 			peerAccounts: readonly ({ accountUserId?: string } | undefined)[],
+			sessionID?: string,
 		): Promise<void> => {
 			try {
-				const snapshot = parseTuiQuotaSnapshotFromHeaders(response.headers, {
+				const identity = {
 					fingerprint: createUsageAccountFingerprint(account),
 					accountIndex: account.index + 1,
 					accountCount,
@@ -1032,7 +1039,20 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 					accountLabel: formatAccountLabel(account, account.index, {
 						peerAccounts,
 					}),
-				});
+				};
+				const snapshot = parseTuiQuotaSnapshotFromHeaders(response.headers, identity);
+				if (sessionID && response.ok) {
+					try {
+						await writeSessionQuotaEntry(sessionID, {
+							accountKey: createUsageAccountKey(account),
+							snapshot: snapshot ?? createTuiQuotaSnapshot({ ...identity, source: "headers", limits: [] }),
+						});
+					} catch (error) {
+						logDebug(
+							`[${PLUGIN_NAME}] Failed to record session quota snapshot: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+				}
 				if (!snapshot) return;
 				await writeTuiQuotaSnapshot(snapshot);
 			} catch (error) {
@@ -2456,6 +2476,12 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
         return {
                 event: eventHandler,
                 dispose: disposeRuntime,
+		"chat.headers": (input, output) => {
+			if (customFetchInstalled && input.sessionID && input.model.providerID === PROVIDER_ID) {
+				output.headers[TUI_SESSION_HEADER] = input.sessionID;
+			}
+			return Promise.resolve();
+		},
                 auth: {
 			provider: PROVIDER_ID,
 			/**
@@ -2664,6 +2690,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 			await runStartupPreflight();
 
 
+				customFetchInstalled = true;
 				// Return SDK configuration
 				return {
 					apiKey: DUMMY_API_KEY,
@@ -2841,7 +2868,12 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 									return {};
 								};
 
-								const baseInit = await normalizeRequestInit(input, init);
+								const normalizedInit = await normalizeRequestInit(input, init);
+								const requestHeaders = new Headers(normalizedInit?.headers ?? (input instanceof Request ? input.headers : undefined));
+								const sessionHeader = requestHeaders.get(TUI_SESSION_HEADER);
+								const sessionID = sessionHeader || undefined;
+								requestHeaders.delete(TUI_SESSION_HEADER);
+								const baseInit = sessionHeader === null ? normalizedInit : { ...normalizedInit, headers: requestHeaders };
 								const originalBody = await parseRequestBodyFromInit(baseInit?.body);
 								const isStreaming = originalBody.stream === true;
 								const parsedBody =
@@ -3908,6 +3940,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 									account,
 									accountCount,
 									accountManager.getAccountsSnapshot(),
+									sessionID,
 								);
 								return applyQuotaExhaustion(
 									accountManager,

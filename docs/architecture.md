@@ -94,7 +94,7 @@ Auth methods exposed to OpenCode are the **four OAuth labels only**: default bro
 
 ### TUI quota plugin (`tui.ts`)
 
-Reads the active account, the shared quota cache (`lib/tui-quota-cache.ts`), and usage endpoints to render a compact prompt status line during sessions, plus a `codex.quota.details` command. `quotaStatus.mode` selects `active`, `overview`, or `resets` screens (or a list to rotate). The request path writes quota snapshots from response headers so the line reflects the account that actually served the last request.
+Reads the active account, the shared quota cache (`lib/tui-quota-cache.ts`), and usage endpoints to render a compact prompt status line during sessions, plus a `codex.quota.details` command. `quotaStatus.mode` selects `active`, `overview`, or `resets` screens (or a list to rotate). The request path writes quota snapshots from response headers so the line reflects the account that actually served the last request. In V1, `chat.headers` tags each request with its session in an internal header that the request path strips, records a per-session snapshot in `oc-codex-multi-auth-tui-sessions/`, and each session's line shows its own serving account.
 
 ### OpenCode V2 adapter
 

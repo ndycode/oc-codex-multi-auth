@@ -26,6 +26,7 @@ import {
 } from "./lib/tui-quota-overview.js";
 import {
 	createUsageAccountFingerprint,
+	createUsageAccountKey,
 	ensureCodexUsageAccessToken,
 	fetchCodexUsage,
 	formatUsageWindowLabel,
@@ -43,6 +44,7 @@ import {
 	formatQuotaResetsStatusLines,
 	resolveQuotaOverviewTone,
 	resolveQuotaPromptTone,
+	withStatusPrefix,
 	type CompactQuotaLimit,
 	type CompactQuotaStatus,
 	type QuotaPromptTone,
@@ -54,12 +56,13 @@ import {
 	isFreshTuiQuotaSnapshot,
 	isTuiQuotaSnapshot,
 	readTuiQuotaSnapshot,
+	readSessionQuotaEntry,
 	writeTuiQuotaSnapshot,
 	type TuiQuotaSnapshot,
 } from "./lib/tui-quota-cache.js";
-import { loadAccounts } from "./lib/storage.js";
+import { getStoragePath, loadAccounts, type AccountStorageV3 } from "./lib/storage.js";
 import { protectQuotaStatusSlot } from "./lib/tui-status-slot.js";
-import { sanitizeDisplayText } from "./lib/ui/display-text.js";
+import { displayWidth, sanitizeDisplayText } from "./lib/ui/display-text.js";
 import type { UiGlyphMode } from "./lib/ui/theme.js";
 export { protectQuotaStatusSlot } from "./lib/tui-status-slot.js";
 
@@ -87,7 +90,7 @@ type SolidRuntime = Pick<
 > &
 	Pick<typeof import("solid-js"), "createSignal" | "onCleanup">;
 
-let inFlightRefresh: Promise<CompactQuotaStatus> | undefined;
+const inFlightUsage = new Map<string, Promise<ReturnType<typeof parseCodexUsagePayload>>>();
 
 type QuotaOverviewState =
 	| { type: "loading" }
@@ -252,6 +255,37 @@ async function readSharedQuotaStatus(
 		: undefined;
 }
 
+type SessionQuotaBinding = {
+	index: number;
+	account: AccountStorageV3["accounts"][number];
+	snapshot: StoredQuotaStatus;
+};
+
+async function readSessionQuotaBinding(
+	api: TuiPluginApi,
+	storage: AccountStorageV3,
+	sessionID: string | undefined,
+): Promise<SessionQuotaBinding | undefined> {
+	const entry = await readSessionQuotaEntry(sessionID, api.state.path.state) ??
+		await readSessionQuotaEntry(sessionID);
+	if (!entry) return undefined;
+	const index = storage.accounts.findIndex((account) => createUsageAccountKey(account) === entry.accountKey);
+	const account = storage.accounts[index];
+	if (!account) return undefined;
+	return { index, account, snapshot: { ...entry.snapshot, fingerprint: createUsageAccountFingerprint(account) } };
+}
+
+async function readSlotQuotaStatus(
+	api: TuiPluginApi,
+	fingerprint: string,
+	session: StoredQuotaStatus | undefined,
+): Promise<StoredQuotaStatus | undefined> {
+	const global = await readSharedQuotaStatus(api, fingerprint);
+	return session && session.limits.length > 0 && (!global || session.fetchedAt >= global.fetchedAt)
+		? session
+		: global;
+}
+
 async function writeSharedQuotaStatus(
 	api: TuiPluginApi,
 	status: StoredQuotaStatus,
@@ -264,11 +298,14 @@ async function writeSharedQuotaStatus(
 	}
 }
 
-export async function resolveQuotaPollFingerprint(
+export async function resolveQuotaPollTarget(
 	api: TuiPluginApi,
-): Promise<string | undefined> {
+	sessionID?: string,
+): Promise<{ fingerprint: string; session?: StoredQuotaStatus } | undefined> {
 	const storage = await loadAccounts();
 	if (!storage || storage.accounts.length === 0) return undefined;
+	const binding = await readSessionQuotaBinding(api, storage, sessionID);
+	if (binding) return { fingerprint: binding.snapshot.fingerprint, session: binding.snapshot };
 	const shared = await readSharedQuotaStatus(api);
 	if (
 		shared?.source === "headers" &&
@@ -277,16 +314,17 @@ export async function resolveQuotaPollFingerprint(
 			(account) => createUsageAccountFingerprint(account) === shared.fingerprint,
 		)
 	) {
-		return shared.fingerprint;
+		return { fingerprint: shared.fingerprint };
 	}
 	const selection = resolveCodexUsageActiveAccount(storage);
 	return selection
-		? createUsageAccountFingerprint(selection.account)
+		? { fingerprint: createUsageAccountFingerprint(selection.account) }
 		: undefined;
 }
 
 export async function refreshQuotaStatusInner(
 	api: TuiPluginApi,
+	sessionID?: string,
 ): Promise<CompactQuotaStatus> {
 	try {
 		const storage = await loadAccounts();
@@ -294,7 +332,10 @@ export async function refreshQuotaStatusInner(
 			return { type: "missing" };
 		}
 
-		const latestShared = await readSharedQuotaStatus(api);
+		const binding = await readSessionQuotaBinding(api, storage, sessionID);
+		const latestShared = binding
+			? await readSlotQuotaStatus(api, binding.snapshot.fingerprint, binding.snapshot)
+			: await readSharedQuotaStatus(api);
 		const now = Date.now();
 		// A shared snapshot only proves freshness while requests flow: the
 		// request path pushes it per response, but during an idle gap nothing
@@ -302,15 +343,15 @@ export async function refreshQuotaStatusInner(
 		// server-side. Trust it as current within one refresh interval;
 		// otherwise fall through to a live /wham/usage read and keep the
 		// snapshot only as a stale fallback.
-		if (latestShared?.source === "headers" && isFreshTuiQuotaSnapshot(latestShared, now) &&
+		if (latestShared?.source === "headers" && latestShared.limits.length > 0 && isFreshTuiQuotaSnapshot(latestShared, now) &&
 			storage.accounts.some((account) => createUsageAccountFingerprint(account) === latestShared.fingerprint)) {
 			writeStoredQuotaStatus(api, latestShared);
 			return toCompactQuotaStatus(latestShared, false);
 		}
-		const selection = resolveCodexUsageActiveAccount(storage);
+		const selection = binding ?? resolveCodexUsageActiveAccount(storage);
 		if (!selection) return { type: "missing" };
 		const fingerprint = createUsageAccountFingerprint(selection.account);
-		const shared = await readSharedQuotaStatus(api, fingerprint);
+		const shared = binding ? latestShared : await readSharedQuotaStatus(api, fingerprint);
 		const stored = readStoredQuotaStatus(api, fingerprint);
 		const cached =
 			shared && (!stored || shared.fetchedAt >= stored.fetchedAt)
@@ -318,22 +359,29 @@ export async function refreshQuotaStatusInner(
 				: stored;
 
 		try {
-			const credentials = await ensureCodexUsageAccessToken({
-				storage,
-				account: selection.account,
-			});
-			const accountId = resolveCodexUsageAccountId({
-				account: selection.account,
-				accessToken: credentials.accessToken,
-			});
-			if (!accountId) throw new Error("Missing account id");
-
-			const payload = await fetchCodexUsage({
-				accountId,
-				accessToken: credentials.accessToken,
-				organizationId: selection.account.organizationId,
-			});
-			const usage = parseCodexUsagePayload(payload);
+			const readKey = JSON.stringify([getStoragePath(), getSharedQuotaCachePath(api), fingerprint]);
+			let read = inFlightUsage.get(readKey);
+			if (!read) {
+				read = (async () => {
+					const credentials = await ensureCodexUsageAccessToken({
+						storage,
+						account: selection.account,
+					});
+					const accountId = resolveCodexUsageAccountId({
+						account: selection.account,
+						accessToken: credentials.accessToken,
+					});
+					if (!accountId) throw new Error("Missing account id");
+					const payload = await fetchCodexUsage({
+						accountId,
+						accessToken: credentials.accessToken,
+						organizationId: selection.account.organizationId,
+					});
+					return parseCodexUsagePayload(payload);
+				})().finally(() => { inFlightUsage.delete(readKey); });
+				inFlightUsage.set(readKey, read);
+			}
+			const usage = await read;
 			const limits = [
 				toCompactQuotaLimit(usage.primary),
 				toCompactQuotaLimit(usage.secondary),
@@ -361,14 +409,6 @@ export async function refreshQuotaStatusInner(
 	} catch {
 		return { type: "unavailable" };
 	}
-}
-
-function refreshQuotaStatus(api: TuiPluginApi): Promise<CompactQuotaStatus> {
-	if (inFlightRefresh) return inFlightRefresh;
-	inFlightRefresh = refreshQuotaStatusInner(api).finally(() => {
-		inFlightRefresh = undefined;
-	});
-	return inFlightRefresh;
 }
 
 export function shouldRefreshQuotaForEvent(event: Event): boolean {
@@ -448,6 +488,7 @@ export function samePromptStatusOptions(
 		leftStatus.recovery === rightStatus.recovery &&
 		leftStatus.resetsMinUsedPercent === rightStatus.resetsMinUsedPercent &&
 		leftStatus.rows === rightStatus.rows &&
+		leftStatus.prefix === rightStatus.prefix &&
 		leftStatus.showFor === rightStatus.showFor
 	);
 }
@@ -563,7 +604,7 @@ type QuotaStatusController = {
 	lines(
 		screen: QuotaStatusScreen,
 		options: PromptStatusOptions,
-		layout: { availableChars?: number; maxRows: number },
+		layout: { availableChars?: number; reservedChars: number; maxRows: number },
 	): string[];
 	tone(screen: QuotaStatusScreen): QuotaPromptTone;
 	dispose(): void;
@@ -664,6 +705,7 @@ function createOverviewQuotaController(
 				resetsMinUsedPercent: options.quotaStatus.resetsMinUsedPercent,
 				width: api.renderer.width,
 				availableChars: layout.availableChars,
+				reservedChars: layout.reservedChars,
 				maxRows: layout.maxRows,
 			});
 		},
@@ -693,6 +735,7 @@ function createOverviewQuotaController(
 function createActiveQuotaController(
 	api: TuiPluginApi,
 	solid: SolidRuntime,
+	sessionID: string | undefined,
 ): QuotaStatusController {
 	const [quota, setQuota] = solid.createSignal<CompactQuotaStatus>({
 		type: "loading",
@@ -710,10 +753,12 @@ function createActiveQuotaController(
 		}
 		setQuota(next);
 	};
+	let inFlight: Promise<void> | undefined;
 	const refresh = (): void => {
-		void refreshQuotaStatus(api).then(applyQuota, () => {
+		if (inFlight) return;
+		inFlight = refreshQuotaStatusInner(api, sessionID).then(applyQuota, () => {
 			applyQuota({ type: "unavailable" });
-		});
+		}).finally(() => { inFlight = undefined; });
 	};
 	let refreshTimeout: ReturnType<typeof setTimeout> | undefined;
 	const scheduleRefresh = (): void => {
@@ -731,11 +776,12 @@ function createActiveQuotaController(
 		if (cachePollInFlight) return;
 		cachePollInFlight = true;
 		void (async () => {
-			const fingerprint = await resolveQuotaPollFingerprint(api);
-			if (!fingerprint) {
+			const target = await resolveQuotaPollTarget(api, sessionID);
+			if (!target) {
 				if (currentFingerprint) applyQuota({ type: "missing" });
 				return;
 			}
+			const { fingerprint } = target;
 			if (fingerprint !== currentFingerprint) {
 				currentFingerprint = fingerprint;
 				currentSnapshotRevision = undefined;
@@ -743,8 +789,10 @@ function createActiveQuotaController(
 				refresh();
 				return;
 			}
-			const shared = await readSharedQuotaStatus(api, fingerprint);
-			if (!shared) return;
+			const shared = await readSlotQuotaStatus(api, fingerprint, target.session);
+			if (!shared || shared.limits.length === 0) return;
+			const current = quota();
+			if (current.type === "ready" && current.fetchedAt !== undefined && shared.fetchedAt < current.fetchedAt) return;
 			const revision = getQuotaSnapshotRevision(shared);
 			if (!revision || revision === currentSnapshotRevision) return;
 			writeStoredQuotaStatus(api, shared);
@@ -788,6 +836,7 @@ function createActiveQuotaController(
 				// prompt row is narrower than the terminal (sidebar open, wide
 				// model label) the tier table would over-budget the line.
 				availableChars: layout.availableChars,
+				reservedChars: layout.reservedChars,
 				maskEmail: options.maskEmail,
 				quotaDisplay: options.quotaDisplay,
 				glyphMode: options.glyphMode,
@@ -832,10 +881,11 @@ function createQuotaControllers(
 	api: TuiPluginApi,
 	solid: SolidRuntime,
 	screens: readonly QuotaStatusScreen[],
+	sessionID: string | undefined,
 ): QuotaStatusController[] {
 	const controllers: QuotaStatusController[] = [];
 	if (screens.includes("active")) {
-		controllers.push(createActiveQuotaController(api, solid));
+		controllers.push(createActiveQuotaController(api, solid, sessionID));
 	}
 	if (screens.includes("overview") || screens.includes("resets") || screens.includes("credits")) {
 		controllers.push(createOverviewQuotaController(api, solid));
@@ -858,6 +908,8 @@ export function showsQuotaForSession(params: {
 	if (params.audience === "always") return true;
 	return !params.providerID || params.providerID === PROVIDER_ID;
 }
+
+export { withStatusPrefix };
 
 function getString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0
@@ -913,10 +965,15 @@ function createPromptStatus(
 	const [options, setOptions] = solid.createSignal(initialOptions);
 	const [metrics, setMetrics] = solid.createSignal<StatusSlotMetrics>({});
 	const [rotation, setRotation] = solid.createSignal(0);
+	const [minute, setMinute] = solid.createSignal(0);
+	const clockInterval = setInterval(() => {
+		setMinute((tick) => tick + 1);
+	}, 60_000);
 	let controllers = createQuotaControllers(
 		api,
 		solid,
 		initialOptions.quotaStatus.screens,
+		sessionID,
 	);
 	let controllerScreens = initialOptions.quotaStatus.screens;
 	let rotationInterval: ReturnType<typeof setInterval> | undefined;
@@ -962,7 +1019,7 @@ function createPromptStatus(
 		// to nothing, and never hear the new pipeline resolve.
 		if (screensChanged) {
 			for (const controller of controllers) controller.dispose();
-			controllers = createQuotaControllers(api, solid, nextScreens);
+			controllers = createQuotaControllers(api, solid, nextScreens, sessionID);
 			controllerScreens = nextScreens;
 			setRotation(0);
 		}
@@ -973,6 +1030,7 @@ function createPromptStatus(
 	solid.onCleanup(() => {
 		clearInterval(configInterval);
 		clearInterval(measureInterval);
+		clearInterval(clockInterval);
 		restoreSlotShrink?.();
 		if (rotationInterval) clearInterval(rotationInterval);
 		for (const controller of controllers) controller.dispose();
@@ -994,8 +1052,12 @@ function createPromptStatus(
 		) {
 			return undefined;
 		}
+		// `resets in 2m` counts down against the clock, so an idle line still has to re-render.
+		minute();
+		const prefix = currentOptions.quotaStatus.prefix;
 		const layout = {
 			availableChars: metrics().availableChars,
+			reservedChars: displayWidth(prefix),
 			maxRows: currentOptions.quotaStatus.rows,
 		};
 		const rendered: Array<{ screen: QuotaStatusScreen; lines: string[] }> = [];
@@ -1005,7 +1067,7 @@ function createPromptStatus(
 			);
 			if (!controller) continue;
 			const lines = controller.lines(screen, currentOptions, layout);
-			if (lines.length > 0) rendered.push({ screen, lines });
+			if (lines.length > 0) rendered.push({ screen, lines: withStatusPrefix(lines, prefix) });
 		}
 		if (rendered.length === 0) return undefined;
 		return rendered[Math.abs(rotation()) % rendered.length];
@@ -1051,7 +1113,10 @@ function showQuotaDetails(api: TuiPluginApi): void {
 	// the line it explains, and the two disagreeing about `used` vs `free`
 	// after an edit would be worse than either being stale alone.
 	const options = readPromptStatusOptions();
-	void refreshQuotaStatus(api).then(
+	const route = api.route.current;
+	const params = "params" in route ? route.params : undefined;
+	const sessionID = route.name === "session" && typeof params?.sessionID === "string" ? params.sessionID : undefined;
+	void refreshQuotaStatusInner(api, sessionID).then(
 		(status) => {
 			api.ui.dialog.replace(() =>
 				api.ui.DialogAlert({

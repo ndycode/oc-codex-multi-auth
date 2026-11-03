@@ -3,6 +3,7 @@ import { maskEmailForDisplay } from "./account-display.js";
 import { getEffortSuffix } from "./request/helpers/effort-suffix.js";
 import { formatPlanType } from "./auth/plan-tier.js";
 import {
+	formatCompactDuration,
 	formatQuotaOverviewCandidates,
 	formatQuotaCreditsCandidates,
 	formatQuotaResetsCandidates,
@@ -20,7 +21,6 @@ import {
 	displayWidth,
 	formatClockTime,
 	formatShortDate,
-	formatShortWeekday,
 	sanitizeDisplayText,
 } from "./ui/display-text.js";
 import {
@@ -98,7 +98,6 @@ const variantSuffixes: ReasoningVariant[] = [
 function statusSeparator(mode: UiGlyphMode | undefined): string {
 	return ` ${resolveUiGlyphs(mode ?? "unicode").separator} `;
 }
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const WARNING_LIMIT_LEFT_PERCENT = 25;
 const DANGER_LIMIT_LEFT_PERCENT = 10;
 const MASKED_EMAIL = "*****";
@@ -418,11 +417,11 @@ function formatQuota(
 /**
  * Return the character budget for the prompt status line at a given terminal
  * width. Budgets scale to about 54% of each tier's minimum width so the
- * day-context reset labels and typical account hints fit.
+ * reset labels and typical account hints fit.
  */
 function maxStatusChars(width: number | undefined): number {
 	// Budgets are ~54% of each named tier's minimum width (up from ~40%): the
-	// day-context reset labels and typical account hints no longer fit at
+	// reset labels and typical account hints no longer fit at
 	// 40%, which degraded informative candidates on mid-width terminals. The
 	// last branch is the exception and stays at 12, because 54% of a
 	// 40-column terminal leaves nothing for the prompt itself.
@@ -443,6 +442,13 @@ function maxStatusChars(width: number | undefined): number {
 	return Math.min(12, width);
 }
 
+/** Puts `quotaStatus.prefix` before the first row and indents the others to line up under it. */
+export function withStatusPrefix(lines: string[], prefix: string): string[] {
+	if (!prefix) return lines;
+	const indent = " ".repeat(displayWidth(prefix));
+	return lines.map((line, index) => `${index === 0 ? prefix : indent}${line}`);
+}
+
 export function formatPromptStatusText(params: {
 	variant?: ReasoningVariant;
 	quota: CompactQuotaStatus;
@@ -453,6 +459,8 @@ export function formatPromptStatusText(params: {
 	 * other content, and only the measurement knows how much.
 	 */
 	availableChars?: number;
+	/** Columns of the budget already spent, e.g. on `quotaStatus.prefix`. */
+	reservedChars?: number;
 	maskEmail?: boolean;
 	quotaDisplay?: QuotaDisplayMode;
 	/** `codexTuiGlyphMode`; `auto` resolves against the environment. */
@@ -497,11 +505,11 @@ export function formatPromptStatusText(params: {
 	// eligible if its grapheme-aware width fits, so CJK labels and emoji
 	// cannot overflow a terminal `string.length` would call short enough.
 	const maxChars =
-		typeof available === "number" &&
+		(typeof available === "number" &&
 		Number.isFinite(available) &&
 		available > 0
 			? Math.floor(available)
-			: maxStatusChars(params.width);
+			: maxStatusChars(params.width)) - (params.reservedChars ?? 0);
 	return (
 		candidates.find((candidate) => displayWidth(candidate) <= maxChars) ?? ""
 	);
@@ -550,17 +558,16 @@ function maxOverviewStatusChars(width: number | undefined): number {
  * needs no reserve at all, so it is used verbatim.
  */
 function resolveOverviewChars(
-	width: number | undefined,
-	availableChars: number | undefined,
+	params: { width?: number; availableChars?: number; reservedChars?: number },
 ): number {
-	if (
+	const { availableChars } = params;
+	const base =
 		typeof availableChars === "number" &&
 		Number.isFinite(availableChars) &&
 		availableChars > 0
-	) {
-		return Math.floor(availableChars);
-	}
-	return maxOverviewStatusChars(width);
+			? Math.floor(availableChars)
+			: maxOverviewStatusChars(params.width);
+	return base - (params.reservedChars ?? 0);
 }
 
 /**
@@ -608,7 +615,8 @@ export function wrapStatusCandidate(
  *
  * The ladder is walked once, and the first rung that fits wins - whether it
  * fits on one row or has to be broken across two. Trying every rung on one row
- * before allowing a second would shed detail the reader has room for.
+ * before allowing a second would shed detail the reader has room for. When no
+ * rung fits, nothing renders: an overflowing line wraps or gets ellipsized.
  */
 export function fitStatusLines(
 	candidates: readonly string[],
@@ -619,8 +627,7 @@ export function fitStatusLines(
 		const rows = wrapStatusCandidate(candidate, maxChars, maxRows);
 		if (rows) return rows;
 	}
-	const last = candidates.at(-1);
-	return last ? [last] : [];
+	return [];
 }
 
 /**
@@ -632,11 +639,12 @@ export function formatQuotaOverviewStatusLines(params: {
 	options: QuotaOverviewOptions;
 	width?: number;
 	availableChars?: number;
+	reservedChars?: number;
 	maxRows?: number;
 }): string[] {
 	return fitStatusLines(
 		formatQuotaOverviewCandidates(params.accounts, params.options),
-		resolveOverviewChars(params.width, params.availableChars),
+		resolveOverviewChars(params),
 		params.maxRows ?? 1,
 	);
 }
@@ -646,6 +654,7 @@ export function formatQuotaOverviewStatusText(params: {
 	options: QuotaOverviewOptions;
 	width?: number;
 	availableChars?: number;
+	reservedChars?: number;
 }): string {
 	return formatQuotaOverviewStatusLines(params)[0] ?? "";
 }
@@ -657,6 +666,7 @@ export function formatQuotaResetsStatusLines(params: {
 	resetsMinUsedPercent?: number;
 	width?: number;
 	availableChars?: number;
+	reservedChars?: number;
 	maxRows?: number;
 }): string[] {
 	const candidates = formatQuotaResetsCandidates(params.accounts, {
@@ -668,7 +678,7 @@ export function formatQuotaResetsStatusLines(params: {
 	if (candidates.length === 0) return [];
 	return fitStatusLines(
 		candidates,
-		resolveOverviewChars(params.width, params.availableChars),
+		resolveOverviewChars(params),
 		params.maxRows ?? 1,
 	);
 }
@@ -680,6 +690,7 @@ export function formatQuotaCreditsStatusLines(params: {
 	resetsMinUsedPercent?: number;
 	width?: number;
 	availableChars?: number;
+	reservedChars?: number;
 	maxRows?: number;
 }): string[] {
 	const candidates = formatQuotaCreditsCandidates(params.accounts, {
@@ -690,7 +701,7 @@ export function formatQuotaCreditsStatusLines(params: {
 	if (candidates.length === 0) return [];
 	return fitStatusLines(
 		candidates,
-		resolveOverviewChars(params.width, params.availableChars),
+		resolveOverviewChars(params),
 		params.maxRows ?? 1,
 	);
 }
@@ -740,90 +751,40 @@ export function resolveQuotaPromptTone(
 	return "warning";
 }
 
-type ResetParts = {
-	date: Date;
-	/** Fixed 24-hour clock time, e.g. `02:25` — identical under every locale. */
-	time: string;
-	sameDay: boolean;
-	/**
-	 * Calendar days from today, not elapsed milliseconds: a DST transition
-	 * makes a seven-calendar-day gap span 167 or 169 hours, which a fixed 24h
-	 * division would misclassify and repeat today's weekday.
-	 */
-	dayDiff: number;
-};
-
-/**
- * Decompose a reset timestamp once for both renderings below.
- *
- * The compact status line and the quota details dialog word the same instant
- * differently - `Sep 15 02:25` against `02:25 on Sep 15` - but they agree on
- * every decision behind it: the same validity guard, the same 24-hour clock,
- * the same same-day test. Keeping those in one place is what stops the two
- * surfaces drifting apart on which reset is "today".
- */
-function describeReset(resetAtMs: number | undefined): ResetParts | undefined {
-	if (!resetAtMs || !Number.isFinite(resetAtMs) || resetAtMs <= 0) {
-		return undefined;
-	}
-	const date = new Date(resetAtMs);
-	if (!Number.isFinite(date.getTime())) return undefined;
-	const now = new Date();
-	return {
-		date,
-		time: formatClockTime(date),
-		sameDay:
-			now.getFullYear() === date.getFullYear() &&
-			now.getMonth() === date.getMonth() &&
-			now.getDate() === date.getDate(),
-		dayDiff: calendarDayDiff(now, date),
-	};
-}
-
 function formatResetDay(date: Date): string {
 	// Fixed English `Sep 05` — no `toLocaleDateString`, so the line reads the
 	// same under every configured locale.
 	return formatShortDate(date);
 }
 
+/**
+ * Format a reset timestamp for the quota details dialog on a fixed 24-hour
+ * clock: `02:25` for a same-day reset, otherwise `02:25 on Sep 15`.
+ */
 function formatReset(resetAtMs: number | undefined): string | undefined {
-	const parts = describeReset(resetAtMs);
-	if (!parts) return undefined;
-	if (parts.sameDay) return parts.time;
-	return `${parts.time} on ${formatResetDay(parts.date)}`;
+	if (!resetAtMs || !Number.isFinite(resetAtMs) || resetAtMs <= 0) {
+		return undefined;
+	}
+	const date = new Date(resetAtMs);
+	if (!Number.isFinite(date.getTime())) return undefined;
+	const now = new Date();
+	const time = formatClockTime(date);
+	const sameDay =
+		now.getFullYear() === date.getFullYear() &&
+		now.getMonth() === date.getMonth() &&
+		now.getDate() === date.getDate();
+	return sameDay ? time : `${time} on ${formatResetDay(date)}`;
 }
 
 /**
- * Format a reset timestamp for the compact status line. Same-day resets keep
- * the time only (`02:25`); resets within the coming week add the weekday
- * (`Tue 02:25`); later resets use the absolute date (`Sep 15 02:25`). The
- * time is always kept so short windows such as the 5h limit stay meaningful.
+ * Format a reset timestamp for the compact status line as the time left,
+ * rounded down the same way the overview and resets screens count down. The
+ * line renders it as `resets in 5h`. A reset already in the past yields nothing.
  */
 function formatResetTime(resetAtMs: number | undefined): string | undefined {
-	const parts = describeReset(resetAtMs);
-	if (!parts) return undefined;
-	if (parts.sameDay) return parts.time;
-	// Within a week each weekday occurs exactly once, so the weekday alone
-	// disambiguates weekly windows; beyond that the absolute date does.
-	if (parts.dayDiff > 0 && parts.dayDiff < 7) {
-		return `${formatShortWeekday(parts.date)} ${parts.time}`;
-	}
-	return `${formatResetDay(parts.date)} ${parts.time}`;
-}
-
-/**
- * Count calendar days between two dates, ignoring wall-clock length. Comparing
- * UTC-normalized year/month/day makes the count immune to DST transitions,
- * which make a seven-day gap span 167 or 169 hours.
- */
-function calendarDayDiff(from: Date, to: Date): number {
-	const fromDay = Date.UTC(
-		from.getFullYear(),
-		from.getMonth(),
-		from.getDate(),
-	);
-	const toDay = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate());
-	return Math.round((toDay - fromDay) / MS_PER_DAY);
+	if (!resetAtMs || !Number.isFinite(new Date(resetAtMs).getTime())) return undefined;
+	const left = formatCompactDuration(resetAtMs - Date.now());
+	return left ? `in ${left}` : undefined;
 }
 
 function formatUpdatedAge(fetchedAt: number | undefined, now: number): string {

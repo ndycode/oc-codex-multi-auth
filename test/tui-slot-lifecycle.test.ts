@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TuiPluginApi, TuiPluginMeta, TuiSlotPlugin } from "@opencode-ai/plugin/tui";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as storage from "../lib/storage.js";
+import * as config from "../lib/config.js";
+import * as status from "../lib/tui-status.js";
+import { createStorageScope, setStoragePathDirect } from "../lib/storage/state.js";
+import { createUsageAccountFingerprint, createUsageAccountKey } from "../lib/codex-usage.js";
+import { createTuiQuotaSnapshot, getTuiQuotaCachePath, writeSessionQuotaEntry, writeTuiQuotaSnapshot } from "../lib/tui-quota-cache.js";
 
-const mocks = vi.hoisted(() => ({ cleanups: [] as Array<() => void> }));
+const mocks = vi.hoisted(() => ({ cleanups: [] as Array<() => void>, onSignal: (_value: unknown): void => {} }));
 vi.mock("@opentui/solid", () => ({
 	createElement: () => ({}),
 	spread: (element: object, props: object) => Object.defineProperties(element, Object.getOwnPropertyDescriptors(props)),
@@ -9,13 +18,13 @@ vi.mock("@opentui/solid", () => ({
 vi.mock("solid-js", () => ({
 	createSignal: <T>(initial: T) => {
 		let value = initial;
-		return [() => value, (next: T) => { value = next; }];
+		return [() => value, (next: T) => { value = next; mocks.onSignal(next); }];
 	},
 	onCleanup: (cleanup: () => void) => mocks.cleanups.push(cleanup),
 }));
 import tuiModule from "../tui.js";
 
-type RegisteredSlotPlugin = TuiSlotPlugin & {
+type RegisteredSlotPlugin = Omit<TuiSlotPlugin, "slots"> & {
 	slots: Record<string, (ctx: unknown, props: { session_id: string }) => unknown>;
 };
 
@@ -25,12 +34,14 @@ type RegisteredSlotPlugin = TuiSlotPlugin & {
  * These cases pin that contract: once `dispose` or plugin teardown runs, the
  * renderer stops producing nodes instead of polling a dead api.
  */
-function harness() {
+function harness(stateDir?: string) {
 	const disposers: Array<() => void> = [];
 	const commandDispose = vi.fn();
 	let plugin: RegisteredSlotPlugin | undefined;
 	const api = {
 		renderer: { width: 100 },
+		state: { path: { state: stateDir }, config: {}, session: { messages: () => [] } },
+		kv: { ready: false },
 		slots: {
 			register: (value: RegisteredSlotPlugin): string => {
 				plugin = value;
@@ -58,9 +69,185 @@ function harness() {
 afterEach(() => {
 	for (const cleanup of mocks.cleanups.splice(0)) cleanup();
 	vi.useRealTimers();
+	vi.restoreAllMocks();
+	vi.unstubAllEnvs();
+	mocks.onSignal = () => {};
 });
 
 describe("TUI status slot lifecycle", () => {
+	it.each([
+		["same account and scope", false, false, 1],
+		["different accounts", true, false, 2],
+		["different storage scopes", false, true, 2],
+	] as const)("shares only matching in-flight usage reads for mounted slots: %s", async (_name, differentAccounts, differentScopes, expectedReads) => {
+		vi.useFakeTimers();
+		const dir = await mkdtemp(join(tmpdir(), "tui-inflight-slots-"));
+		vi.stubEnv("OPENCODE_STATE_DIR", dir);
+		const accounts = ["FIRST", "SECOND"].map((name) => ({
+			accountId: `FAKE_${name}`, refreshToken: `FAKE_REFRESH_${name}`, accessToken: `FAKE_ACCESS_${name}`,
+			expiresAt: Date.now() + 3_600_000, email: `${name.toLowerCase()}@example.com`, addedAt: 1, lastUsed: 1,
+		}));
+		vi.spyOn(storage, "loadAccounts").mockResolvedValue({ version: 3, activeIndex: 0, accounts });
+		const prepared = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const ready = Promise.withResolvers<void>();
+		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+			started.resolve();
+			await release.promise;
+			const accountId = new Headers(init?.headers).get("chatgpt-account-id");
+			return new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: accountId === "FAKE_SECOND" ? 50 : 20, limit_window_seconds: 18_000 } } }), { status: 200 });
+		});
+		try {
+			for (const index of [0, 1]) {
+				const account = accounts[differentAccounts ? index : 0];
+				if (!account) throw new Error("missing account fixture");
+				await writeSessionQuotaEntry(`FAKE_SESSION_${index}`, { accountKey: createUsageAccountKey(account), snapshot: createTuiQuotaSnapshot({ fingerprint: createUsageAccountFingerprint(account), source: "headers", limits: [] }) }, dir);
+			}
+			const h = harness(dir);
+			let cacheReads = 0;
+			Object.assign(h.api.kv, { ready: true, get: () => { if (++cacheReads === 2) prepared.resolve(); }, set: () => {} });
+			let readySlots = 0;
+			mocks.onSignal = (value) => {
+				if (value && typeof value === "object" && "type" in value && value.type === "ready" && ++readySlots === 2) ready.resolve();
+			};
+			await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
+			const render = h.plugin()?.slots["session_prompt_right"];
+			if (!render) throw new Error("missing prompt slot");
+			const scopes = [createStorageScope(), createStorageScope()];
+			const nodes = [0, 1].map((index) => {
+				const scope = scopes[differentScopes ? index : 0];
+				if (!scope) throw new Error("missing storage scope");
+				return scope(() => {
+					setStoragePathDirect(join(dir, `FAKE_ACCOUNTS_${differentScopes ? index : 0}.json`));
+					return render({}, { session_id: `FAKE_SESSION_${index}` });
+				});
+			});
+			await Promise.all([prepared.promise, started.promise]);
+			release.resolve();
+			let settled = false;
+			void ready.promise.then(() => { settled = true; });
+			// Both slots write the shared cache; on Windows the losing rename retries on a (fake) timer.
+			while (!settled) await vi.advanceTimersByTimeAsync(10);
+			expect(fetch).toHaveBeenCalledTimes(expectedReads);
+			for (const [index, node] of nodes.entries()) {
+				if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
+				expect(node.content).toContain(differentAccounts && index === 1 ? "50%" : "80%");
+				expect(node.content).toContain(differentAccounts && index === 1 ? "second@example.com" : "first@example.com");
+			}
+		} finally {
+			release.resolve();
+			for (const cleanup of mocks.cleanups.splice(0)) cleanup();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("polls global limits without losing an empty session snapshot's account binding", async () => {
+		vi.useFakeTimers();
+		const dir = await mkdtemp(join(tmpdir(), "tui-empty-session-"));
+		vi.stubEnv("OPENCODE_STATE_DIR", dir);
+		const account = { accountId: "FAKE_ACCOUNT", refreshToken: "FAKE_REFRESH", email: "bound@example.com", addedAt: 1, lastUsed: 1 };
+		vi.spyOn(storage, "loadAccounts").mockResolvedValue({ version: 3, activeIndex: 0, accounts: [account] });
+		const identity = { fingerprint: createUsageAccountFingerprint(account), source: "headers" as const, accountIndex: 1, accountEmail: account.email };
+		const initial = createTuiQuotaSnapshot({ ...identity, limits: [{ label: "5h", leftPercent: 80 }] });
+		try {
+			await writeSessionQuotaEntry("FAKE_SESSION", { accountKey: createUsageAccountKey(account), snapshot: initial }, dir);
+			const first = Promise.withResolvers<void>();
+			mocks.onSignal = (value) => { if (value && typeof value === "object" && "type" in value && value.type === "ready") first.resolve(); };
+			const h = harness(dir);
+			await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
+			const render = h.plugin()?.slots["session_prompt_right"];
+			if (!render) throw new Error("missing prompt slot");
+			const node = render({}, { session_id: "FAKE_SESSION" });
+			await first.promise;
+			const fetchedAt = initial.fetchedAt + 1;
+			await writeTuiQuotaSnapshot(createTuiQuotaSnapshot({ ...identity, fetchedAt, limits: [{ label: "5h", leftPercent: 50 }] }), getTuiQuotaCachePath(dir));
+			await writeSessionQuotaEntry("FAKE_SESSION", { accountKey: createUsageAccountKey(account), snapshot: createTuiQuotaSnapshot({ ...identity, fetchedAt: fetchedAt + 1, limits: [] }) }, dir);
+			const updated = Promise.withResolvers<void>();
+			mocks.onSignal = (value) => { if (value && typeof value === "object" && "fetchedAt" in value && value.fetchedAt === fetchedAt) updated.resolve(); };
+			await vi.advanceTimersByTimeAsync(1_000);
+			await updated.promise;
+			if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
+			expect(node.content).toContain("50%");
+			expect(node.content).toContain("bound@example.com");
+		} finally {
+			for (const cleanup of mocks.cleanups.splice(0)) cleanup();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	describe("quotaStatus.prefix on the mounted line", () => {
+		const now = new Date(2026, 8, 5, 12, 0).getTime();
+		const served: status.CompactQuotaStatus = {
+			type: "ready", stale: false, accountIndex: 1, accountCount: 2, accountEmail: "someone@example.com",
+			limits: [{ label: "5h", leftPercent: 8, resetAtMs: now + 2 * 3_600_000 + 60_000 }, { label: "7d", leftPercent: 83 }],
+		};
+		const full = "[someone@example.com] · 5h 8% resets in 2h · 7d 83%";
+		const shorter = "[someone@example.com] · 5h 8% resets in 2h";
+		const formatPromptStatusText = status.formatPromptStatusText;
+		// The renderer reports 100 columns (a 52-column budget); a 92-column prompt row measures 52.
+		const mount = async (prefix: string, rowWidth?: number): Promise<string> => {
+			vi.useFakeTimers();
+			vi.setSystemTime(now);
+			vi.spyOn(config, "getQuotaStatus").mockReturnValue({ ...config.getQuotaStatus({}), prefix });
+			vi.spyOn(status, "formatPromptStatusText").mockImplementation((params) => formatPromptStatusText({ ...params, quota: served, glyphMode: "unicode" }));
+			const h = harness();
+			await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
+			const node = h.plugin()?.slots["session_prompt_right"]?.({}, { session_id: "FAKE_SESSION" });
+			if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
+			if (rowWidth) Object.assign(node, { parent: { primaryAxis: "row", width: rowWidth, getChildren: () => [node, {}] } });
+			await vi.advanceTimersByTimeAsync(500);
+			return String(node.content);
+		};
+
+		it.each([[undefined], [92]])("spends the prefix from the line's own budget (row width %s)", async (rowWidth) => {
+			expect(await mount("", rowWidth)).toBe(full);
+			for (const prefix of ["OpenAI ", "中文 ", "e\u0301 "]) {
+				expect(await mount(prefix, rowWidth)).toBe(`${prefix}${shorter}`);
+			}
+		});
+
+		it("hides the line when the prefix leaves no room", async () => {
+			expect(await mount("x".repeat(40), 80)).toBe("");
+		});
+	});
+
+	it("renders concurrent prompt slots with their own account and quota, and global fallback for a new session", async () => {
+		// Given two bound sessions and a global snapshot from the second session.
+		const dir = await mkdtemp(join(tmpdir(), "tui-session-slots-"));
+		vi.stubEnv("OPENCODE_STATE_DIR", dir);
+		const accounts = ["first", "second"].map((name) => ({ accountId: `FAKE_${name}`, email: `${name}@example.test`, refreshToken: `FAKE_REFRESH_${name}`, addedAt: 1, lastUsed: 1 }));
+		vi.spyOn(storage, "loadAccounts").mockResolvedValue({ version: 3, activeIndex: 0, accounts });
+		try {
+			for (const [index, account] of accounts.entries()) {
+				const snapshot = createTuiQuotaSnapshot({ fingerprint: createUsageAccountFingerprint(account), source: "headers", accountIndex: index + 1, accountEmail: account.email, limits: [{ label: "5h", leftPercent: 80 - index * 30 }] });
+				await writeSessionQuotaEntry(`ses_${index}`, { accountKey: createUsageAccountKey(account), snapshot }, dir);
+				await writeTuiQuotaSnapshot(snapshot, getTuiQuotaCachePath(dir));
+			}
+			const h = harness(dir);
+			await tuiModule.tui(h.api, undefined, {} as TuiPluginMeta);
+			const render = h.plugin()?.slots["session_prompt_right"];
+			if (!render) throw new Error("missing prompt slot");
+			// When the host mounts all three prompt slots before their refreshes resolve.
+			const nodes = ["ses_0", "ses_1", "ses_new"].map((id) => render({}, { session_id: id }));
+			// Then account identity and quota remain paired in the rendered status text.
+			await vi.waitFor(() => {
+				const contents = nodes.map((node) => {
+					if (!node || typeof node !== "object" || !("content" in node)) throw new Error("missing status node");
+					return node.content;
+				});
+				expect(contents[0]).toContain("first@example.test");
+				expect(contents[0]).toContain("80%");
+				expect(contents[1]).toContain("second@example.test");
+				expect(contents[1]).toContain("50%");
+				expect(contents[2]).toBe(contents[1]);
+			});
+		} finally {
+			for (const cleanup of mocks.cleanups.splice(0)) cleanup();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("stops the slot renderer once the registry calls the plugin's dispose hook", async () => {
 		vi.useFakeTimers();
 		const h = harness();

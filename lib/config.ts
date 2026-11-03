@@ -10,6 +10,7 @@ import {
 	type RetryProfile,
 } from "./request/retry-budget.js";
 import { logWarn } from "./logger.js";
+import { sanitizeDisplayText } from "./ui/display-text.js";
 import {
 	DEFAULT_QUOTA_DISPLAY_MODE,
 	QUOTA_DISPLAY_MODES,
@@ -1514,6 +1515,8 @@ export interface QuotaStatusConfig {
 	 */
 	rows: number;
 	showFor: QuotaStatusAudience;
+	/** Text put in front of the first row, e.g. `"OpenAI "`, so the line says which provider it describes. */
+	prefix: string;
 }
 
 function pickEnum<T extends string>(
@@ -1559,6 +1562,8 @@ export function getQuotaStatus(pluginConfig: PluginConfig): QuotaStatusConfig {
 	const config = pluginConfig.quotaStatus;
 	const resetTimes = config?.resetTimes;
 	const rotateMs = config?.rotateMs;
+	const rawPrefix = typeof config?.prefix === "string" ? config.prefix : "";
+	const prefix = sanitizeDisplayText(rawPrefix) ?? "";
 	return {
 		screens: resolveQuotaStatusScreens(config?.mode),
 		rotateMs:
@@ -1605,5 +1610,7 @@ export function getQuotaStatus(pluginConfig: PluginConfig): QuotaStatusConfig {
 				? Math.min(MAX_QUOTA_STATUS_ROWS, Math.max(1, Math.trunc(config.rows)))
 				: 1,
 		showFor: pickEnum(config?.showFor, QUOTA_STATUS_AUDIENCES, "always"),
+		// Sanitizing trims, which would glue the prefix to the line it introduces.
+		prefix: prefix && /\s$/.test(rawPrefix) && !/\s$/.test(prefix) ? `${prefix} ` : prefix,
 	};
 }
