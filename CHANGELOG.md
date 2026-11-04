@@ -7,6 +7,21 @@ The current stable release line is `6.x`. This file is the complete release hist
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.31.0] - 2026-11-04
+
+### Added
+- `quotaStatus.prefix` puts a label before the quota status line, for example `"OpenAI "`, so it reads clearly next to other providers' lines. Later rows indent under it, and it works in OpenCode V1 and V2. The prefix's display columns come out of the line's width budget, the line hides when nothing fits, and terminal control characters are stripped. ([#301](https://github.com/ndycode/oc-codex-multi-auth/pull/301), thanks @WarGloom)
+
+### Changed
+- In OpenCode V1, each session's quota line shows the account that served that session, not only the pool's active account. `chat.headers` tags each request with its session in an internal header, which the request path strips before the request goes upstream. The binding survives refresh-token rotation, and the `codex.quota.details` dialog follows the open session. OpenCode V2 still shows the last serving account overall. ([#301](https://github.com/ndycode/oc-codex-multi-auth/pull/301), thanks @WarGloom)
+- The compact status line shows reset times as time left (`resets in 5h`, `resets in 2d`), rounded down like the overview and resets screens, and the V1 line keeps counting down while idle. ([#301](https://github.com/ndycode/oc-codex-multi-auth/pull/301), thanks @WarGloom)
+
+### Fixed
+- The pool, resets, and credits lines no longer render wider than their space when no candidate fits; they hide, as the active line already did. ([#301](https://github.com/ndycode/oc-codex-multi-auth/pull/301))
+
+### Internal
+- Per-session quota snapshots live in one small file per session under `oc-codex-multi-auth-tui-sessions/` (display fields plus a hashed account key, no tokens or raw session IDs), written without the account-storage lock and capped at 128 files. `resolveQuotaPollFingerprint` in the `./tui` entry is now `resolveQuotaPollTarget`. ([#301](https://github.com/ndycode/oc-codex-multi-auth/pull/301))
+
 ## [6.30.0] - 2026-10-31
 
 ### Added
