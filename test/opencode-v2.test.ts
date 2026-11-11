@@ -39,6 +39,7 @@ function host(type: "chat" | "image" = "chat") {
 	};
 	const model = Model.Info.default(Provider.ID.make("openai"), Model.ID.make(type === "image" ? "gpt-image-2" : "gpt-5.5"));
 	const provider = Provider.Info.empty(Provider.ID.make("openai"));
+	let replayModel: (() => void) | undefined;
 	Object.assign(model, { type });
 	model.package = type === "image" ? "@opencode/ai/providers/openai/images" : "@opencode/ai/providers/openai";
 	provider.package = model.package;
@@ -60,16 +61,22 @@ function host(type: "chat" | "image" = "chat") {
 		},
 		provider: { reload: vi.fn(), transform: async (callback: (input: unknown) => void) => { callback(editor); return registered(); } },
 		model: { transform: async (callback: (input: unknown) => void) => {
-			callback({
+			const baseline = structuredClone(model);
+			replayModel = () => {
+				for (const key of Object.keys(model)) Reflect.deleteProperty(model, key);
+				Object.assign(model, structuredClone(baseline));
+				callback({
 				list: () => [model], update: (_provider: string, _id: string, update: (value: typeof model) => void) => update(model),
-			});
+				});
+			};
+			replayModel();
 			return registered();
 		} },
 		aisdk: { hook: vi.fn(async (name, callback) => { hooks.set(name, callback); return registered(); }) },
 		tool: { transform: async (callback: (input: unknown) => void) => { callback({ add: (value: ToolInfo) => tools.push(value) }); return registered(); } },
 		event: { subscribe: vi.fn(async function* () { /* empty public event stream */ }) },
 	};
-	return { context: context as unknown as Plugin.Context, connection: context.integration.connection, methods, tools, hooks, model, provider, registrations };
+	return { context: context as unknown as Plugin.Context, connection: context.integration.connection, replayModel: () => replayModel?.(), methods, tools, hooks, model, provider, registrations };
 }
 
 describe("V2 compatibility adapter", () => {
@@ -212,6 +219,60 @@ describe("V2 compatibility adapter", () => {
 		try {
 			expect(h.model.settings.baseURL).toBe("https://api.openai.com/v1");
 			expect(h.model.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
+		} finally { await cleanup(); }
+	});
+
+	it.each([
+		["gpt-image-2", false], ["unsupported-image", false], ["gpt-image-2", true],
+	] as const)("rebuilds %s routing after credential switches (in flight: %s)", async (modelID, inFlight) => {
+		const h = host("image");
+		h.model.modelID = modelID;
+		h.model.settings = { baseURL: "https://api.openai.com/v1" };
+		const originalEnabled = h.model.enabled;
+		const credential = (id: string) => ({ type: "oauth", methodID: "codex-multi-0", access: `test.${Buffer.from(JSON.stringify({
+			"https://api.openai.com/auth": { chatgpt_account_id: id },
+		})).toString("base64url")}.test` });
+		h.connection.active.mockResolvedValue({ id: "FAKE_connection" });
+		h.connection.resolve.mockResolvedValue(credential("FAKE_A"));
+		let advance: () => void = () => {};
+		let gate = new Promise<void>((resolve) => { advance = resolve; });
+		(h.context as { event: unknown }).event = { subscribe: async function* () {
+			for (let index = 0; index < 2; index++) {
+				await gate;
+				gate = new Promise<void>((resolve) => { advance = resolve; });
+				yield { type: "credential.switched", location: h.context.location };
+			}
+		} };
+		const reload = vi.mocked(h.context.provider.reload);
+		reload.mockImplementation(async () => { h.replayModel(); });
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		try {
+			let release: () => void = () => {};
+			const resolving = vi.fn();
+			h.connection.resolve.mockResolvedValue(credential("FAKE_B"));
+			if (inFlight) h.connection.resolve.mockImplementationOnce(() => {
+				resolving();
+				return new Promise((resolve) => { release = () => resolve(credential("FAKE_B")); });
+			});
+			advance();
+			if (inFlight) {
+				await vi.waitFor(() => expect(resolving).toHaveBeenCalledOnce());
+				h.connection.resolve.mockResolvedValue({ type: "key", key: "FAKE_key" });
+				advance();
+				release();
+			} else {
+			await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+			if (modelID === "gpt-image-2") {
+				expect(h.model.headers).toHaveProperty("chatgpt-account-id", "FAKE_B");
+				expect(h.model.settings.baseURL).toBe("https://chatgpt.com/backend-api/codex");
+			} else expect(h.model.enabled).toBe(false);
+			h.connection.resolve.mockResolvedValue({ type: "key", key: "FAKE_key" });
+			advance();
+			}
+			await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
+			expect(h.model.settings.baseURL).toBe("https://api.openai.com/v1");
+			expect(h.model.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
+			expect(h.model.enabled).toBe(originalEnabled);
 		} finally { await cleanup(); }
 	});
 
