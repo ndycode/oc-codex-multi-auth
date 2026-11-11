@@ -425,7 +425,10 @@ describe("V2 compatibility adapter", () => {
 		expect(browser.mode).toBe("auto");
 		expect(await browser.callback).toMatchObject({ type: "oauth", methodID: "codex-multi-0", refresh: "new-refresh" });
 		expect(browser.instructions).toContain("Repeat opencode auth login");
-		expect(mocks.openBrowser).toHaveBeenCalledWith("https://example.com");
+		// OpenCode opens the returned URL on the client; the service must not
+		// launch another browser for the same authorization attempt.
+		expect(browser.url).toBe("https://example.com");
+		expect(mocks.openBrowser).not.toHaveBeenCalled();
 		expect(mocks.interactive).not.toHaveBeenCalled();
 		mocks.openBrowser.mockClear();
 		const link = await h.methods[1]!.authorize({});

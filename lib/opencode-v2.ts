@@ -22,7 +22,6 @@ import { readV2Status } from "./opencode-v2-status.js";
 import { CodexStatusRpc } from "./opencode-v2-rpc.js";
 import { createStorageScope } from "./storage/state.js";
 import { AUTH_LABELS } from "./constants.js";
-import { openBrowserUrl } from "./auth/browser.js";
 import { extractAccountId, extractAccountUserId } from "./auth/token-utils.js";
 
 const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
@@ -347,7 +346,8 @@ async function setupScopedV2(
 					method: { id: methodID, type: "oauth", label: primary ? "Codex OAuth (Add account — ChatGPT Plus/Pro)" : method.label },
 					authorize: () => run(async () => {
 						const flow = await flowMethod.authorize();
-						if (primary && flow.url) openBrowserUrl(flow.url);
+						// OpenCode's client opens the returned URL. Opening it here in
+						// the service launches a second tab (or a browser on a remote host).
 						const instructions = flow.url
 							? `${flow.instructions}\nAdds to this project's Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
 							: flow.instructions;
