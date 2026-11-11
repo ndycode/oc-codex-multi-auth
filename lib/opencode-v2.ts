@@ -328,6 +328,19 @@ async function setupScopedV2(
 			logWarn("V2 image credential lookup failed; image models disabled until credentials reload");
 		}
 	};
+	/** Keep credential probe failures local so later switch events can recover. */
+	const loadRouting = async () => {
+		try {
+			enabled = await hasOAuth();
+		} catch {
+			enabled = false;
+			imageAccount = undefined;
+			imageLookupFailed = true;
+			logWarn("V2 credential probe failed; routing disabled until credentials reload");
+			return;
+		}
+		await loadImageAccount();
+	};
 	const controller = new AbortController();
 	// Aborting the subscription stops NEW credential events, but an event can
 	// already be inside `reload()` when cleanup runs — teardown must not let
@@ -338,8 +351,7 @@ async function setupScopedV2(
 	const reload = async () => {
 		if (controller.signal.aborted) return;
 		const current = (async () => {
-			enabled = await hasOAuth();
-			await loadImageAccount();
+			await loadRouting();
 			if (!controller.signal.aborted) await context.provider.reload();
 		})();
 		inFlightReload = current;
@@ -362,8 +374,7 @@ async function setupScopedV2(
 		await runtime.event?.({ event: { type: "server.instance.disposed", properties: { directory: context.location.directory } } });
 	});
 	try {
-		enabled = await hasOAuth();
-		await loadImageAccount();
+		await loadRouting();
 		logInfo("V2 Codex adapter initialized", { enabled, directory: context.location.directory });
 		track(await context.rpc.register(CodexStatusRpc, { status: (input) => run(() => readV2Status(input)) }));
 		// V2 runs authorization in the service, where the V1 readline menu cannot run.

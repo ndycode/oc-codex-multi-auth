@@ -228,8 +228,10 @@ describe("V2 compatibility adapter", () => {
 	it.each([
 		["gpt-image-2", false, false], ["unsupported-image", false, false],
 		["gpt-image-2", true, false], ["gpt-image-2", false, true],
+		["gpt-image-2", false, "empty-pool"],
 	] as const)("rebuilds %s routing (switch queued during resolution: %s, lookup failure: %s)", async (modelID, inFlight, failure) => {
 		const h = host("image");
+		if (failure === "empty-pool") mocks.loadAccounts.mockResolvedValue({ activeIndex: 0, accounts: [] });
 		h.model.modelID = modelID;
 		h.model.settings = { baseURL: "https://api.openai.com/v1" };
 		const originalEnabled = h.model.enabled;
