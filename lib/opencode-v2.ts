@@ -294,8 +294,7 @@ async function setupScopedV2(
 	const auth = runtime.auth;
 	if (!auth?.loader) throw new Error("Codex authentication runtime is unavailable");
 	const loader = auth.loader;
-	const hasOAuth = async () => {
-		if ((await loadAccounts())?.accounts.some((account) => account.enabled !== false && account.refreshToken)) return true;
+	const hasHostOAuth = async () => {
 		const connection = await context.integration.connection.active("openai");
 		return connection ? (await context.integration.connection.resolve(connection))?.type === "oauth" : false;
 	};
@@ -330,8 +329,11 @@ async function setupScopedV2(
 	};
 	/** Keep credential probe failures local so later switch events can recover. */
 	const loadRouting = async () => {
+		// Preserve storage errors and their recovery hints; only host credential
+		// probes are recoverable here.
+		const pooled = (await loadAccounts())?.accounts.some((account) => account.enabled !== false && account.refreshToken);
 		try {
-			enabled = await hasOAuth();
+			enabled = pooled || await hasHostOAuth();
 		} catch {
 			enabled = false;
 			imageAccount = undefined;

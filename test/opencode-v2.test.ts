@@ -25,6 +25,7 @@ vi.mock("../lib/logger.js", async (importOriginal) => ({
 import { createV2Fetch, missingV2SdkSurface, promptCacheKeyFromHeaders, setupV2 } from "../lib/opencode-v2.js";
 import { createCodexHeaders, transformRequestForCodex } from "../lib/request/fetch-helpers.js";
 import { createStorageScope, getStoragePath, setStoragePathDirect, subscribeToStoragePathChanges } from "../lib/storage/state.js";
+import { StorageError } from "../lib/errors.js";
 
 /** Minimal V2 host with fresh catalog replay for credential-driven reload tests. */
 function host(type: "chat" | "image" = "chat") {
@@ -291,6 +292,16 @@ describe("V2 compatibility adapter", () => {
 			expect(h.model.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
 			expect(h.model.enabled).toBe(originalEnabled);
 		} finally { await cleanup(); }
+	});
+
+	it("preserves account storage errors and their recovery details during setup", async () => {
+		const h = host("image");
+		const cause = new Error("FAKE_permission_failure");
+		const error = new StorageError("Cannot load pool", "EACCES", "/FAKE/accounts.json", "Check pool permissions", cause);
+		mocks.loadAccounts.mockRejectedValueOnce(error);
+		await expect(setupV2(h.context, mocks.runtime)).rejects.toBe(error);
+		expect(error.cause).toBe(cause);
+		expect(h.connection.resolve).not.toHaveBeenCalled();
 	});
 
 	it("does not advertise unsupported image models for a Codex subscription", async () => {
