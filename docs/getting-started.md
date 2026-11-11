@@ -63,8 +63,9 @@ OpenCode.
 
 ### Remote or headless login
 
-In OpenCode V2, the client opens the authorization URL; the plugin service does
-not launch a second browser. The localhost callback listener runs on the
+In OpenCode V2, the plugin service does not open a browser. Interactive
+`opencode auth login` opens the authorization URL; in the TUI, press `o` or
+open the displayed URL yourself. The localhost callback listener runs on the
 **service host**. If the client and service are on different machines, choose
 Device Code or Manual URL Paste before starting login unless port 1455 is
 forwarded from the browser's machine to the service host.

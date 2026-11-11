@@ -81,7 +81,7 @@ Headless or remote shell? Four OAuth methods are available (browser, open URL ma
 
 OpenCode **2.0.16+** loads the plugin through a V2 adapter; the account pool, OAuth login, and request pipeline are shared with V1.
 
-V2 opens the authorization URL in the OpenCode client's browser, not in the plugin service. If the client and service run on different machines, forward the service's callback port 1455 or choose **Device Code** or **Manual URL Paste** before starting login. See [remote login](docs/getting-started.md#remote-or-headless-login).
+The V2 plugin service does not open a browser. Interactive `opencode auth login` opens the authorization URL; in the TUI, press `o` or open the displayed URL yourself. If the client and service run on different machines, forward the service's callback port 1455 or choose **Device Code** or **Manual URL Paste** before starting login. See [remote login](docs/getting-started.md#remote-or-headless-login).
 
 ```bash
 npx -y oc-codex-multi-auth@latest --v2
