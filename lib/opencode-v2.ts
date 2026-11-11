@@ -21,7 +21,7 @@ import type { Auth } from "@opencode-ai/sdk";
 import { readV2Status } from "./opencode-v2-status.js";
 import { CodexStatusRpc } from "./opencode-v2-rpc.js";
 import { createStorageScope } from "./storage/state.js";
-import { AUTH_LABELS } from "./constants.js";
+import { AUTH_LABELS, CODEX_BASE_URL } from "./constants.js";
 import { openBrowserUrl } from "./auth/browser.js";
 import { extractAccountId, extractAccountUserId } from "./auth/token-utils.js";
 
@@ -29,6 +29,11 @@ const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
 // Local checkouts are loaded from TypeScript; published packages contain JS.
 if (!existsSync(providerModule)) providerModule.pathname = providerModule.pathname.replace(/\.js$/, ".ts");
 const providerPackage = `aisdk:${providerModule.href}`;
+
+// Newer V2 hosts expose model.type; the minimum supported SDK predates it.
+function isImageModel(model: object): boolean {
+	return "type" in model && model.type === "image";
+}
 
 /**
  * Set stateless options before the SDK lowers history into server-side references.
@@ -295,6 +300,18 @@ async function setupScopedV2(
 		return connection ? (await context.integration.connection.resolve(connection))?.type === "oauth" : false;
 	};
 	let enabled = false;
+	// Native image requests resolve credentials through the host, not the chat
+	// pool's fetch hook. Only route the host's selected Codex OAuth connection.
+	// Token-sharing OAuth explicitly does not support image generation.
+	let imageAccount: { accountId?: string } | undefined;
+	const loadImageAccount = async () => {
+		const connection = await context.integration.connection.active("openai");
+		const credential = connection ? await context.integration.connection.resolve(connection) : undefined;
+		imageAccount = credential?.type === "oauth" && (
+			credential.methodID?.startsWith("codex-multi-") ||
+			credential.methodID === "chatgpt-browser" || credential.methodID === "chatgpt-headless"
+		) ? { accountId: extractAccountId(credential.access) } : undefined;
+	};
 	const controller = new AbortController();
 	// Aborting the subscription stops NEW credential events, but an event can
 	// already be inside `reload()` when cleanup runs — teardown must not let
@@ -306,6 +323,7 @@ async function setupScopedV2(
 		if (controller.signal.aborted) return;
 		const current = (async () => {
 			enabled = await hasOAuth();
+			await loadImageAccount();
 			if (!controller.signal.aborted) await context.provider.reload();
 		})();
 		inFlightReload = current;
@@ -329,6 +347,7 @@ async function setupScopedV2(
 	});
 	try {
 		enabled = await hasOAuth();
+		await loadImageAccount();
 		logInfo("V2 Codex adapter initialized", { enabled, directory: context.location.directory });
 		track(await context.rpc.register(CodexStatusRpc, { status: (input) => run(() => readV2Status(input)) }));
 		// V2 runs authorization in the service, where the V1 readline menu cannot run.
@@ -426,11 +445,14 @@ async function setupScopedV2(
 				provider.settings = { ...provider.settings, transport: "http" };
 			});
 			for (const model of providerModels?.values() ?? []) {
+				// Image generation uses the native model() contract, not aisdk's
+				// language hooks. Keep its original package and authentication path.
+				if (isImageModel(model)) continue;
 				editor.models.update("openai", model.id, (draft) => { draft.package = providerPackage; });
 			}
 		}));
 		track(await context.aisdk.hook("sdk", (event) => run(async () => {
-			if (!enabled) return;
+			if (!enabled || isImageModel(event.model)) return;
 			const options = await loader(resolveAuth, {
 				id: "openai",
 				name: "OpenAI",
@@ -477,6 +499,20 @@ async function setupScopedV2(
 		track(await context.model.transform((editor) => {
 			if (!enabled) return;
 			for (const model of editor.list("openai")) {
+				if (isImageModel(model)) {
+					if (imageAccount) editor.update("openai", String(model.id), (draft) => {
+						// Match Codex's documented subscription model, not the public
+						// API's larger image catalog. Never silently substitute models.
+						if (String(draft.modelID ?? draft.id) !== "gpt-image-2") {
+							draft.enabled = false;
+							return;
+						}
+						draft.settings = { ...draft.settings, baseURL: `${CODEX_BASE_URL}/codex`, transport: "http", encoding: "zstd" };
+						draft.headers = { ...draft.headers, originator: "opencode", ...(imageAccount?.accountId ? { "chatgpt-account-id": imageAccount.accountId } : {}) };
+						draft.cost = [];
+					});
+					continue;
+				}
 				editor.update("openai", String(model.id), (draft) => {
 					draft.package = providerPackage;
 					draft.settings = { ...draft.settings, transport: "http" };
@@ -484,7 +520,7 @@ async function setupScopedV2(
 			}
 		}));
 		track(await context.aisdk.hook("language", (event) => {
-			if (!enabled) return;
+			if (!enabled || isImageModel(event.model)) return;
 			const sdk = event.sdk as ReturnType<typeof createOpenAI>;
 			event.language = createV2Language(sdk.responses(event.model.modelID), sdkHeaders.get(sdk));
 		}, { providerID: "openai" }));

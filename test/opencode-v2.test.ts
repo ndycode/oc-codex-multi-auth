@@ -26,7 +26,7 @@ import { createV2Fetch, missingV2SdkSurface, promptCacheKeyFromHeaders, setupV2 
 import { createCodexHeaders, transformRequestForCodex } from "../lib/request/fetch-helpers.js";
 import { createStorageScope, getStoragePath, setStoragePathDirect, subscribeToStoragePathChanges } from "../lib/storage/state.js";
 
-function host() {
+function host(type: "chat" | "image" = "chat") {
 	const methods: IntegrationOAuthMethodRegistration[] = [];
 	const tools: ToolInfo[] = [];
 	const hooks = new Map<string, (event: AISDKHooks["sdk"] | AISDKHooks["language"]) => Promise<void>>();
@@ -37,8 +37,11 @@ function host() {
 		registrations.push(registration);
 		return registration;
 	};
-	const model = Model.Info.default(Provider.ID.make("openai"), Model.ID.make("gpt-5.5"));
+	const model = Model.Info.default(Provider.ID.make("openai"), Model.ID.make(type === "image" ? "gpt-image-2" : "gpt-5.5"));
 	const provider = Provider.Info.empty(Provider.ID.make("openai"));
+	Object.assign(model, { type });
+	model.package = type === "image" ? "@opencode/ai/providers/openai/images" : "@opencode/ai/providers/openai";
+	provider.package = model.package;
 	const editor = {
 		update: (_id: string, update: (value: typeof provider) => void) => update(provider),
 		get: () => ({ provider, models: new Map([[model.id, model]]) }),
@@ -66,7 +69,7 @@ function host() {
 		tool: { transform: async (callback: (input: unknown) => void) => { callback({ add: (value: ToolInfo) => tools.push(value) }); return registered(); } },
 		event: { subscribe: vi.fn(async function* () { /* empty public event stream */ }) },
 	};
-	return { context: context as unknown as Plugin.Context, methods, tools, hooks, model, provider, registrations };
+	return { context: context as unknown as Plugin.Context, connection: context.integration.connection, methods, tools, hooks, model, provider, registrations };
 }
 
 describe("V2 compatibility adapter", () => {
@@ -162,6 +165,63 @@ describe("V2 compatibility adapter", () => {
 		await h.hooks.get("sdk")?.({ model: h.model, package: original, options: {} });
 		expect(loader).not.toHaveBeenCalled();
 		await cleanup();
+	});
+
+	it("preserves the native image provider instead of routing images through the chat bridge", async () => {
+		const h = host("image");
+		const original = h.model.package;
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		try {
+			expect(h.model.package).toBe(original);
+			const sdkEvent: AISDKHooks["sdk"] = { model: h.model, package: original, options: {} };
+			await h.hooks.get("sdk")?.(sdkEvent);
+			expect(loader).not.toHaveBeenCalled();
+			expect(sdkEvent.sdk).toBeUndefined();
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it.each(["codex-multi-0", "chatgpt-browser", "chatgpt-headless"])("routes subscription images for %s through the Codex image endpoint", async (methodID) => {
+		const h = host("image");
+		const access = `test.${Buffer.from(JSON.stringify({
+			"https://api.openai.com/auth": { chatgpt_account_id: "test-image-account" },
+		})).toString("base64url")}.test`;
+		h.connection.active.mockResolvedValue({ id: "test-image-connection" });
+		h.connection.resolve.mockResolvedValue({ type: "oauth", methodID, access, refresh: "test-refresh", expires: 9999999999999 });
+		h.model.settings = { baseURL: "https://api.openai.com/v1" };
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		try {
+			expect(h.model.package).toBe("@opencode/ai/providers/openai/images");
+			expect(h.model.settings).toMatchObject({ baseURL: "https://chatgpt.com/backend-api/codex", transport: "http" });
+			expect(h.model.headers).toMatchObject({ "chatgpt-account-id": "test-image-account", originator: "opencode" });
+			expect(h.model.cost).toEqual([]);
+			expect(JSON.stringify(h.model)).not.toContain(access);
+		} finally { await cleanup(); }
+	});
+
+	it.each([
+		{ type: "key", key: "test-key" },
+		{ type: "oauth", methodID: "chatgpt-token-sharing", access: "test-access" },
+	])("does not route non-Codex credentials through subscription images: $type $methodID", async (credential) => {
+		const h = host("image");
+		h.connection.active.mockResolvedValue({ id: "test-image-connection" });
+		h.connection.resolve.mockResolvedValue(credential);
+		h.model.settings = { baseURL: "https://api.openai.com/v1" };
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		try {
+			expect(h.model.settings.baseURL).toBe("https://api.openai.com/v1");
+			expect(h.model.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
+		} finally { await cleanup(); }
+	});
+
+	it("does not advertise unsupported image models for a Codex subscription", async () => {
+		const h = host("image");
+		h.model.modelID = "gpt-image-2.5-flare";
+		h.connection.active.mockResolvedValue({ id: "test-image-connection" });
+		h.connection.resolve.mockResolvedValue({ type: "oauth", methodID: "codex-multi-0", access: "test-access" });
+		const cleanup = await setupV2(h.context, mocks.runtime);
+		try { expect(h.model.enabled).toBe(false); } finally { await cleanup(); }
 	});
 
 	it.each(["doGenerate", "doStream"] as const)("preserves multi-turn history before %s serialization", async (method) => {
