@@ -230,6 +230,7 @@ describe("V2 compatibility adapter", () => {
 		["gpt-image-2", false, false], ["unsupported-image", false, false],
 		["gpt-image-2", true, false], ["gpt-image-2", false, true],
 		["gpt-image-2", false, "empty-pool"],
+		["gpt-image-2", false, "storage"],
 	] as const)("rebuilds %s routing (switch queued during resolution: %s, lookup failure: %s)", async (modelID, inFlight, failure) => {
 		const h = host("image");
 		if (failure === "empty-pool") mocks.loadAccounts.mockResolvedValue({ activeIndex: 0, accounts: [] });
@@ -261,7 +262,10 @@ describe("V2 compatibility adapter", () => {
 			let release: () => void = () => {};
 			const resolving = vi.fn();
 			h.connection.resolve.mockResolvedValue(credential("FAKE_B"));
-			if (failure) h.connection.resolve.mockRejectedValueOnce(new Error("FAKE_refresh_failure"));
+			if (failure === "storage") mocks.loadAccounts.mockRejectedValueOnce(new StorageError(
+				"Cannot load /FAKE/accounts.json", "EACCES", "/FAKE/accounts.json", "Check pool permissions", new Error("FAKE_storage_cause"),
+			));
+			else if (failure) h.connection.resolve.mockRejectedValueOnce(new Error("FAKE_refresh_failure"));
 			if (inFlight) h.connection.resolve.mockImplementationOnce(() => {
 				resolving();
 				return new Promise((resolve) => { release = () => resolve(credential("FAKE_B")); });
@@ -288,6 +292,10 @@ describe("V2 compatibility adapter", () => {
 				expect(published[0]?.enabled).toBe(false);
 				expect(published[0]?.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
 			}
+			if (failure === "storage") expect(mocks.logWarn).toHaveBeenCalledWith(
+				"V2 routing reload failed; routing disabled until credentials reload",
+				expect.objectContaining({ error: expect.stringContaining("Check pool permissions"), cause: "Error: FAKE_storage_cause" }),
+			);
 			expect(h.model.settings.baseURL).toBe("https://api.openai.com/v1");
 			expect(h.model.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
 			expect(h.model.enabled).toBe(originalEnabled);

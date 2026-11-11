@@ -17,6 +17,7 @@ import type { Hooks } from "@opencode-ai/plugin";
 import { loadAccounts } from "./storage.js";
 import { coordinatePersistedRefresh } from "./storage/coordinated-refresh.js";
 import { logInfo, logWarn } from "./logger.js";
+import { StorageError } from "./errors.js";
 import type { Auth } from "@opencode-ai/sdk";
 import { readV2Status } from "./opencode-v2-status.js";
 import { CodexStatusRpc } from "./opencode-v2-rpc.js";
@@ -353,7 +354,20 @@ async function setupScopedV2(
 	const reload = async () => {
 		if (controller.signal.aborted) return;
 		const current = (async () => {
-			await loadRouting();
+			try {
+				await loadRouting();
+			} catch (error) {
+				// Startup still rejects storage errors. During an event, invalidate
+				// stale models and retain the listener so repaired storage can recover.
+				enabled = false;
+				imageAccount = undefined;
+				imageLookupFailed = true;
+				logWarn("V2 routing reload failed; routing disabled until credentials reload", {
+					error: String(error),
+					cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
+					...(error instanceof StorageError ? { path: error.path, hint: error.hint, code: error.code } : {}),
+				});
+			}
 			if (!controller.signal.aborted) await context.provider.reload();
 		})();
 		inFlightReload = current;
