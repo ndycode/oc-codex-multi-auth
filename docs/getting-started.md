@@ -63,6 +63,12 @@ OpenCode.
 
 ### Remote or headless login
 
+In OpenCode V2, the client opens the authorization URL; the plugin service does
+not launch a second browser. The localhost callback listener runs on the
+**service host**. If the client and service are on different machines, choose
+Device Code or Manual URL Paste before starting login unless port 1455 is
+forwarded from the browser's machine to the service host.
+
 - If port 1455 is reachable — including through
   `ssh -L 1455:localhost:1455 user@remote` — use
   `Codex OAuth (Open URL Manually)` and open the printed URL anywhere.
