@@ -26,6 +26,7 @@ import { createV2Fetch, missingV2SdkSurface, promptCacheKeyFromHeaders, setupV2 
 import { createCodexHeaders, transformRequestForCodex } from "../lib/request/fetch-helpers.js";
 import { createStorageScope, getStoragePath, setStoragePathDirect, subscribeToStoragePathChanges } from "../lib/storage/state.js";
 
+/** Minimal V2 host with fresh catalog replay for credential-driven reload tests. */
 function host(type: "chat" | "image" = "chat") {
 	const methods: IntegrationOAuthMethodRegistration[] = [];
 	const tools: ToolInfo[] = [];
@@ -209,7 +210,9 @@ describe("V2 compatibility adapter", () => {
 
 	it.each([
 		{ type: "key", key: "test-key" },
-		{ type: "oauth", methodID: "chatgpt-token-sharing", access: "test-access" },
+		{ type: "oauth", methodID: "chatgpt-token-sharing", access: `test.${Buffer.from(JSON.stringify({
+			"https://api.openai.com/auth": { chatgpt_account_id: "FAKE_token_sharing_account" },
+		})).toString("base64url")}.test` },
 	])("does not route non-Codex credentials through subscription images: $type $methodID", async (credential) => {
 		const h = host("image");
 		h.connection.active.mockResolvedValue({ id: "test-image-connection" });
@@ -223,8 +226,9 @@ describe("V2 compatibility adapter", () => {
 	});
 
 	it.each([
-		["gpt-image-2", false], ["unsupported-image", false], ["gpt-image-2", true],
-	] as const)("rebuilds %s routing after credential switches (in flight: %s)", async (modelID, inFlight) => {
+		["gpt-image-2", false, false], ["unsupported-image", false, false],
+		["gpt-image-2", true, false], ["gpt-image-2", false, true],
+	] as const)("rebuilds %s routing (switch queued during resolution: %s, lookup failure: %s)", async (modelID, inFlight, failure) => {
 		const h = host("image");
 		h.model.modelID = modelID;
 		h.model.settings = { baseURL: "https://api.openai.com/v1" };
@@ -244,12 +248,17 @@ describe("V2 compatibility adapter", () => {
 			}
 		} };
 		const reload = vi.mocked(h.context.provider.reload);
-		reload.mockImplementation(async () => { h.replayModel(); });
+		const published: Array<{ enabled: typeof h.model.enabled; headers: typeof h.model.headers }> = [];
+		reload.mockImplementation(async () => {
+			h.replayModel();
+			published.push({ enabled: h.model.enabled, headers: structuredClone(h.model.headers) });
+		});
 		const cleanup = await setupV2(h.context, mocks.runtime);
 		try {
 			let release: () => void = () => {};
 			const resolving = vi.fn();
 			h.connection.resolve.mockResolvedValue(credential("FAKE_B"));
+			if (failure) h.connection.resolve.mockRejectedValueOnce(new Error("FAKE_refresh_failure"));
 			if (inFlight) h.connection.resolve.mockImplementationOnce(() => {
 				resolving();
 				return new Promise((resolve) => { release = () => resolve(credential("FAKE_B")); });
@@ -257,19 +266,25 @@ describe("V2 compatibility adapter", () => {
 			advance();
 			if (inFlight) {
 				await vi.waitFor(() => expect(resolving).toHaveBeenCalledOnce());
+				h.connection.active.mockResolvedValue({ id: "FAKE_key_connection" });
 				h.connection.resolve.mockResolvedValue({ type: "key", key: "FAKE_key" });
 				advance();
 				release();
 			} else {
-			await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-			if (modelID === "gpt-image-2") {
-				expect(h.model.headers).toHaveProperty("chatgpt-account-id", "FAKE_B");
-				expect(h.model.settings.baseURL).toBe("https://chatgpt.com/backend-api/codex");
-			} else expect(h.model.enabled).toBe(false);
-			h.connection.resolve.mockResolvedValue({ type: "key", key: "FAKE_key" });
-			advance();
+				await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+				if (failure) expect(h.model.enabled).toBe(false);
+				else if (modelID === "gpt-image-2") {
+					expect(h.model.headers).toHaveProperty("chatgpt-account-id", "FAKE_B");
+					expect(h.model.settings.baseURL).toBe("https://chatgpt.com/backend-api/codex");
+				} else expect(h.model.enabled).toBe(false);
+				h.connection.resolve.mockResolvedValue({ type: "key", key: "FAKE_key" });
+				advance();
 			}
 			await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
+			if (inFlight || failure) {
+				expect(published[0]?.enabled).toBe(false);
+				expect(published[0]?.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
+			}
 			expect(h.model.settings.baseURL).toBe("https://api.openai.com/v1");
 			expect(h.model.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
 			expect(h.model.enabled).toBe(originalEnabled);

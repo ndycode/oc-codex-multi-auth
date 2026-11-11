@@ -30,7 +30,7 @@ const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
 if (!existsSync(providerModule)) providerModule.pathname = providerModule.pathname.replace(/\.js$/, ".ts");
 const providerPackage = `aisdk:${providerModule.href}`;
 
-// Newer V2 hosts expose model.type; the minimum supported SDK predates it.
+/** Detect native image models on newer hosts while supporting the older SDK. */
 function isImageModel(model: object): boolean {
 	return "type" in model && model.type === "image";
 }
@@ -304,13 +304,29 @@ async function setupScopedV2(
 	// pool's fetch hook. Only route the host's selected Codex OAuth connection.
 	// Token-sharing OAuth explicitly does not support image generation.
 	let imageAccount: { accountId?: string } | undefined;
+	let imageLookupFailed = false;
+	/** Refresh image routing only for a stable selection; fail closed on lookup errors. */
 	const loadImageAccount = async () => {
-		const connection = await context.integration.connection.active("openai");
-		const credential = connection ? await context.integration.connection.resolve(connection) : undefined;
-		imageAccount = credential?.type === "oauth" && (
-			credential.methodID?.startsWith("codex-multi-") ||
-			credential.methodID === "chatgpt-browser" || credential.methodID === "chatgpt-headless"
-		) ? { accountId: extractAccountId(credential.access) } : undefined;
+		imageAccount = undefined;
+		imageLookupFailed = true;
+		try {
+			const connection = await context.integration.connection.active("openai");
+			const credential = connection ? await context.integration.connection.resolve(connection) : undefined;
+			// Credential events are consumed serially. A newer selection can land
+			// while resolve awaits refresh; never publish that stale account.
+			const current = await context.integration.connection.active("openai");
+			const identity = (value: typeof connection) => value
+				? ("id" in value ? `credential:${value.id}` : `env:${value.name}`)
+				: undefined;
+			if (identity(current) !== identity(connection)) return;
+			imageAccount = credential?.type === "oauth" && (
+				credential.methodID?.startsWith("codex-multi-") ||
+				credential.methodID === "chatgpt-browser" || credential.methodID === "chatgpt-headless"
+			) ? { accountId: extractAccountId(credential.access) } : undefined;
+			imageLookupFailed = false;
+		} catch {
+			logWarn("V2 image credential lookup failed; image models disabled until credentials reload");
+		}
 	};
 	const controller = new AbortController();
 	// Aborting the subscription stops NEW credential events, but an event can
@@ -497,9 +513,12 @@ async function setupScopedV2(
 			event.sdk = sdk;
 		}), { providerID: "openai" }));
 		track(await context.model.transform((editor) => {
-			if (!enabled) return;
 			for (const model of editor.list("openai")) {
 				if (isImageModel(model)) {
+					if (imageLookupFailed) {
+						editor.update("openai", String(model.id), (draft) => { draft.enabled = false; });
+						continue;
+					}
 					if (imageAccount) editor.update("openai", String(model.id), (draft) => {
 						// Match Codex's documented subscription model, not the public
 						// API's larger image catalog. Never silently substitute models.
@@ -513,6 +532,7 @@ async function setupScopedV2(
 					});
 					continue;
 				}
+				if (!enabled) continue;
 				editor.update("openai", String(model.id), (draft) => {
 					draft.package = providerPackage;
 					draft.settings = { ...draft.settings, transport: "http" };
