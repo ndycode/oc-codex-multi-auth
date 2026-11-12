@@ -4898,6 +4898,11 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			const { AccountManager } = await import("../lib/accounts.js");
 			vi.spyOn(AccountManager.prototype, "getAccountForStrategy").mockReturnValue(null);
 			vi.spyOn(AccountManager.prototype, "getMinWaitTimeForFamily").mockReturnValue(1000);
+			vi.spyOn(AccountManager.prototype, "getSelectionExplainability").mockReturnValue([
+				{ index: 0, enabled: true, isCurrentForFamily: true, eligible: false,
+					reasons: ["rate-limited"], healthScore: 100, tokensAvailable: 50,
+					rateLimitedUntil: Date.now() + 60_000, lastUsed: 0 },
+			]);
 			const { sdk } = await setupPlugin();
 			if (!sdk.fetch) throw new Error("Missing plugin fetch");
 			vi.useFakeTimers();
@@ -6102,7 +6107,9 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			vi.spyOn(config, "getRetryAllAccountsRateLimited").mockReturnValue(false);
 			vi.spyOn(config, "getRotationStrategy").mockReturnValue("sticky");
 			const { sdk } = await setupPlugin();
-			expect((await send(sdk)).status).toBe(429);
+			const response = await send(sdk);
+			expect(response.status).toBe(503);
+			expect(await response.json()).toMatchObject({ error: { code: "accounts_temporarily_unavailable" } });
 			expect(globalThis.fetch).not.toHaveBeenCalled();
 			const helpers = await import("../lib/request/fetch-helpers.js");
 			expect(helpers.pickFallbackChainTarget).not.toHaveBeenCalled();

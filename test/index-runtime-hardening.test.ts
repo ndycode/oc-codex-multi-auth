@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import type { ToolContext } from "../lib/tools/index.js";
+import { resetTrackers } from "../lib/rotation.js";
 
 /**
  * Regression coverage for the request-runtime hardening fixes:
@@ -212,6 +213,7 @@ describe("index runtime hardening", () => {
 		);
 
 	beforeEach(async () => {
+		resetTrackers();
 		vi.useFakeTimers();
 		vi.stubEnv("CODEX_RETRY_ALL_UNBOUNDED", "1");
 		vi.spyOn(logger, "logWarn").mockImplementation(() => {});
@@ -234,6 +236,7 @@ describe("index runtime hardening", () => {
 	});
 
 	afterEach(async () => {
+		resetTrackers();
 		for (const plugin of plugins.splice(0)) {
 			await plugin.dispose?.();
 			await plugin.event?.({
@@ -342,6 +345,30 @@ describe("index runtime hardening", () => {
 	});
 
 	describe("terminal failure envelope", () => {
+		it.each(["auth cooldown", "local throttle"])("answers %s with 503 rather than an upstream rate limit", async (reason) => {
+			captured.maxRetries = 0;
+			const plugin = plugins[0];
+			if (!plugin) throw new Error("Missing plugin");
+			const manager = captured.contexts[0]?.cachedAccountManagerRef.current;
+			if (!manager) throw new Error("Missing manager");
+			const active = manager.getCurrentAccount();
+			if (!active) throw new Error("Missing account");
+			if (reason === "auth cooldown") {
+				manager.markAccountCoolingDown(active, 60_000, "auth-failure");
+			} else {
+				for (let i = 0; i < 100; i++) manager.consumeToken(active, "gpt-5.1", "gpt-5.1");
+			}
+			const fetch1 = await fetchFor(plugin);
+			const response = await fetch1("https://api.openai.com/v1/responses", {
+				method: "POST", body: JSON.stringify(postGpt51),
+			});
+			expect(response.status).toBe(503);
+			const body = await response.json() as { error: { code: string; message: string } };
+			expect(body.error.code).toBe("accounts_temporarily_unavailable");
+			expect(body.error.message).toContain(reason === "auth cooldown" ? "cooling down" : "local request throttle");
+			expect(body.error.message).not.toContain("rate-limited");
+		});
+
 		it("answers an empty pool with 503, a stable code, and the request-log pointer", async () => {
 			await fs.writeFile(path, JSON.stringify(storage([])));
 			const plugin = await createPlugin();
@@ -398,7 +425,7 @@ describe("index runtime hardening", () => {
 					method: "POST",
 					body: JSON.stringify(postGpt51),
 				});
-				expect(response.status).toBe(429);
+				expect(response.status).toBe(503);
 				await vi.advanceTimersByTimeAsync(31_000);
 			}
 
@@ -421,7 +448,7 @@ describe("index runtime hardening", () => {
 				method: "POST",
 				body: JSON.stringify(postGpt51),
 			});
-			expect(first.status).toBe(429);
+			expect(first.status).toBe(503);
 			expect(warnCalls("no resolvable accountId")).toHaveLength(1);
 
 			// Past the cooldown the record is re-attempted — and must not re-warn.
@@ -430,7 +457,7 @@ describe("index runtime hardening", () => {
 				method: "POST",
 				body: JSON.stringify(postGpt51),
 			});
-			expect(second.status).toBe(429);
+			expect(second.status).toBe(503);
 			expect(warnCalls("no resolvable accountId")).toHaveLength(1);
 		});
 	});
