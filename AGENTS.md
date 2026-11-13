@@ -56,9 +56,9 @@ rotation, the auth loader, the tool registry, and the disposal hook are shared â
 only the host contract differs. Per-location `createStorageScope`
 (`lib/storage/state.ts`) keeps each V2 location's account-storage state separate.
 
-- The adapter reroutes the `openai` provider/models through a distinct `aisdk:` package identity (`lib/opencode-v2-provider.ts`), then installs `aisdk` hooks that re-add the stateless contract (`store: false`, `reasoning.encrypted_content`, `opencode/<version>` UA) and strip server-side references (`previousResponseId`, `conversation`) that the Codex backend rejects.
+- The adapter reroutes only supported OpenAI chat models through a distinct `aisdk:` package identity (`lib/opencode-v2-provider.ts`), then installs chat-only `aisdk` hooks that re-add the stateless contract (`store: false`, `reasoning.encrypted_content`, `opencode/<version>` UA) and strip server-side references (`previousResponseId`, `conversation`) that the Codex backend rejects. Provider defaults and non-chat protocols stay native. On OpenCode 2.2.7+, Codex images use the native `openai/images` entrypoint and the host's selected subscription credential, not the chat pool's fetch/body transforms.
 - Quota/accounts status reaches TUIs over `CodexStatusRpc.status` â€” a remote TUI never touches credential files.
-- The adapter stays inert until a pooled account or `openai` OAuth connection exists. Install mode `--v2` writes a `plugins` entry only; it refuses to migrate V1 `plugin` entries.
+- Codex chat routing stays inert until a pool-only account or a recognized Codex OAuth connection exists; an explicitly selected API key or unrelated OAuth keeps its native contract. Install mode `--v2` writes a `plugins` entry only; it refuses to migrate V1 `plugin` entries.
 
 ## CONVENTIONS
 
