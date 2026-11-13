@@ -81,6 +81,8 @@ Headless or remote shell? Four OAuth methods are available (browser, open URL ma
 
 OpenCode **2.0.16+** loads the plugin through a V2 adapter; the account pool, OAuth login, and request pipeline are shared with V1.
 
+The V2 plugin service does not open a browser. Interactive `opencode auth login` opens the authorization URL; in the TUI, press `o` or open the displayed URL yourself. If the client and service run on different machines, forward the service's callback port 1455 or choose **Device Code** or **Manual URL Paste** before starting login. See [remote login](docs/getting-started.md#remote-or-headless-login).
+
 ```bash
 npx -y oc-codex-multi-auth@latest --v2
 opencode service restart
@@ -91,8 +93,8 @@ opencode auth login   # OpenAI -> Codex OAuth (Add account — ChatGPT Plus/Pro)
 
 ### Subscription image generation
 
-On V2 hosts with the native `@opencode/ai/providers/openai/images` driver
-(verified routing on OpenCode 2.2.5), select a **Codex OAuth** connection under
+On OpenCode 2.2.7+ hosts with the native `@opencode/ai/providers/openai/images` driver,
+select a **Codex OAuth** connection under
 OpenAI and request `openai/gpt-image-2`. The plugin routes generation and edits
 to Codex's subscription endpoint. Images use the host's selected OpenAI account
 and its token refresh; they do not rotate through the chat account pool.
@@ -234,7 +236,7 @@ Most issues resolve by signing in again or running `codex-doctor fix=true` insid
 
 ## Release notes
 
-- Current stable: [v6.31.0](CHANGELOG.md) — `npx -y oc-codex-multi-auth@latest`
+- Current stable: [v6.32.0](CHANGELOG.md) — `npx -y oc-codex-multi-auth@latest`
 - Full release archive: [CHANGELOG.md](CHANGELOG.md)
 
 ## Terms and license

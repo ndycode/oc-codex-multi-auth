@@ -17,23 +17,40 @@ import type { Hooks } from "@opencode-ai/plugin";
 import { loadAccounts } from "./storage.js";
 import { coordinatePersistedRefresh } from "./storage/coordinated-refresh.js";
 import { logInfo, logWarn } from "./logger.js";
-import { StorageError } from "./errors.js";
 import type { Auth } from "@opencode-ai/sdk";
 import { readV2Status } from "./opencode-v2-status.js";
 import { CodexStatusRpc } from "./opencode-v2-rpc.js";
 import { createStorageScope } from "./storage/state.js";
 import { AUTH_LABELS, CODEX_BASE_URL } from "./constants.js";
-import { openBrowserUrl } from "./auth/browser.js";
 import { extractAccountId, extractAccountUserId } from "./auth/token-utils.js";
 
 const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
 // Local checkouts are loaded from TypeScript; published packages contain JS.
 if (!existsSync(providerModule)) providerModule.pathname = providerModule.pathname.replace(/\.js$/, ".ts");
 const providerPackage = `aisdk:${providerModule.href}`;
+const nativeImagePackage = "@opencode/ai/providers/openai/images";
 
-/** Detect native image models on newer hosts while supporting the older SDK. */
-function isImageModel(model: object): boolean {
-	return "type" in model && model.type === "image";
+/** Older supported V2 SDKs have no type field; their inventory is chat-only. */
+function modelType(model: object): string {
+	const type: unknown = "type" in model ? model.type : undefined;
+	return type === undefined ? "chat" : typeof type === "string" ? type : "unknown";
+}
+
+/** Only model families handled by the shared Codex chat runtime. Never infer type from output modalities. */
+function isCodexChat(model: { modelID: unknown }): boolean {
+	return modelType(model) === "chat" && /^(?:gpt-(?:5(?:[.-]|$)|6(?:[.-]|$)|daybreak-)|codex(?:-|$))/.test(String(model.modelID));
+}
+
+/** Token-sharing and third-party OAuth have their own contracts; OAuth alone is not a Codex grant. */
+function isCodexOAuth(credential: Credential.Value | undefined, methodIDs: ReadonlySet<string>): credential is Credential.OAuth {
+	return credential?.type === "oauth" && methodIDs.has(credential.methodID);
+}
+
+function supportsNativeImages(version: string): boolean {
+	const match = /^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/.exec(version);
+	if (!match) return false;
+	const [, major, minor, patch] = match.map(Number);
+	return major === 2 && (Number(minor) > 2 || minor === 2 && Number(patch) >= 7);
 }
 
 /**
@@ -106,7 +123,7 @@ export function createV2Fetch(fetcher: (input: Request | string | URL, init?: Re
 		const headers = new Headers(request.headers);
 		headers.set("user-agent", userAgent);
 		const passthrough = (): Promise<Response> => fetcher(new Request(request, { headers }));
-		if (request.method !== "POST" || !request.body) return passthrough();
+		if (request.method !== "POST" || !request.body || !new URL(request.url).pathname.endsWith("/responses")) return passthrough();
 		let body: Record<string, unknown>;
 		try {
 			// Clone before consuming the stream: when the body is not a JSON
@@ -263,6 +280,7 @@ function toV1ProviderModels(
 	if (!infos.some((info) => info.id === current.id)) infos.push(current);
 	const models: V1LoaderProvider["models"] = {};
 	for (const info of infos) {
+		if (!isCodexChat(info)) continue;
 		const entry = toV1ModelEntry(info);
 		models[info.id] = entry;
 		if (info.modelID !== info.id) models[info.modelID] = entry;
@@ -295,87 +313,62 @@ async function setupScopedV2(
 	const auth = runtime.auth;
 	if (!auth?.loader) throw new Error("Codex authentication runtime is unavailable");
 	const loader = auth.loader;
-	const hasHostOAuth = async () => {
+	const codexMethods = new Set(["chatgpt-browser", "chatgpt-headless",
+		...auth.methods.flatMap((method, index) => method.type === "oauth" ? [`codex-multi-${index}`] : []),
+	]);
+	// Keep only routing metadata, never copies of access/refresh tokens. Native
+	// media calls resolve and refresh the host's selected credential themselves.
+	type Routing = { kind: "native" | "codex" | "pool" | "unavailable"; accountID?: string; connectionID?: string };
+	const readRouting = async (): Promise<Routing> => {
 		const connection = await context.integration.connection.active("openai");
-		return connection ? (await context.integration.connection.resolve(connection))?.type === "oauth" : false;
-	};
-	let enabled = false;
-	// Native image requests resolve credentials through the host, not the chat
-	// pool's fetch hook. Only route the host's selected Codex OAuth connection.
-	// Token-sharing OAuth explicitly does not support image generation.
-	let imageAccount: { accountId?: string } | undefined;
-	let imageLookupFailed = false;
-	/** Refresh image routing only for a stable selection; fail closed on lookup errors. */
-	const loadImageAccount = async () => {
-		imageAccount = undefined;
-		imageLookupFailed = true;
-		try {
-			const connection = await context.integration.connection.active("openai");
-			const credential = connection ? await context.integration.connection.resolve(connection) : undefined;
-			// Credential events are consumed serially. A newer selection can land
-			// while resolve awaits refresh; never publish that stale account.
-			const current = await context.integration.connection.active("openai");
-			const identity = (value: typeof connection) => value
-				? ("id" in value ? `credential:${value.id}` : `env:${value.name}`)
-				: undefined;
-			if (identity(current) !== identity(connection)) return;
-			imageAccount = credential?.type === "oauth" && (
-				credential.methodID?.startsWith("codex-multi-") ||
-				credential.methodID === "chatgpt-browser" || credential.methodID === "chatgpt-headless"
-			) ? { accountId: extractAccountId(credential.access) } : undefined;
-			imageLookupFailed = false;
-		} catch {
-			logWarn("V2 image credential lookup failed; image models disabled until credentials reload");
+		if (connection) {
+			const credential = await context.integration.connection.resolve(connection);
+			if (!credential) return { kind: "unavailable" };
+			if (!isCodexOAuth(credential, codexMethods)) return { kind: "native" };
+			return {
+				kind: "codex", connectionID: connection.type === "credential" ? connection.id : undefined,
+				accountID: extractAccountId(credential.access) ??
+					(typeof credential.metadata?.accountID === "string" ? credential.metadata.accountID : undefined),
+			};
 		}
+		return (await loadAccounts())?.accounts.some((account) => account.enabled !== false && account.refreshToken)
+			? { kind: "pool" } : { kind: "native" };
 	};
-	/** Keep credential probe failures local so later switch events can recover. */
-	const loadRouting = async () => {
-		// Preserve storage errors and their recovery hints; only host credential
-		// probes are recoverable here.
-		const pooled = (await loadAccounts())?.accounts.some((account) => account.enabled !== false && account.refreshToken);
-		try {
-			enabled = pooled || await hasHostOAuth();
-		} catch {
-			enabled = false;
-			imageAccount = undefined;
-			imageLookupFailed = true;
-			logWarn("V2 credential probe failed; routing disabled until credentials reload");
-			return;
-		}
-		await loadImageAccount();
-	};
+	let routing: Routing = { kind: "native" };
+	const enabled = () => routing.kind === "codex" || routing.kind === "pool";
 	const controller = new AbortController();
 	// Aborting the subscription stops NEW credential events, but an event can
 	// already be inside `reload()` when cleanup runs — teardown must not let
 	// that handler finish a provider.reload() after disposal began. The guard
 	// below blocks the provider call once aborted, and `inFlightReload` lets
 	// cleanup await the handler it interrupted rather than racing it.
-	let inFlightReload: Promise<void> | undefined;
+	let inFlightReload = Promise.resolve();
 	const reload = async () => {
 		if (controller.signal.aborted) return;
-		const current = (async () => {
+		const current = inFlightReload.catch(() => {}).then(async () => {
+			if (controller.signal.aborted) return;
+			const previous = routing;
+			let next: Routing;
 			try {
-				await loadRouting();
+				next = await readRouting();
 			} catch (error) {
-				// Startup still rejects storage errors. During an event, invalidate
-				// stale models and retain the listener so repaired storage can recover.
-				enabled = false;
-				imageAccount = undefined;
-				imageLookupFailed = true;
-				logWarn("V2 routing reload failed; routing disabled until credentials reload", {
+				logWarn("V2 routing reload failed; will retry on the next credential event", {
 					error: String(error),
 					cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
-					...(error instanceof StorageError ? { path: error.path, hint: error.hint, code: error.code } : {}),
 				});
+				return;
 			}
-			if (!controller.signal.aborted) await context.provider.reload();
-		})();
+			if (controller.signal.aborted) return;
+			routing = next;
+			try {
+				await context.provider.reload();
+			} catch (error) {
+				routing = previous;
+				logWarn("V2 provider reload failed; keeping the last working route", { error: String(error) });
+			}
+		});
 		inFlightReload = current;
-		try {
-			await current;
-		} finally {
-			if (inFlightReload === current) inFlightReload = undefined;
-		}
+		await current;
 	};
 	// Every SDK registration (transforms, hooks, the status RPC) is released on
 	// unload with the event subscription and the runtime teardown.
@@ -390,8 +383,8 @@ async function setupScopedV2(
 		await runtime.event?.({ event: { type: "server.instance.disposed", properties: { directory: context.location.directory } } });
 	});
 	try {
-		await loadRouting();
-		logInfo("V2 Codex adapter initialized", { enabled, directory: context.location.directory });
+		routing = await readRouting();
+		logInfo("V2 Codex adapter initialized", { enabled: enabled(), directory: context.location.directory });
 		track(await context.rpc.register(CodexStatusRpc, { status: (input) => run(() => readV2Status(input)) }));
 		// V2 runs authorization in the service, where the V1 readline menu cannot run.
 		// Reuse the append-only loopback flow for the primary add-account method.
@@ -409,7 +402,6 @@ async function setupScopedV2(
 					method: { id: methodID, type: "oauth", label: primary ? "Codex OAuth (Add account — ChatGPT Plus/Pro)" : method.label },
 					authorize: () => run(async () => {
 						const flow = await flowMethod.authorize();
-						if (primary && flow.url) openBrowserUrl(flow.url);
 						const instructions = flow.url
 							? `${flow.instructions}\nAdds to this project's Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
 							: flow.instructions;
@@ -449,6 +441,13 @@ async function setupScopedV2(
 		}));
 
 		const resolveAuth = async (): Promise<Auth> => {
+			// An explicitly selected API key or unrelated OAuth connection takes
+			// precedence over the pool, even between a switch and its reload event.
+			const connection = await context.integration.connection.active("openai");
+			const credential = connection ? await context.integration.connection.resolve(connection) : undefined;
+			if (connection && !isCodexOAuth(credential, codexMethods)) {
+				throw new Error("OpenAI connection changed; reload before using the Codex chat adapter");
+			}
 			const pool = await loadAccounts();
 			const accounts = pool?.accounts ?? [];
 			// Disabled accounts never serve requests — prefer the active seat
@@ -462,9 +461,7 @@ async function setupScopedV2(
 			if (account?.refreshToken) {
 				return { type: "oauth", access: account.accessToken ?? "", refresh: account.refreshToken, expires: account.expiresAt ?? 0 };
 			}
-			const connection = await context.integration.connection.active("openai");
-			const credential = connection ? await context.integration.connection.resolve(connection) : undefined;
-			if (credential?.type === "oauth") return credential;
+			if (isCodexOAuth(credential, codexMethods)) return credential;
 			if (accounts.length > 0 && accounts.every((entry) => entry.enabled === false)) {
 				throw new Error("All pooled Codex accounts are disabled — re-enable one with the codex-enable tool or connect a new login with /connect");
 			}
@@ -477,25 +474,27 @@ async function setupScopedV2(
 		// The provider record's model inventory feeds the V1 loader's per-model
 		// config map; captured on each transform so the latest snapshot wins.
 		let providerModels: ReadonlyMap<string, Model.Info> | undefined;
+		let connectionImageModels = new Set<string>();
 		track(await context.provider.transform((editor) => {
 			// The record exists even while disabled; the sdk hook needs it either
 			// way, so capture unconditionally and gate only the mutations.
-			providerModels = editor.get("openai")?.models;
-			if (!enabled) return;
-			editor.update("openai", (provider) => {
-				provider.package = providerPackage;
-				provider.activation = "enabled";
-				provider.settings = { ...provider.settings, transport: "http" };
-			});
+			const record = editor.get("openai");
+			providerModels = record?.models;
+			const source = record?.sourceConnection;
+			connectionImageModels = new Set(source?.type === "credential" && source.id === routing.connectionID
+				? [...providerModels?.values() ?? []].filter((model) => modelType(model) === "image" && model.enabled).map((model) => model.modelID)
+				: []);
+			if (!enabled()) return;
+			// Provider defaults must remain native: current AND newly discovered
+			// image/decision/audio/future types must not inherit a chat-only SDK.
+			if (routing.kind === "pool") editor.update("openai", (provider) => { provider.activation = "enabled"; });
 			for (const model of providerModels?.values() ?? []) {
-				// Image generation uses the native model() contract, not aisdk's
-				// language hooks. Keep its original package and authentication path.
-				if (isImageModel(model)) continue;
+				if (!isCodexChat(model)) continue;
 				editor.models.update("openai", model.id, (draft) => { draft.package = providerPackage; });
 			}
 		}));
 		track(await context.aisdk.hook("sdk", (event) => run(async () => {
-			if (!enabled || isImageModel(event.model)) return;
+			if (!enabled() || !isCodexChat(event.model)) return;
 			const options = await loader(resolveAuth, {
 				id: "openai",
 				name: "OpenAI",
@@ -541,25 +540,44 @@ async function setupScopedV2(
 		}), { providerID: "openai" }));
 		track(await context.model.transform((editor) => {
 			for (const model of editor.list("openai")) {
-				if (isImageModel(model)) {
-					if (imageLookupFailed) {
-						editor.update("openai", String(model.id), (draft) => { draft.enabled = false; });
-						continue;
-					}
-					if (imageAccount) editor.update("openai", String(model.id), (draft) => {
-						// Match Codex's documented subscription model, not the public
-						// API's larger image catalog. Never silently substitute models.
-						if (String(draft.modelID ?? draft.id) !== "gpt-image-2") {
+				if (modelType(model) === "image") {
+					// Custom image protocols remain owned by their provider/plugin.
+					if (model.package && model.package !== "@opencode/ai/providers/openai" && model.package !== nativeImagePackage) continue;
+					editor.update("openai", String(model.id), (draft) => {
+						if (supportsNativeImages(context.app.version)) draft.package = nativeImagePackage;
+						// API keys and other OAuth methods retain their own endpoint,
+						// headers, enablement and host credential/refresh contract.
+						if (routing.kind === "native") return;
+						// Native media uses the HOST connection, not the rotating chat
+						// pool. Without a host Codex grant, fail closed; never use an
+						// env/API-key fallback to pay for a subscription request.
+						if (routing.kind !== "codex" || !supportsNativeImages(context.app.version)) {
 							draft.enabled = false;
 							return;
 						}
-						draft.settings = { ...draft.settings, baseURL: `${CODEX_BASE_URL}/codex`, transport: "http", encoding: "zstd" };
-						draft.headers = { ...draft.headers, originator: "opencode", ...(imageAccount?.accountId ? { "chatgpt-account-id": imageAccount.accountId } : {}) };
-						draft.cost = [];
+						draft.package = nativeImagePackage;
+						draft.settings = { ...draft.settings, baseURL: `${CODEX_BASE_URL}/codex` };
+						// GPT Image 2 is the built-in Codex image entitlement in 2.2.7.
+						// Additional models need an authoritative account-scoped inventory.
+						if (String(model.modelID) !== "gpt-image-2" && !connectionImageModels.has(String(model.modelID))) draft.enabled = false;
+						const subscriptionHeaders = (given: Record<string, string> | undefined) => {
+							const headers = new Headers(given);
+							headers.set("originator", "opencode");
+							headers.set("user-agent", `opencode/${context.app.version}`);
+							if (routing.accountID) headers.set("chatgpt-account-id", routing.accountID);
+							return Object.fromEntries(headers.entries());
+						};
+						draft.headers = subscriptionHeaders(draft.headers);
+						// Variant settings are merged AFTER model transforms. Pin them
+						// too so a legacy API endpoint cannot silently change billing.
+						for (const variant of draft.variants) {
+							variant.settings = { ...variant.settings, baseURL: `${CODEX_BASE_URL}/codex` };
+							variant.headers = subscriptionHeaders(variant.headers);
+						}
 					});
 					continue;
 				}
-				if (!enabled) continue;
+				if (!enabled() || !isCodexChat(model)) continue;
 				editor.update("openai", String(model.id), (draft) => {
 					draft.package = providerPackage;
 					draft.settings = { ...draft.settings, transport: "http" };
@@ -567,7 +585,7 @@ async function setupScopedV2(
 			}
 		}));
 		track(await context.aisdk.hook("language", (event) => {
-			if (!enabled || isImageModel(event.model)) return;
+			if (!enabled() || !isCodexChat(event.model)) return;
 			const sdk = event.sdk as ReturnType<typeof createOpenAI>;
 			event.language = createV2Language(sdk.responses(event.model.modelID), sdkHeaders.get(sdk));
 		}, { providerID: "openai" }));
@@ -599,7 +617,7 @@ async function setupScopedV2(
 			try {
 				for await (const event of context.event.subscribe({ signal: controller.signal })) {
 					if (event.location && event.location.directory !== context.location.directory) continue;
-					if (event.type === "credential.updated" || event.type === "credential.switched") await reload();
+					if (event.type === "credential.updated" || event.type === "credential.switched" || event.type === "integration.updated") await reload();
 				}
 			} catch (error) {
 				if (!controller.signal.aborted) logWarn("V2 event subscription ended", { error: String(error) });

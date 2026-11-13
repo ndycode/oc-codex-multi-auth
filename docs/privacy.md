@@ -68,8 +68,10 @@ native image route, nor does the plugin's chat request-body logging pipeline.
 
 API-key image connections retain the host's standard
 `https://api.openai.com/v1/images/generations` and `/v1/images/edits` routes,
-using the selected API key and separate API billing. Token-sharing OAuth is not
-enabled for the subscription image route.
+using the selected API key and separate API billing. If the connection
+configures another provider base URL, prompts and image inputs are sent to that
+configured endpoint instead. Token-sharing OAuth is not enabled for the
+subscription image route.
 
 ### Background quota poller
 

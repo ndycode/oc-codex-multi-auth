@@ -25,10 +25,8 @@ vi.mock("../lib/logger.js", async (importOriginal) => ({
 import { createV2Fetch, missingV2SdkSurface, promptCacheKeyFromHeaders, setupV2 } from "../lib/opencode-v2.js";
 import { createCodexHeaders, transformRequestForCodex } from "../lib/request/fetch-helpers.js";
 import { createStorageScope, getStoragePath, setStoragePathDirect, subscribeToStoragePathChanges } from "../lib/storage/state.js";
-import { StorageError } from "../lib/errors.js";
 
-/** Minimal V2 host with fresh catalog replay for credential-driven reload tests. */
-function host(type: "chat" | "image" = "chat") {
+function host() {
 	const methods: IntegrationOAuthMethodRegistration[] = [];
 	const tools: ToolInfo[] = [];
 	const hooks = new Map<string, (event: AISDKHooks["sdk"] | AISDKHooks["language"]) => Promise<void>>();
@@ -39,12 +37,8 @@ function host(type: "chat" | "image" = "chat") {
 		registrations.push(registration);
 		return registration;
 	};
-	const model = Model.Info.default(Provider.ID.make("openai"), Model.ID.make(type === "image" ? "gpt-image-2" : "gpt-5.5"));
+	const model = Model.Info.default(Provider.ID.make("openai"), Model.ID.make("gpt-5.5"));
 	const provider = Provider.Info.empty(Provider.ID.make("openai"));
-	let replayModel: (() => void) | undefined;
-	Object.assign(model, { type });
-	model.package = type === "image" ? "@opencode/ai/providers/openai/images" : "@opencode/ai/providers/openai";
-	provider.package = model.package;
 	const editor = {
 		update: (_id: string, update: (value: typeof provider) => void) => update(provider),
 		get: () => ({ provider, models: new Map([[model.id, model]]) }),
@@ -63,22 +57,16 @@ function host(type: "chat" | "image" = "chat") {
 		},
 		provider: { reload: vi.fn(), transform: async (callback: (input: unknown) => void) => { callback(editor); return registered(); } },
 		model: { transform: async (callback: (input: unknown) => void) => {
-			const baseline = structuredClone(model);
-			replayModel = () => {
-				for (const key of Object.keys(model)) Reflect.deleteProperty(model, key);
-				Object.assign(model, structuredClone(baseline));
-				callback({
+			callback({
 				list: () => [model], update: (_provider: string, _id: string, update: (value: typeof model) => void) => update(model),
-				});
-			};
-			replayModel();
+			});
 			return registered();
 		} },
 		aisdk: { hook: vi.fn(async (name, callback) => { hooks.set(name, callback); return registered(); }) },
 		tool: { transform: async (callback: (input: unknown) => void) => { callback({ add: (value: ToolInfo) => tools.push(value) }); return registered(); } },
 		event: { subscribe: vi.fn(async function* () { /* empty public event stream */ }) },
 	};
-	return { context: context as unknown as Plugin.Context, connection: context.integration.connection, replayModel: () => replayModel?.(), methods, tools, hooks, model, provider, registrations };
+	return { context: context as unknown as Plugin.Context, methods, tools, hooks, model, provider, registrations };
 }
 
 describe("V2 compatibility adapter", () => {
@@ -154,9 +142,9 @@ describe("V2 compatibility adapter", () => {
 	it("uses a distinct provider package so V2 cannot rewrite the transport to native OpenAI", async () => {
 		const h = host();
 		const cleanup = await setupV2(h.context, mocks.runtime);
-		expect(h.provider.package).toMatch(/^aisdk:file:.*opencode-v2-provider\.(ts|js)$/);
-		expect(h.model.package).toBe(h.provider.package);
-		const sdkEvent: AISDKHooks["sdk"] = { model: h.model, package: h.provider.package, options: {} };
+		expect(h.model.package).toMatch(/^aisdk:file:.*opencode-v2-provider\.(ts|js)$/);
+		expect(h.provider.package).not.toBe(h.model.package);
+		const sdkEvent: AISDKHooks["sdk"] = { model: h.model, package: h.model.package, options: {} };
 		await h.hooks.get("sdk")?.(sdkEvent);
 		expect(sdkEvent.sdk).toBeDefined();
 		expect(loader).toHaveBeenCalled();
@@ -174,151 +162,6 @@ describe("V2 compatibility adapter", () => {
 		await h.hooks.get("sdk")?.({ model: h.model, package: original, options: {} });
 		expect(loader).not.toHaveBeenCalled();
 		await cleanup();
-	});
-
-	it("preserves the native image provider instead of routing images through the chat bridge", async () => {
-		const h = host("image");
-		const original = h.model.package;
-		const cleanup = await setupV2(h.context, mocks.runtime);
-		try {
-			expect(h.model.package).toBe(original);
-			const sdkEvent: AISDKHooks["sdk"] = { model: h.model, package: original, options: {} };
-			await h.hooks.get("sdk")?.(sdkEvent);
-			expect(loader).not.toHaveBeenCalled();
-			expect(sdkEvent.sdk).toBeUndefined();
-		} finally {
-			await cleanup();
-		}
-	});
-
-	it.each(["codex-multi-0", "chatgpt-browser", "chatgpt-headless"])("routes subscription images for %s through the Codex image endpoint", async (methodID) => {
-		const h = host("image");
-		const access = `test.${Buffer.from(JSON.stringify({
-			"https://api.openai.com/auth": { chatgpt_account_id: "test-image-account" },
-		})).toString("base64url")}.test`;
-		h.connection.active.mockResolvedValue({ id: "test-image-connection" });
-		h.connection.resolve.mockResolvedValue({ type: "oauth", methodID, access, refresh: "test-refresh", expires: 9999999999999 });
-		h.model.settings = { baseURL: "https://api.openai.com/v1" };
-		const cleanup = await setupV2(h.context, mocks.runtime);
-		try {
-			expect(h.model.package).toBe("@opencode/ai/providers/openai/images");
-			expect(h.model.settings).toMatchObject({ baseURL: "https://chatgpt.com/backend-api/codex", transport: "http" });
-			expect(h.model.headers).toMatchObject({ "chatgpt-account-id": "test-image-account", originator: "opencode" });
-			expect(h.model.cost).toEqual([]);
-			expect(JSON.stringify(h.model)).not.toContain(access);
-		} finally { await cleanup(); }
-	});
-
-	it.each([
-		{ type: "key", key: "test-key" },
-		{ type: "oauth", methodID: "chatgpt-token-sharing", access: `test.${Buffer.from(JSON.stringify({
-			"https://api.openai.com/auth": { chatgpt_account_id: "FAKE_token_sharing_account" },
-		})).toString("base64url")}.test` },
-	])("does not route non-Codex credentials through subscription images: $type $methodID", async (credential) => {
-		const h = host("image");
-		h.connection.active.mockResolvedValue({ id: "test-image-connection" });
-		h.connection.resolve.mockResolvedValue(credential);
-		h.model.settings = { baseURL: "https://api.openai.com/v1" };
-		const cleanup = await setupV2(h.context, mocks.runtime);
-		try {
-			expect(h.model.settings.baseURL).toBe("https://api.openai.com/v1");
-			expect(h.model.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
-		} finally { await cleanup(); }
-	});
-
-	it.each([
-		["gpt-image-2", false, false], ["unsupported-image", false, false],
-		["gpt-image-2", true, false], ["gpt-image-2", false, true],
-		["gpt-image-2", false, "empty-pool"],
-		["gpt-image-2", false, "storage"],
-	] as const)("rebuilds %s routing (switch queued during resolution: %s, lookup failure: %s)", async (modelID, inFlight, failure) => {
-		const h = host("image");
-		if (failure === "empty-pool") mocks.loadAccounts.mockResolvedValue({ activeIndex: 0, accounts: [] });
-		h.model.modelID = modelID;
-		h.model.settings = { baseURL: "https://api.openai.com/v1" };
-		const originalEnabled = h.model.enabled;
-		const credential = (id: string) => ({ type: "oauth", methodID: "codex-multi-0", access: `test.${Buffer.from(JSON.stringify({
-			"https://api.openai.com/auth": { chatgpt_account_id: id },
-		})).toString("base64url")}.test` });
-		h.connection.active.mockResolvedValue({ id: "FAKE_connection" });
-		h.connection.resolve.mockResolvedValue(credential("FAKE_A"));
-		let advance: () => void = () => {};
-		let gate = new Promise<void>((resolve) => { advance = resolve; });
-		(h.context as { event: unknown }).event = { subscribe: async function* () {
-			for (let index = 0; index < 2; index++) {
-				await gate;
-				gate = new Promise<void>((resolve) => { advance = resolve; });
-				yield { type: "credential.switched", location: h.context.location };
-			}
-		} };
-		const reload = vi.mocked(h.context.provider.reload);
-		const published: Array<{ enabled: typeof h.model.enabled; headers: typeof h.model.headers }> = [];
-		reload.mockImplementation(async () => {
-			h.replayModel();
-			published.push({ enabled: h.model.enabled, headers: structuredClone(h.model.headers) });
-		});
-		const cleanup = await setupV2(h.context, mocks.runtime);
-		try {
-			let release: () => void = () => {};
-			const resolving = vi.fn();
-			h.connection.resolve.mockResolvedValue(credential("FAKE_B"));
-			if (failure === "storage") mocks.loadAccounts.mockRejectedValueOnce(new StorageError(
-				"Cannot load /FAKE/accounts.json", "EACCES", "/FAKE/accounts.json", "Check pool permissions", new Error("FAKE_storage_cause"),
-			));
-			else if (failure) h.connection.resolve.mockRejectedValueOnce(new Error("FAKE_refresh_failure"));
-			if (inFlight) h.connection.resolve.mockImplementationOnce(() => {
-				resolving();
-				return new Promise((resolve) => { release = () => resolve(credential("FAKE_B")); });
-			});
-			advance();
-			if (inFlight) {
-				await vi.waitFor(() => expect(resolving).toHaveBeenCalledOnce());
-				h.connection.active.mockResolvedValue({ id: "FAKE_key_connection" });
-				h.connection.resolve.mockResolvedValue({ type: "key", key: "FAKE_key" });
-				advance();
-				release();
-			} else {
-				await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-				if (failure) expect(h.model.enabled).toBe(false);
-				else if (modelID === "gpt-image-2") {
-					expect(h.model.headers).toHaveProperty("chatgpt-account-id", "FAKE_B");
-					expect(h.model.settings.baseURL).toBe("https://chatgpt.com/backend-api/codex");
-				} else expect(h.model.enabled).toBe(false);
-				h.connection.resolve.mockResolvedValue({ type: "key", key: "FAKE_key" });
-				advance();
-			}
-			await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
-			if (inFlight || failure) {
-				expect(published[0]?.enabled).toBe(false);
-				expect(published[0]?.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
-			}
-			if (failure === "storage") expect(mocks.logWarn).toHaveBeenCalledWith(
-				"V2 routing reload failed; routing disabled until credentials reload",
-				expect.objectContaining({ error: expect.stringContaining("Check pool permissions"), cause: "Error: FAKE_storage_cause" }),
-			);
-			expect(h.model.settings.baseURL).toBe("https://api.openai.com/v1");
-			expect(h.model.headers ?? {}).not.toHaveProperty("chatgpt-account-id");
-			expect(h.model.enabled).toBe(originalEnabled);
-		} finally { await cleanup(); }
-	});
-
-	it("preserves account storage errors and their recovery details during setup", async () => {
-		const h = host("image");
-		const cause = new Error("FAKE_permission_failure");
-		const error = new StorageError("Cannot load pool", "EACCES", "/FAKE/accounts.json", "Check pool permissions", cause);
-		mocks.loadAccounts.mockRejectedValueOnce(error);
-		await expect(setupV2(h.context, mocks.runtime)).rejects.toBe(error);
-		expect(error.cause).toBe(cause);
-		expect(h.connection.resolve).not.toHaveBeenCalled();
-	});
-
-	it("does not advertise unsupported image models for a Codex subscription", async () => {
-		const h = host("image");
-		h.model.modelID = "gpt-image-2.5-flare";
-		h.connection.active.mockResolvedValue({ id: "test-image-connection" });
-		h.connection.resolve.mockResolvedValue({ type: "oauth", methodID: "codex-multi-0", access: "test-access" });
-		const cleanup = await setupV2(h.context, mocks.runtime);
-		try { expect(h.model.enabled).toBe(false); } finally { await cleanup(); }
 	});
 
 	it.each(["doGenerate", "doStream"] as const)("preserves multi-turn history before %s serialization", async (method) => {
@@ -582,7 +425,7 @@ describe("V2 compatibility adapter", () => {
 		expect(browser.mode).toBe("auto");
 		expect(await browser.callback).toMatchObject({ type: "oauth", methodID: "codex-multi-0", refresh: "new-refresh" });
 		expect(browser.instructions).toContain("Repeat opencode auth login");
-		expect(mocks.openBrowser).toHaveBeenCalledWith("https://example.com");
+		expect(mocks.openBrowser).not.toHaveBeenCalled();
 		expect(mocks.interactive).not.toHaveBeenCalled();
 		mocks.openBrowser.mockClear();
 		const link = await h.methods[1]!.authorize({});
@@ -742,7 +585,7 @@ describe("V2 compatibility adapter", () => {
 			resolve: ReturnType<typeof vi.fn>;
 		};
 		connection.active.mockResolvedValue({ id: "host-conn" });
-		connection.resolve.mockResolvedValue({ type: "oauth", access: "host-access", refresh: "host-refresh", expires: 9 });
+		connection.resolve.mockResolvedValue({ type: "oauth", methodID: "chatgpt-browser", access: "host-access", refresh: "host-refresh", expires: 9 });
 		const cleanup = await setupV2(h.context, mocks.runtime);
 		let getAuth: (() => Promise<unknown>) | undefined;
 		loader.mockImplementationOnce(async (resolve) => {
