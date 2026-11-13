@@ -7,6 +7,22 @@ The current stable release line is `6.x`. This file is the complete release hist
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.32.0] - 2026-11-13
+
+### Added
+- OpenCode V2 can route eligible Codex subscription image generation and editing through the host's native image provider, including `gpt-image-2`, while preserving the selected connection and keeping API-key routing unchanged. ([#302](https://github.com/ndycode/oc-codex-multi-auth/pull/302), [#304](https://github.com/ndycode/oc-codex-multi-auth/pull/304), thanks @lubshad and @D-a-n-i-l)
+
+### Changed
+- V2 OAuth login leaves browser launching to the OpenCode client and keeps the authorization URL available for remote and headless setups. The setup docs now describe callback forwarding, Device Code, and Manual URL Paste options. ([#303](https://github.com/ndycode/oc-codex-multi-auth/pull/303), [#305](https://github.com/ndycode/oc-codex-multi-auth/pull/305), thanks @lubshad)
+- V2 chat routing now follows the selected connection and model type, while native subscription images stay outside the chat bridge. ([#305](https://github.com/ndycode/oc-codex-multi-auth/pull/305))
+
+### Fixed
+- Failed V2 credential reloads preserve the previous route state and keep chat available instead of disabling the provider. ([#305](https://github.com/ndycode/oc-codex-multi-auth/pull/305))
+- The V2 adapter now keeps its dependency lockfile aligned with the declared package ranges and avoids unsupported subscription image hosts or models. ([#304](https://github.com/ndycode/oc-codex-multi-auth/pull/304), [#305](https://github.com/ndycode/oc-codex-multi-auth/pull/305))
+
+### Internal
+- Integrated PRs [#302](https://github.com/ndycode/oc-codex-multi-auth/pull/302), [#303](https://github.com/ndycode/oc-codex-multi-auth/pull/303), and [#304](https://github.com/ndycode/oc-codex-multi-auth/pull/304) into [#305](https://github.com/ndycode/oc-codex-multi-auth/pull/305) at release commit [`3b720e7`](https://github.com/ndycode/oc-codex-multi-auth/commit/3b720e7be13d7d0f8cd5f2b61827ae7941f699ae).
+
 ## [6.31.0] - 2026-11-04
 
 ### Added
