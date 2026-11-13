@@ -352,7 +352,6 @@ async function setupScopedV2(
 			try {
 				next = await readRouting();
 			} catch (error) {
-				routing = { kind: "unavailable" };
 				logWarn("V2 routing reload failed; will retry on the next credential event", {
 					error: String(error),
 					cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
