@@ -405,7 +405,7 @@ async function setupScopedV2(
 						const flow = await flowMethod.authorize();
 						// OpenCode's client opens the returned URL. Opening it here in
 						// the service launches a second tab (or a browser on a remote host).
-						const remoteInstructions = primary
+						const remoteInstructions = flowMethod.label === AUTH_LABELS.OAUTH_MANUAL_BROWSER
 							? `The browser must reach localhost:${OAUTH_CALLBACK_PORT} on the OpenCode service host. If the client and service are on different machines without port forwarding, cancel and choose ${AUTH_LABELS.OAUTH_DEVICE_CODE} or ${AUTH_LABELS.OAUTH_MANUAL}.\n`
 							: "";
 						const instructions = flow.url
