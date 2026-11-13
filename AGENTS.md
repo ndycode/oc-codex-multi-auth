@@ -9,7 +9,7 @@ The npm bin is an installer for OpenCode config plus a thin standalone CLI
 
 - OpenCode V1 loads `index.ts` (provider plugin) and `tui.ts` (prompt quota status) from the built `dist/` exports.
 - OpenCode V2 loads the same package through the `setup` hook on each default export instead — see OPENCODE V2 below.
-- Runtime state stays local under `~/.opencode`; per-project account pools are on by default. Project-root detection walks up for markers (`.git`, `package.json`, `.opencode`, …) and stops at the home directory — `$HOME` itself is never a project; outside a project the global pool is used.
+- Runtime state stays local under `~/.opencode`; account pools are global by default, with per-project pools opt-in. Project-root detection walks up for markers (`.git`, `package.json`, `.opencode`, …) and stops at the home directory — `$HOME` itself is never a project; outside a project the global pool is used.
 
 ## STRUCTURE
 

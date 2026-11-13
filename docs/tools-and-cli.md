@@ -130,7 +130,7 @@ Bin: `oc-codex-multi-auth` (or `npx -y oc-codex-multi-auth@latest …`).
 `resolveStandaloneStorage` picks, in order:
 
 1. `--config-path <path>` — used verbatim (`scope: explicit`);
-2. the **per-project** pool for the current directory's project root when `perProjectAccounts` is on (the default) — `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` (`scope: project`);
+2. the **per-project** pool for the current directory's project root when `perProjectAccounts` is enabled (off by default) — `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` (`scope: project`);
 3. the global `~/.opencode/oc-codex-multi-auth-accounts.json` (`scope: global`).
 
 Project-root detection walks up looking for markers (`.git`, `package.json`,
