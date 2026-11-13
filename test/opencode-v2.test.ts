@@ -142,9 +142,9 @@ describe("V2 compatibility adapter", () => {
 	it("uses a distinct provider package so V2 cannot rewrite the transport to native OpenAI", async () => {
 		const h = host();
 		const cleanup = await setupV2(h.context, mocks.runtime);
-		expect(h.provider.package).toMatch(/^aisdk:file:.*opencode-v2-provider\.(ts|js)$/);
-		expect(h.model.package).toBe(h.provider.package);
-		const sdkEvent: AISDKHooks["sdk"] = { model: h.model, package: h.provider.package, options: {} };
+		expect(h.model.package).toMatch(/^aisdk:file:.*opencode-v2-provider\.(ts|js)$/);
+		expect(h.provider.package).not.toBe(h.model.package);
+		const sdkEvent: AISDKHooks["sdk"] = { model: h.model, package: h.model.package, options: {} };
 		await h.hooks.get("sdk")?.(sdkEvent);
 		expect(sdkEvent.sdk).toBeDefined();
 		expect(loader).toHaveBeenCalled();
@@ -425,7 +425,7 @@ describe("V2 compatibility adapter", () => {
 		expect(browser.mode).toBe("auto");
 		expect(await browser.callback).toMatchObject({ type: "oauth", methodID: "codex-multi-0", refresh: "new-refresh" });
 		expect(browser.instructions).toContain("Repeat opencode auth login");
-		expect(mocks.openBrowser).toHaveBeenCalledWith("https://example.com");
+		expect(mocks.openBrowser).not.toHaveBeenCalled();
 		expect(mocks.interactive).not.toHaveBeenCalled();
 		mocks.openBrowser.mockClear();
 		const link = await h.methods[1]!.authorize({});
@@ -585,7 +585,7 @@ describe("V2 compatibility adapter", () => {
 			resolve: ReturnType<typeof vi.fn>;
 		};
 		connection.active.mockResolvedValue({ id: "host-conn" });
-		connection.resolve.mockResolvedValue({ type: "oauth", access: "host-access", refresh: "host-refresh", expires: 9 });
+		connection.resolve.mockResolvedValue({ type: "oauth", methodID: "chatgpt-browser", access: "host-access", refresh: "host-refresh", expires: 9 });
 		const cleanup = await setupV2(h.context, mocks.runtime);
 		let getAuth: (() => Promise<unknown>) | undefined;
 		loader.mockImplementationOnce(async (resolve) => {

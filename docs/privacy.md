@@ -22,6 +22,8 @@ All traffic is HTTPS, direct from your machine — there is no maintainer proxy.
 | `https://auth.openai.com/codex/device` | Device-code verification page — opened in your browser | — |
 | `https://auth.openai.com/deviceauth/callback` | Device-flow OAuth redirect URI | — |
 | `https://chatgpt.com/backend-api/codex/responses` | Model requests (`CODEX_BASE_URL` in `lib/constants.ts`) | Bearer token + `chatgpt-account-id` |
+| `https://chatgpt.com/backend-api/codex/images/generations` | V2 subscription image generation through the native OpenAI image driver | Selected host connection's OAuth bearer token + account ID when available |
+| `https://chatgpt.com/backend-api/codex/images/edits` | V2 subscription image edits through the native OpenAI image driver | Selected host connection's OAuth bearer token + account ID when available |
 | `https://chatgpt.com/backend-api/wham/usage` | Quota windows for `codex-limits`, `limits`, TUI status, and the background poller | Bearer token + `chatgpt-account-id` |
 | `https://chatgpt.com/backend-api/wham/accounts/check` | Business workspace names for `limits` output | Bearer token + `chatgpt-account-id` |
 | `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` | `codex-reset` credit listing | Bearer token + `chatgpt-account-id` |
@@ -39,7 +41,7 @@ Two deliberate overrides can change where traffic goes:
 - `OPENAI_BASE_URL` + `CODEX_AUTH_ALLOW_OPENAI_BASE_URL=1` retargets the model-request base URL away from `chatgpt.com/backend-api` (off by default).
 - `CODEX_AUTH_SYNC_CODEX_CLI=0` disables the local read of `~/.codex/accounts.json` used to hydrate the pool from Codex CLI (local filesystem only, never uploaded).
 
-### What a model request sends
+### What a Responses model request sends
 
 - Prompts and conversation history as supplied by OpenCode; `store: false` and `include: ["reasoning.encrypted_content"]` on every request.
 - `Authorization: Bearer <access-token>`, `chatgpt-account-id`, `OpenAI-Beta: responses=experimental`, `accept: text/event-stream`.
@@ -50,6 +52,26 @@ Two deliberate overrides can change where traffic goes:
 - `version: <codex client version>` only under the Codex CLI identity.
 - `openai-organization` only when `CODEX_AUTH_SEND_ORGANIZATION_HEADER=1` (off by default).
 - Any inbound `x-api-key` header is deleted, not forwarded.
+
+### What an image request sends
+
+V2 subscription image requests use the host's native OpenAI image driver, outside
+the plugin's Responses request pipeline. Generation sends the image prompt,
+`gpt-image-2` model selection, and requested image options. Edits also send the
+supplied input images and any mask in the native driver's request body.
+
+The host supplies the selected connection's OAuth bearer token and handles its
+refresh. The plugin supplies `originator: opencode` and `chatgpt-account-id` when
+available. Image requests do not rotate through the chat account pool. The
+Responses-specific payload fields and headers listed above do not apply to this
+native image route, nor does the plugin's chat request-body logging pipeline.
+
+API-key image connections retain the host's standard
+`https://api.openai.com/v1/images/generations` and `/v1/images/edits` routes,
+using the selected API key and separate API billing. If the connection
+configures another provider base URL, prompts and image inputs are sent to that
+configured endpoint instead. Token-sharing OAuth is not enabled for the
+subscription image route.
 
 ### Background quota poller
 
