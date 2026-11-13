@@ -91,6 +91,28 @@ opencode auth login   # OpenAI -> Codex OAuth (Add account — ChatGPT Plus/Pro)
 
 `--v2` writes a `plugins` entry only — no model catalog — and refuses an existing `opencode.jsonc` or V1 `plugin` entries rather than migrating them (edit the JSONC `plugins` list by hand instead). In V2, tool names normalize to `codex_list`, `codex_switch`, and so on; `/codex-accounts` and the **Codex accounts** palette command list the pool, and **Codex quota details** shows quota. V1's entrypoint remains for OpenCode 1.18.29+. See [Troubleshooting](docs/troubleshooting.md) for V2-specific issues.
 
+### Subscription image generation
+
+On OpenCode 2.2.7+ hosts with the native `@opencode/ai/providers/openai/images` driver,
+select a **Codex OAuth** connection under
+OpenAI and request `openai/gpt-image-2`. The plugin routes generation and edits
+to Codex's subscription endpoint. Images use the host's selected OpenAI account
+and its token refresh; they do not rotate through the chat account pool.
+
+Only `gpt-image-2` is enabled on this subscription route. Other image models are
+hidden rather than silently replaced. API-key connections retain the standard
+image API route and separate API billing. The newer **Sign in with ChatGPT**
+token-sharing flow is separate and currently excludes image generation.
+
+Image requests retain the native provider (including JSON image edits), not
+the plugin's language-model bridge. A subscription image request should use
+`https://chatgpt.com/backend-api/codex`, not `https://api.openai.com/v1`.
+Account and workspace permissions still apply; a rejection is not retried with
+another account or billing route.
+
+References: [Codex image generation](https://developers.openai.com/codex/image-generation),
+[token-sharing limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+
 ## Command map
 
 Two surfaces: **25 `codex-*` tools** inside an OpenCode session, and a standalone CLI for everything else. The full argument reference is in [docs/tools-and-cli.md](docs/tools-and-cli.md).
@@ -214,7 +236,7 @@ Most issues resolve by signing in again or running `codex-doctor fix=true` insid
 
 ## Release notes
 
-- Current stable: [v6.31.0](CHANGELOG.md) — `npx -y oc-codex-multi-auth@latest`
+- Current stable: [v6.32.0](CHANGELOG.md) — `npx -y oc-codex-multi-auth@latest`
 - Full release archive: [CHANGELOG.md](CHANGELOG.md)
 
 ## Terms and license
