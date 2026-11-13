@@ -348,10 +348,24 @@ async function setupScopedV2(
 		if (controller.signal.aborted) return;
 		const current = inFlightReload.catch(() => {}).then(async () => {
 			if (controller.signal.aborted) return;
-			const next = await readRouting();
-			if (controller.signal.aborted) return;
-			routing = next;
-			await context.provider.reload();
+			const previous = routing;
+			try {
+				const next = await readRouting();
+				if (controller.signal.aborted) return;
+				routing = next;
+				try {
+					await context.provider.reload();
+				} catch (error) {
+					routing = previous;
+					throw error;
+				}
+			} catch (error) {
+				routing = { kind: "unavailable" };
+				logWarn("V2 routing reload failed; will retry on the next credential event", {
+					error: String(error),
+					cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
+				});
+			}
 		});
 		inFlightReload = current;
 		await current;
