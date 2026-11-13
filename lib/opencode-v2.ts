@@ -17,18 +17,24 @@ import type { Hooks } from "@opencode-ai/plugin";
 import { loadAccounts } from "./storage.js";
 import { coordinatePersistedRefresh } from "./storage/coordinated-refresh.js";
 import { logInfo, logWarn } from "./logger.js";
+import { StorageError } from "./errors.js";
 import type { Auth } from "@opencode-ai/sdk";
 import { readV2Status } from "./opencode-v2-status.js";
 import { CodexStatusRpc } from "./opencode-v2-rpc.js";
 import { createStorageScope } from "./storage/state.js";
-import { AUTH_LABELS } from "./constants.js";
-import { OAUTH_CALLBACK_PORT } from "./oauth-constants.js";
+import { AUTH_LABELS, CODEX_BASE_URL } from "./constants.js";
+import { openBrowserUrl } from "./auth/browser.js";
 import { extractAccountId, extractAccountUserId } from "./auth/token-utils.js";
 
 const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
 // Local checkouts are loaded from TypeScript; published packages contain JS.
 if (!existsSync(providerModule)) providerModule.pathname = providerModule.pathname.replace(/\.js$/, ".ts");
 const providerPackage = `aisdk:${providerModule.href}`;
+
+/** Detect native image models on newer hosts while supporting the older SDK. */
+function isImageModel(model: object): boolean {
+	return "type" in model && model.type === "image";
+}
 
 /**
  * Set stateless options before the SDK lowers history into server-side references.
@@ -289,12 +295,55 @@ async function setupScopedV2(
 	const auth = runtime.auth;
 	if (!auth?.loader) throw new Error("Codex authentication runtime is unavailable");
 	const loader = auth.loader;
-	const hasOAuth = async () => {
-		if ((await loadAccounts())?.accounts.some((account) => account.enabled !== false && account.refreshToken)) return true;
+	const hasHostOAuth = async () => {
 		const connection = await context.integration.connection.active("openai");
 		return connection ? (await context.integration.connection.resolve(connection))?.type === "oauth" : false;
 	};
 	let enabled = false;
+	// Native image requests resolve credentials through the host, not the chat
+	// pool's fetch hook. Only route the host's selected Codex OAuth connection.
+	// Token-sharing OAuth explicitly does not support image generation.
+	let imageAccount: { accountId?: string } | undefined;
+	let imageLookupFailed = false;
+	/** Refresh image routing only for a stable selection; fail closed on lookup errors. */
+	const loadImageAccount = async () => {
+		imageAccount = undefined;
+		imageLookupFailed = true;
+		try {
+			const connection = await context.integration.connection.active("openai");
+			const credential = connection ? await context.integration.connection.resolve(connection) : undefined;
+			// Credential events are consumed serially. A newer selection can land
+			// while resolve awaits refresh; never publish that stale account.
+			const current = await context.integration.connection.active("openai");
+			const identity = (value: typeof connection) => value
+				? ("id" in value ? `credential:${value.id}` : `env:${value.name}`)
+				: undefined;
+			if (identity(current) !== identity(connection)) return;
+			imageAccount = credential?.type === "oauth" && (
+				credential.methodID?.startsWith("codex-multi-") ||
+				credential.methodID === "chatgpt-browser" || credential.methodID === "chatgpt-headless"
+			) ? { accountId: extractAccountId(credential.access) } : undefined;
+			imageLookupFailed = false;
+		} catch {
+			logWarn("V2 image credential lookup failed; image models disabled until credentials reload");
+		}
+	};
+	/** Keep credential probe failures local so later switch events can recover. */
+	const loadRouting = async () => {
+		// Preserve storage errors and their recovery hints; only host credential
+		// probes are recoverable here.
+		const pooled = (await loadAccounts())?.accounts.some((account) => account.enabled !== false && account.refreshToken);
+		try {
+			enabled = pooled || await hasHostOAuth();
+		} catch {
+			enabled = false;
+			imageAccount = undefined;
+			imageLookupFailed = true;
+			logWarn("V2 credential probe failed; routing disabled until credentials reload");
+			return;
+		}
+		await loadImageAccount();
+	};
 	const controller = new AbortController();
 	// Aborting the subscription stops NEW credential events, but an event can
 	// already be inside `reload()` when cleanup runs — teardown must not let
@@ -305,7 +354,20 @@ async function setupScopedV2(
 	const reload = async () => {
 		if (controller.signal.aborted) return;
 		const current = (async () => {
-			enabled = await hasOAuth();
+			try {
+				await loadRouting();
+			} catch (error) {
+				// Startup still rejects storage errors. During an event, invalidate
+				// stale models and retain the listener so repaired storage can recover.
+				enabled = false;
+				imageAccount = undefined;
+				imageLookupFailed = true;
+				logWarn("V2 routing reload failed; routing disabled until credentials reload", {
+					error: String(error),
+					cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
+					...(error instanceof StorageError ? { path: error.path, hint: error.hint, code: error.code } : {}),
+				});
+			}
 			if (!controller.signal.aborted) await context.provider.reload();
 		})();
 		inFlightReload = current;
@@ -328,7 +390,7 @@ async function setupScopedV2(
 		await runtime.event?.({ event: { type: "server.instance.disposed", properties: { directory: context.location.directory } } });
 	});
 	try {
-		enabled = await hasOAuth();
+		await loadRouting();
 		logInfo("V2 Codex adapter initialized", { enabled, directory: context.location.directory });
 		track(await context.rpc.register(CodexStatusRpc, { status: (input) => run(() => readV2Status(input)) }));
 		// V2 runs authorization in the service, where the V1 readline menu cannot run.
@@ -347,13 +409,9 @@ async function setupScopedV2(
 					method: { id: methodID, type: "oauth", label: primary ? "Codex OAuth (Add account — ChatGPT Plus/Pro)" : method.label },
 					authorize: () => run(async () => {
 						const flow = await flowMethod.authorize();
-						// OpenCode's client opens the returned URL. Opening it here in
-						// the service launches a second tab (or a browser on a remote host).
-						const remoteInstructions = primary
-							? `The browser must reach localhost:${OAUTH_CALLBACK_PORT} on the OpenCode service host. If the client and service are on different machines without port forwarding, cancel and choose ${AUTH_LABELS.OAUTH_DEVICE_CODE} or ${AUTH_LABELS.OAUTH_MANUAL}.\n`
-							: "";
+						if (primary && flow.url) openBrowserUrl(flow.url);
 						const instructions = flow.url
-							? `${flow.instructions}\n${remoteInstructions}Adds to this project's Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
+							? `${flow.instructions}\nAdds to this project's Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
 							: flow.instructions;
 						const credential = (code?: string): Promise<Credential.OAuth> => run(async () => {
 							const result = flow.method === "code" ? await flow.callback(code ?? "") : await flow.callback();
@@ -430,11 +488,14 @@ async function setupScopedV2(
 				provider.settings = { ...provider.settings, transport: "http" };
 			});
 			for (const model of providerModels?.values() ?? []) {
+				// Image generation uses the native model() contract, not aisdk's
+				// language hooks. Keep its original package and authentication path.
+				if (isImageModel(model)) continue;
 				editor.models.update("openai", model.id, (draft) => { draft.package = providerPackage; });
 			}
 		}));
 		track(await context.aisdk.hook("sdk", (event) => run(async () => {
-			if (!enabled) return;
+			if (!enabled || isImageModel(event.model)) return;
 			const options = await loader(resolveAuth, {
 				id: "openai",
 				name: "OpenAI",
@@ -479,8 +540,26 @@ async function setupScopedV2(
 			event.sdk = sdk;
 		}), { providerID: "openai" }));
 		track(await context.model.transform((editor) => {
-			if (!enabled) return;
 			for (const model of editor.list("openai")) {
+				if (isImageModel(model)) {
+					if (imageLookupFailed) {
+						editor.update("openai", String(model.id), (draft) => { draft.enabled = false; });
+						continue;
+					}
+					if (imageAccount) editor.update("openai", String(model.id), (draft) => {
+						// Match Codex's documented subscription model, not the public
+						// API's larger image catalog. Never silently substitute models.
+						if (String(draft.modelID ?? draft.id) !== "gpt-image-2") {
+							draft.enabled = false;
+							return;
+						}
+						draft.settings = { ...draft.settings, baseURL: `${CODEX_BASE_URL}/codex`, transport: "http", encoding: "zstd" };
+						draft.headers = { ...draft.headers, originator: "opencode", ...(imageAccount?.accountId ? { "chatgpt-account-id": imageAccount.accountId } : {}) };
+						draft.cost = [];
+					});
+					continue;
+				}
+				if (!enabled) continue;
 				editor.update("openai", String(model.id), (draft) => {
 					draft.package = providerPackage;
 					draft.settings = { ...draft.settings, transport: "http" };
@@ -488,7 +567,7 @@ async function setupScopedV2(
 			}
 		}));
 		track(await context.aisdk.hook("language", (event) => {
-			if (!enabled) return;
+			if (!enabled || isImageModel(event.model)) return;
 			const sdk = event.sdk as ReturnType<typeof createOpenAI>;
 			event.language = createV2Language(sdk.responses(event.model.modelID), sdkHeaders.get(sdk));
 		}, { providerID: "openai" }));
