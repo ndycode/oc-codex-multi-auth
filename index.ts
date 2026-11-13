@@ -4502,6 +4502,13 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								),
 							);
 							const poolAccountCount = poolAccounts.length;
+							const poolIndices = new Set(poolAccounts.map((account) => account.index));
+							const enabledPoolSelection = accountManager
+								.getSelectionExplainability(modelFamily, model)
+								.filter((entry) => entry.enabled && poolIndices.has(entry.index));
+							const poolUpstreamBlocked = enabledPoolSelection.length > 0 && enabledPoolSelection.every(
+								(entry) => entry.rateLimitedUntil !== undefined || entry.quotaExhaustedUntil !== undefined,
+							);
 							const unresolvedKeyCount = countUnresolvedPoolKeys(
 								accountSnapshot,
 								preferredAccountIds,
@@ -4527,7 +4534,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								unavailableCount > 0
 									? ` ${unavailableCount} pooled account(s) were never attempted (rate-limited, cooling down, or disabled).`
 									: "";
-							const creditsDetail = describeCreditsWhenOutOfQuota();
+							const creditsDetail = poolUpstreamBlocked ? describeCreditsWhenOutOfQuota() : "";
 							const message =
 								`Strict account pool unavailable for ${effectiveModel}. ` +
 								`${preferredAccountIds.length} configured pool key(s) resolved to ${poolAccountCount} account(s).` +
@@ -4554,7 +4561,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 									},
 								}),
 								{
-									status: poolWaitMs > 0 ? 429 : 503,
+									status: poolWaitMs > 0 && poolUpstreamBlocked ? 429 : 503,
 									headers: {
 										"content-type": "application/json; charset=utf-8",
 									},

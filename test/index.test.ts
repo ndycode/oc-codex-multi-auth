@@ -6798,6 +6798,43 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 		});
 	};
 
+	it.each([
+		["local throttle", { tokensAvailable: 0 }, 503],
+		["auth cooldown", { coolingDownUntil: 1000, cooldownReason: "auth-failure" as const }, 503],
+		["server cooldown", { coolingDownUntil: 1000, cooldownReason: "server-error" as const }, 503],
+		["upstream rate limit", { rateLimitedUntil: 1000 }, 429],
+		["upstream quota", { quotaExhaustedUntil: 1000 }, 429],
+		["mixed upstream and local", { rateLimitedUntil: 1000 }, 503],
+		["all disabled", {}, 503],
+	])("classifies strict-pool %s using only enabled pooled accounts", async (reason, block, status) => {
+		globalThis.fetch = vi.fn();
+		const mixed = reason === "mixed upstream and local";
+		const enabled = reason !== "all disabled";
+		const configModule = await import("../lib/config.js");
+		const { AccountManager } = await import("../lib/accounts.js");
+		setMockManagedAccounts([
+			{ accountId: "acc-1", refreshToken: "refresh-1", selectable: false, enabled },
+			{ accountId: "acc-2", refreshToken: "refresh-2", selectable: false, enabled: mixed },
+			{ accountId: "acc-3", refreshToken: "refresh-3" },
+		]);
+		vi.mocked(configModule.getModelAccountPool).mockReturnValue(["acc-1", "acc-2"]);
+		vi.mocked(configModule.getModelAccountPoolMode).mockReturnValue("strict");
+		vi.spyOn(AccountManager.prototype, "getMinWaitTimeForFamily").mockReturnValue(1000);
+		vi.spyOn(AccountManager.prototype, "getSelectionExplainability").mockReturnValue([
+			{ index: 0, enabled, isCurrentForFamily: true, eligible: false,
+				reasons: [], healthScore: 100, tokensAvailable: 50, lastUsed: 0, ...block },
+			{ index: 1, enabled: mixed, isCurrentForFamily: false, eligible: false,
+				reasons: mixed ? ["token-bucket-empty"] : ["disabled"], healthScore: 100, tokensAvailable: mixed ? 0 : 50, lastUsed: 0 },
+			{ index: 2, enabled: true, isCurrentForFamily: false, eligible: true,
+				reasons: [], healthScore: 100, tokensAvailable: 50, lastUsed: 0 },
+		]);
+		const { sdk } = await setupPlugin();
+		const response = await requestGpt54Pro(sdk);
+		expect(response.status).toBe(status);
+		expect(await response.json()).toMatchObject({ error: { code: "strict_pool_unavailable" } });
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
 	it("reports actual strict-pool attempts without trying general accounts", async () => {
 		const configModule = await import("../lib/config.js");
 		await setupUnsupportedModelOnEveryAccount();
