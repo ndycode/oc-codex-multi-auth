@@ -22,7 +22,6 @@ import { readV2Status } from "./opencode-v2-status.js";
 import { CodexStatusRpc } from "./opencode-v2-rpc.js";
 import { createStorageScope } from "./storage/state.js";
 import { AUTH_LABELS, CODEX_BASE_URL } from "./constants.js";
-import { openBrowserUrl } from "./auth/browser.js";
 import { extractAccountId, extractAccountUserId } from "./auth/token-utils.js";
 
 const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
@@ -349,22 +348,24 @@ async function setupScopedV2(
 		const current = inFlightReload.catch(() => {}).then(async () => {
 			if (controller.signal.aborted) return;
 			const previous = routing;
+			let next: Routing;
 			try {
-				const next = await readRouting();
-				if (controller.signal.aborted) return;
-				routing = next;
-				try {
-					await context.provider.reload();
-				} catch (error) {
-					routing = previous;
-					throw error;
-				}
+				next = await readRouting();
 			} catch (error) {
 				routing = { kind: "unavailable" };
 				logWarn("V2 routing reload failed; will retry on the next credential event", {
 					error: String(error),
 					cause: error instanceof Error && error.cause ? String(error.cause) : undefined,
 				});
+				return;
+			}
+			if (controller.signal.aborted) return;
+			routing = next;
+			try {
+				await context.provider.reload();
+			} catch (error) {
+				routing = previous;
+				logWarn("V2 provider reload failed; keeping the last working route", { error: String(error) });
 			}
 		});
 		inFlightReload = current;
@@ -402,7 +403,6 @@ async function setupScopedV2(
 					method: { id: methodID, type: "oauth", label: primary ? "Codex OAuth (Add account — ChatGPT Plus/Pro)" : method.label },
 					authorize: () => run(async () => {
 						const flow = await flowMethod.authorize();
-						if (primary && flow.url) openBrowserUrl(flow.url);
 						const instructions = flow.url
 							? `${flow.instructions}\nAdds to this project's Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
 							: flow.instructions;

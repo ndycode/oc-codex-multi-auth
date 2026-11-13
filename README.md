@@ -93,8 +93,8 @@ opencode auth login   # OpenAI -> Codex OAuth (Add account — ChatGPT Plus/Pro)
 
 ### Subscription image generation
 
-On V2 hosts with the native `@opencode/ai/providers/openai/images` driver
-(verified routing on OpenCode 2.2.5), select a **Codex OAuth** connection under
+On OpenCode 2.2.7+ hosts with the native `@opencode/ai/providers/openai/images` driver,
+select a **Codex OAuth** connection under
 OpenAI and request `openai/gpt-image-2`. The plugin routes generation and edits
 to Codex's subscription endpoint. Images use the host's selected OpenAI account
 and its token refresh; they do not rotate through the chat account pool.
