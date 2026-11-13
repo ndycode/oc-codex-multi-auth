@@ -22,6 +22,7 @@ import { readV2Status } from "./opencode-v2-status.js";
 import { CodexStatusRpc } from "./opencode-v2-rpc.js";
 import { createStorageScope } from "./storage/state.js";
 import { AUTH_LABELS, CODEX_BASE_URL } from "./constants.js";
+import { OAUTH_CALLBACK_PORT } from "./oauth-constants.js";
 import { extractAccountId, extractAccountUserId } from "./auth/token-utils.js";
 
 const providerModule = new URL("./opencode-v2-provider.js", import.meta.url);
@@ -402,8 +403,13 @@ async function setupScopedV2(
 					method: { id: methodID, type: "oauth", label: primary ? "Codex OAuth (Add account — ChatGPT Plus/Pro)" : method.label },
 					authorize: () => run(async () => {
 						const flow = await flowMethod.authorize();
+						// OpenCode's client opens the returned URL. Opening it here in
+						// the service launches a second tab (or a browser on a remote host).
+						const remoteInstructions = primary
+							? `The browser must reach localhost:${OAUTH_CALLBACK_PORT} on the OpenCode service host. If the client and service are on different machines without port forwarding, cancel and choose ${AUTH_LABELS.OAUTH_DEVICE_CODE} or ${AUTH_LABELS.OAUTH_MANUAL}.\n`
+							: "";
 						const instructions = flow.url
-							? `${flow.instructions}\nAdds to this project's Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
+							? `${flow.instructions}\n${remoteInstructions}Adds to this project's Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
 							: flow.instructions;
 						const credential = (code?: string): Promise<Credential.OAuth> => run(async () => {
 							const result = flow.method === "code" ? await flow.callback(code ?? "") : await flow.callback();
