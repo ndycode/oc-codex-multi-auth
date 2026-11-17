@@ -6129,6 +6129,20 @@ describe("OpenAIOAuthPlugin fetch handler", () => {
 			expect(new Headers(init?.headers).get("x-test-account")).toBe("acc-2");
 		});
 
+		it.each(["gpt-6.2-astra", "gpt-6.2-sol"])("falls back from quota-blocked %s to an eligible GPT-5.6 tier", async (model) => {
+			const blocked = [model, "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"];
+			await makeManager([{
+				...accountRecord(),
+				rateLimitResetTimes: Object.fromEntries(blocked.map((id) => [`${id}:${id}`, Date.now() + 600_000])),
+			}]);
+			const config = await import("../lib/config.js");
+			vi.spyOn(config, "getRetryAllAccountsMaxWaitMs").mockReturnValue(30_000);
+			const { sdk } = await setupPlugin();
+			expect((await send(sdk, model)).status).toBe(200);
+			expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[1]?.body)).model).toBe("gpt-5.6-sol");
+		});
+
 		it.each([undefined, "CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK"])("preserves genuine model fallback and opt-out %s", async (optOut) => {
 			await makeManager([{ ...accountRecord(), rateLimitResetTimes: { [`${entryModel}:${entryModel}`]: Date.now() + 600_000 } }]);
 			// The opt-out case lands in the all-accounts-blocked wait; cap it so

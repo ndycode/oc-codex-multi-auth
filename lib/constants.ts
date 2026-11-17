@@ -129,4 +129,4 @@ export const ACCOUNT_LIMITS = {
  * Kept here rather than in fetch-helpers because test/index.test.ts replaces
  * that module with a factory mock, which would read a new export as undefined.
  */
-export const MAX_QUOTA_FALLBACK_SWITCHES = 7;
+export const MAX_QUOTA_FALLBACK_SWITCHES = 8;

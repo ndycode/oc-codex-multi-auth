@@ -56,6 +56,7 @@ describe.each([
 		const legacy = JSON.parse(readFileSync("config/opencode-legacy.json", "utf8")).provider.openai.models;
 		expect(modern.limit).toEqual({ context, output: 128000 });
 		expect(modern.options.reasoningEffort).toBe("low");
+		expect(modern.options.textVerbosity).toBe("low");
 		expect(Object.keys(modern.variants)).toEqual(efforts);
 		for (const effort of efforts) {
 			expect(legacy[`${model}-${effort}`].options.reasoningEffort).toBe(effort);

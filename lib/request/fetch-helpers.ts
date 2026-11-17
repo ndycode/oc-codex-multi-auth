@@ -165,8 +165,9 @@ export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> 
 	],
 	// Keep existing selectors stable; new 6.2 selectors degrade to their
 	// established predecessor if an account has not received the rollout.
-	[GPT_62_ASTRA_MODEL_ID]: [GPT_6_ASTRA_MODEL_ID, GPT_61_SOL_MODEL_ID, GPT_6_SOL_MODEL_ID, GPT_6_LUNA_MODEL_ID],
-	[GPT_62_SOL_MODEL_ID]: [GPT_61_SOL_MODEL_ID, GPT_6_SOL_MODEL_ID, GPT_6_LUNA_MODEL_ID],
+	// Quota fallback skips blocked candidates without following their rows.
+	[GPT_62_ASTRA_MODEL_ID]: [GPT_6_ASTRA_MODEL_ID, GPT_61_SOL_MODEL_ID, GPT_6_SOL_MODEL_ID, GPT_56_SOL_MODEL_ID, GPT_56_TERRA_MODEL_ID, GPT_55_MODEL_ID, GPT_6_LUNA_MODEL_ID, GPT_56_LUNA_MODEL_ID],
+	[GPT_62_SOL_MODEL_ID]: [GPT_61_SOL_MODEL_ID, GPT_6_SOL_MODEL_ID, GPT_56_SOL_MODEL_ID, GPT_56_TERRA_MODEL_ID, GPT_55_MODEL_ID, GPT_6_LUNA_MODEL_ID, GPT_56_LUNA_MODEL_ID],
 	// GPT-6.1 Sol sits directly under Astra: OpenAI markets it as "near-Astra
 	// performance", and it became the default catalog model on 2026-09-29
 	// (openai/codex b1e72963). Its row is the general order's tail after it.
