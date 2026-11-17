@@ -18,6 +18,8 @@ import {
 	GPT_6_SOL_MODEL_ID,
 	GPT_61_SOL_MODEL_ID,
 	GPT_61_TERRA_MODEL_ID,
+	GPT_62_ASTRA_MODEL_ID,
+	GPT_62_SOL_MODEL_ID,
 	getNormalizedModel,
 } from "./helpers/model-map.js";
 import {
@@ -99,6 +101,13 @@ export function normalizeModel(model: string | undefined): string {
 	// swallow `gpt-5.6-cyber` and silently route a security request to Sol.
 	if (/\bgpt(?:-| )5\.6(?:-| )cyber(?:\b|[- ])/.test(normalized)) {
 		return GPT_56_CYBER_MODEL_ID;
+	}
+	// Match released minor-version tiers before the broad GPT-6 fallback.
+	if (/\bgpt(?:-| )6\.2(?:-| )astra(?:\b|[- ])/.test(normalized)) {
+		return GPT_62_ASTRA_MODEL_ID;
+	}
+	if (/\bgpt(?:-| )6\.2(?:-| )sol(?:\b|[- ])/.test(normalized)) {
+		return GPT_62_SOL_MODEL_ID;
 	}
 	// GPT-6.1 must precede the catch-all `gpt-6` branch below: the `.` after
 	// `6` is a word boundary, so `gpt-6.1*` spellings would otherwise
@@ -625,13 +634,14 @@ export function getReasoningConfig(
 	const isGpt6Luna = canonicalModelName === GPT_6_LUNA_MODEL_ID;
 	const isGpt61Sol = canonicalModelName === GPT_61_SOL_MODEL_ID;
 	const isGpt61Terra = canonicalModelName === GPT_61_TERRA_MODEL_ID;
+	const isGpt62 = canonicalModelName === GPT_62_ASTRA_MODEL_ID || canonicalModelName === GPT_62_SOL_MODEL_ID;
 
 	/** Families whose whole effort range is low..max(+ultra) with no none/minimal. */
 	const isFullEffortFamily =
-		isGpt56 || isGpt6Astra || isGpt6Sol || isGpt6Luna || isGpt61Sol || isGpt61Terra || isDaybreak;
+		isGpt56 || isGpt6Astra || isGpt6Sol || isGpt6Luna || isGpt61Sol || isGpt61Terra || isGpt62 || isDaybreak;
 	const supportsMax = isFullEffortFamily;
 	const supportsUltra =
-		isGpt56Sol || isGpt56Terra || isGpt6Astra || isGpt6Sol || isGpt61Sol || isGpt61Terra || isDaybreak;
+		isGpt56Sol || isGpt56Terra || isGpt6Astra || isGpt6Sol || isGpt61Sol || isGpt61Terra || isGpt62 || isDaybreak;
 
 	// GPT-5.4 Mini is a first-class explicit model.
 	const isGpt54Mini = canonicalModelName === "gpt-5.4-mini";
@@ -729,7 +739,9 @@ export function getReasoningConfig(
 	// - Legacy GPT-5.3/5.2 Codex aliases default to xhigh for backward compatibility.
 	// - Legacy gpt-5-mini / gpt-5-nano aliases now resolve to GPT-5.4 Mini / Nano,
 	//   so they inherit the same default "high" effort and direct xhigh support.
-	const defaultEffort: ReasoningConfig["effort"] = isCodexMini
+	const defaultEffort: ReasoningConfig["effort"] = isGpt62
+		? "low"
+		: isCodexMini
 		? "medium"
 		: isGpt5Codex
 			? "high"

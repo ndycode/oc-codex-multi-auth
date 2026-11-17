@@ -29,6 +29,8 @@ import {
 	GPT_6_SOL_MODEL_ID,
 	GPT_61_SOL_MODEL_ID,
 	GPT_61_TERRA_MODEL_ID,
+	GPT_62_ASTRA_MODEL_ID,
+	GPT_62_SOL_MODEL_ID,
 } from "./model-map.js";
 
 /** Request value Codex sends for its "Fast" tier. */
@@ -46,6 +48,9 @@ export interface CodexCatalogEntry {
 const FAST: readonly string[] = [SERVICE_TIER_PRIORITY];
 
 export const CODEX_MODEL_CATALOG: Readonly<Record<string, CodexCatalogEntry>> = {
+	// Live Codex catalog (2026-11-17); not yet in the public bundled catalog.
+	[GPT_62_ASTRA_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
+	[GPT_62_SOL_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
 	[GPT_6_ASTRA_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
 	[GPT_61_SOL_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
 	[GPT_61_TERRA_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },

@@ -16,12 +16,12 @@ import os from "node:os";
 
 /**
  * Version advertised in the User-Agent product token. Tracks the highest
- * `minimal_client_version` in the upstream model catalog — `0.155.0` for
- * gpt-6-sol and gpt-6-luna (gpt-6.1-sol and gpt-6-astra gate at 0.153.0);
+ * `minimal_client_version` in the live model catalog — `0.166.0` for
+ * gpt-6.2-sol and gpt-6.2-astra;
  * override with CODEX_AUTH_CLIENT_VERSION if the backend gate moves before a
  * plugin release does.
  */
-export const DEFAULT_CODEX_CLIENT_VERSION = "0.155.0";
+export const DEFAULT_CODEX_CLIENT_VERSION = "0.166.0";
 
 const PLATFORM_LABELS: Record<string, string> = {
 	win32: "Windows",

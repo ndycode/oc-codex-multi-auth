@@ -7,6 +7,14 @@ The current stable release line is `6.x`. This file is the complete release hist
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- GPT-6.2 Astra and Sol support, verified against the live Codex catalog: separate model families and prompt caches, responses-lite, Low through Ultra presets, Fast service tier, and predecessor fallback chains. Templates now contain 14 bases / 77 variants.
+
+### Fixed
+- GPT-6.2 selectors retain their exact backend IDs instead of silently normalizing to GPT-6 Astra. The advertised Codex client version is now 0.166.0 to satisfy their minimum client gate.
+
 ## [6.32.0] - 2026-11-13
 
 ### Added

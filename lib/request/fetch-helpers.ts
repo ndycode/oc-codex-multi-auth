@@ -39,6 +39,8 @@ import {
 	GPT_6_LUNA_MODEL_ID,
 	GPT_6_SOL_MODEL_ID,
 	GPT_61_SOL_MODEL_ID,
+	GPT_62_ASTRA_MODEL_ID,
+	GPT_62_SOL_MODEL_ID,
 } from "./helpers/model-map.js";
 import { stripEffortSuffix } from "./helpers/effort-suffix.js";
 import {
@@ -147,8 +149,8 @@ export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> 
 	// an entitlement 400 on one GPT-6 tier most likely means the account is not
 	// in the GPT-6 rollout yet, and the sibling would fail the same way.
 	//
-	// Astra is never a target: it is the frontier tier, so nothing degrades
-	// into it. The Daybreak tiers are absent entirely. They are cyber-specialty
+	// Original Astra is only a target for its 6.2 successor. The Daybreak
+	// tiers are absent entirely. They are cyber-specialty
 	// models (`model_specialty: "cyber"`); silently degrading a Daybreak request
 	// onto a general model would answer a security-research prompt with a model
 	// that was never asked for. They fail loudly instead.
@@ -161,6 +163,10 @@ export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> 
 		GPT_6_LUNA_MODEL_ID,
 		GPT_56_LUNA_MODEL_ID,
 	],
+	// Keep existing selectors stable; new 6.2 selectors degrade to their
+	// established predecessor if an account has not received the rollout.
+	[GPT_62_ASTRA_MODEL_ID]: [GPT_6_ASTRA_MODEL_ID, GPT_61_SOL_MODEL_ID, GPT_6_SOL_MODEL_ID, GPT_6_LUNA_MODEL_ID],
+	[GPT_62_SOL_MODEL_ID]: [GPT_61_SOL_MODEL_ID, GPT_6_SOL_MODEL_ID, GPT_6_LUNA_MODEL_ID],
 	// GPT-6.1 Sol sits directly under Astra: OpenAI markets it as "near-Astra
 	// performance", and it became the default catalog model on 2026-09-29
 	// (openai/codex b1e72963). Its row is the general order's tail after it.
@@ -273,6 +279,8 @@ const DEFAULT_AUTO_FALLBACK_ENTRY_OPT_OUT_ENV: Record<string, string> = {
 	[GPT_6_SOL_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
 	[GPT_6_LUNA_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
 	[GPT_61_SOL_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
+	[GPT_62_ASTRA_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
+	[GPT_62_SOL_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
 };
 
 /**

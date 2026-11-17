@@ -52,9 +52,9 @@ tui.ts renders prompt quota status; codex-* tools expose the same state
 | --- | --- |
 | (default) / `--plugin-only` | Register plugin entries; preserve `provider.openai` |
 | `--v2` | V2 `plugins` entry only (refuses `opencode.jsonc` or V1 `plugin` entries) |
-| `--modern` | Compact modern template: 12 base model families + variant picker (65 variants) |
-| `--full` | Modern bases **plus** 65 explicit selector IDs |
-| `--legacy` | Explicit-only template (65 entries) |
+| `--modern` | Compact modern template: 14 base model families + variant picker (77 variants) |
+| `--full` | Modern bases **plus** 77 explicit selector IDs |
+| `--legacy` | Explicit-only template (77 entries) |
 
 Standalone commands (no agent loop): `doctor`, `status`, `list`, `limits`, `dashboard`, `health`, `diag`, `warm`. See [tools-and-cli.md](tools-and-cli.md).
 

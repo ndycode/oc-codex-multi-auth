@@ -63,6 +63,10 @@ export const GPT_61_SOL_MODEL_ID = "gpt-6.1-sol" as const;
 /** GPT-6.1 Terra is a distinct responses-lite model with low..ultra efforts. */
 export const GPT_61_TERRA_MODEL_ID = "gpt-6.1-terra" as const;
 
+/** GPT-6.2 release ids, verified against the live Codex catalog 2026-11-17. */
+export const GPT_62_ASTRA_MODEL_ID = "gpt-6.2-astra" as const;
+export const GPT_62_SOL_MODEL_ID = "gpt-6.2-sol" as const;
+
 /**
  * Daybreak cyber tiers, verified in the Codex model catalog
  * (openai/codex `codex-rs/models-manager/models.json`, rust-v0.153.0+):
@@ -206,6 +210,8 @@ export const MODEL_MAP: Record<string, string> = {
 	// Bare `gpt-6.1` mirrors `gpt-5.6` -> Sol.
 	"gpt-6.1": GPT_61_SOL_MODEL_ID,
 	...expandEffortAliases(GPT_61_TERRA_MODEL_ID, LOW_TO_ULTRA_EFFORT_SUFFIXES),
+	...expandEffortAliases(GPT_62_ASTRA_MODEL_ID, LOW_TO_ULTRA_EFFORT_SUFFIXES),
+	...expandEffortAliases(GPT_62_SOL_MODEL_ID, LOW_TO_ULTRA_EFFORT_SUFFIXES),
 
 	// ============================================================================
 	// Cyber tiers (Daybreak-gated)

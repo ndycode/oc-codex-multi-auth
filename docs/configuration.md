@@ -163,8 +163,8 @@ The plugin normalizes the selected id before the upstream call. Highlights:
 
 ### Catalog notes
 
-- The shipped templates carry 12 base model families and 65 variants
-  (`--modern`) or 65 explicit selector entries (`--legacy` / added by `--full`).
+- The shipped templates carry 14 base model families and 77 variants
+  (`--modern`) or 77 explicit selector entries (`--legacy` / added by `--full`).
   The default install writes no catalog at all — it registers the plugin and
   preserves `provider.openai`.
 - `gpt-5.4-mini`, `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, and

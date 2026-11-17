@@ -302,10 +302,14 @@ describe("GPT-6 Astra and Daybreak Model Support", () => {
 			}
 		});
 
-		it("does not make Astra a fallback target of any other model", () => {
-			for (const targets of Object.values(
+		it("only lets the newer Astra fall back to original Astra", () => {
+			for (const [model, targets] of Object.entries(
 				DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN,
 			)) {
+				if (model === "gpt-6.2-astra") {
+					expect(targets[0]).toBe(ASTRA);
+					continue;
+				}
 				expect(targets).not.toContain(ASTRA);
 			}
 		});

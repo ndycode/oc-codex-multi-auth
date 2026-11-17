@@ -17,7 +17,7 @@ Using the official Codex CLI rather than OpenCode? The sibling project [`codex-m
 
 - **Account pool** — OAuth login for multiple ChatGPT accounts, stored locally under `~/.opencode`, with per-project pools under `projects/<project-key>/` on by default.
 - **Rotation** — health-scored hybrid selection picks the best enabled account per request, with cooldowns, automatic token refresh, and failover on rate limits.
-- **Model catalog** — 12 base models covering 65 variants: GPT-6.1 Sol/Terra, GPT-6 Astra/Sol/Luna, the GPT-5.6 tiers, GPT-5.5, and more, routed through the stateless Codex contract (`store: false` + `reasoning.encrypted_content`).
+- **Model catalog** — 14 base models covering 77 variants: GPT-6.2 Astra/Sol, GPT-6.1 Sol/Terra, GPT-6 Astra/Sol/Luna, the GPT-5.6 tiers, GPT-5.5, and more, routed through the stateless Codex contract (`store: false` + `reasoning.encrypted_content`).
 - **Quota in the prompt** — the TUI prompt line shows remaining quota for the serving account, the whole pool, or banked reset credits, with rotating screens.
 - **`codex-*` tools** — 24 in-session tools for switching, labeling, tagging, limits, diagnostics, and repair.
 - **Standalone CLI** — the same package runs `status`, `list`, `limits`, `doctor`, and friends directly — no agent, no token cost.
@@ -40,9 +40,9 @@ With no flag, the installer only registers the plugin: it adds the plugin entry 
 | Flag | Effect |
 | --- | --- |
 | (none) / `--plugin-only` | Register the plugin entries only |
-| `--modern` | Also install the compact catalog: 12 base models with 65 variants |
-| `--full` | Also install the compact bases plus 65 explicit selector IDs (`openai/gpt-5.5-medium`) |
-| `--legacy` | Install the explicit-only catalog (65 entries) for older OpenCode |
+| `--modern` | Also install the compact catalog: 14 base models with 77 variants |
+| `--full` | Also install the compact bases plus 77 explicit selector IDs (`openai/gpt-5.5-medium`) |
+| `--legacy` | Install the explicit-only catalog (77 entries) for older OpenCode |
 | `--v2` | Register for OpenCode V2 instead (plugin only; see below) |
 | `--dry-run` | Show what would change without writing |
 | `--no-cache-clear` | Skip clearing the OpenCode plugin cache |
@@ -150,11 +150,19 @@ Accounts whose plan quota is used up are left alone until it resets, even when t
 
 ## Models
 
-`--modern` and `--full` install **12 base models** covering **65 variants** (selectable via `--variant`); `--legacy` installs the 65 as explicit IDs.
+`--modern` and `--full` install **14 base models** covering **77 variants** (selectable via `--variant`); `--legacy` installs the 77 as explicit IDs.
+
+GPT-6.2 Astra (`gpt-6.2-astra`) and Sol (`gpt-6.2-sol`) support Low through Ultra,
+defaulting to Low. Codex defaults to 272K context for Astra and 500K for Sol;
+both accept text/images and output text. Ultra resolves to `xhigh` on the wire;
+Codex's automatic multi-agent orchestration is not implemented by this proxy.
+See [verified release details](docs/development/GPT62_SUPPORT.md).
 
 | Base | Notes |
 | --- | --- |
-| `gpt-6.1-sol` | newest workhorse; the OpenAI Codex catalog's default since 2026-09-29 |
+| `gpt-6.2-astra` | latest frontier model; 272K default Codex context |
+| `gpt-6.2-sol` | latest workhorse; 500K default Codex context |
+| `gpt-6.1-sol` | previous workhorse |
 | `gpt-6.1-terra` | distinct model with low, medium, high, xhigh, max, and ultra efforts; default low |
 | `gpt-6-astra` | frontier; rolled out 2026-09-03 |
 | `gpt-6-sol` | workhorse coding model |
