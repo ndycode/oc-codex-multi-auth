@@ -63,6 +63,11 @@ export const GPT_61_SOL_MODEL_ID = "gpt-6.1-sol" as const;
 /** GPT-6.1 Terra is a distinct responses-lite model with low..ultra efforts. */
 export const GPT_61_TERRA_MODEL_ID = "gpt-6.1-terra" as const;
 
+/** GPT-6.2 Astra and Sol, released 2026-11-17 for ChatGPT and Codex. */
+export const GPT_62_ASTRA_MODEL_ID = "gpt-6.2-astra" as const;
+export const GPT_62_SOL_MODEL_ID = "gpt-6.2-sol" as const;
+
+
 /**
  * Daybreak cyber tiers, verified in the Codex model catalog
  * (openai/codex `codex-rs/models-manager/models.json`, rust-v0.153.0+):
@@ -103,6 +108,8 @@ const LOW_TO_ULTRA_EFFORT_SUFFIXES = [
 	"-max",
 	"-ultra",
 ] as const;
+/** GPT-6.2 accepts low through max; ultra is a Codex client tier resolved to xhigh. */
+const GPT_62_EFFORT_SUFFIXES = LOW_TO_ULTRA_EFFORT_SUFFIXES;
 const GPT_56_SOL_TERRA_EFFORT_SUFFIXES = LOW_TO_ULTRA_EFFORT_SUFFIXES;
 const GPT_56_LUNA_EFFORT_SUFFIXES = [
 	"",
@@ -143,6 +150,13 @@ function expandEffortAliases(
 }
 
 export const MODEL_MAP: Record<string, string> = {
+	// GPT-6.2 is the current OpenAI family. These are the exact API ids. The
+	// bare `gpt-6.2` selector is a plugin convenience alias for Sol, mirroring
+	// the existing bare `gpt-6.1` -> Sol convention; it is not an OpenAI API id.
+	...expandEffortAliases(GPT_62_ASTRA_MODEL_ID, GPT_62_EFFORT_SUFFIXES),
+	...expandEffortAliases(GPT_62_SOL_MODEL_ID, GPT_62_EFFORT_SUFFIXES),
+	"gpt-6.2": GPT_62_SOL_MODEL_ID,
+
 	// ============================================================================
 	// GPT-6 Astra (frontier family, launched 2026-09-03)
 	//

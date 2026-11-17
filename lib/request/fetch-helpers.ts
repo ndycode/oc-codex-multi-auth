@@ -39,6 +39,8 @@ import {
 	GPT_6_LUNA_MODEL_ID,
 	GPT_6_SOL_MODEL_ID,
 	GPT_61_SOL_MODEL_ID,
+	GPT_62_ASTRA_MODEL_ID,
+	GPT_62_SOL_MODEL_ID,
 } from "./helpers/model-map.js";
 import { stripEffortSuffix } from "./helpers/effort-suffix.js";
 import {
@@ -126,6 +128,25 @@ const CHATGPT_CODEX_UNSUPPORTED_MODEL_PATTERN =
 const NORMALIZED_UNSUPPORTED_MODEL_PATTERN =
 	/the model ['"]([^'"]+)['"] is not currently available for this chatgpt account/i;
 export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> = {
+	// GPT-6.2 rows stay within the existing retry budget. Astra falls to Sol,
+	// then the established GPT-6.1/6.0 ladder; Sol starts at GPT-6.1 Sol.
+	[GPT_62_ASTRA_MODEL_ID]: [
+		GPT_62_SOL_MODEL_ID,
+		GPT_61_SOL_MODEL_ID,
+		GPT_6_SOL_MODEL_ID,
+		GPT_56_SOL_MODEL_ID,
+		GPT_56_TERRA_MODEL_ID,
+		GPT_55_MODEL_ID,
+		GPT_6_LUNA_MODEL_ID,
+	],
+	[GPT_62_SOL_MODEL_ID]: [
+		GPT_61_SOL_MODEL_ID,
+		GPT_6_SOL_MODEL_ID,
+		GPT_56_SOL_MODEL_ID,
+		GPT_56_TERRA_MODEL_ID,
+		GPT_55_MODEL_ID,
+		GPT_6_LUNA_MODEL_ID,
+	],
 	// The general rows follow one order, most capable first:
 	//
 	//   gpt-6-astra > gpt-6.1-sol > gpt-6-sol > gpt-5.6-sol > gpt-5.6-terra
@@ -273,6 +294,8 @@ const DEFAULT_AUTO_FALLBACK_ENTRY_OPT_OUT_ENV: Record<string, string> = {
 	[GPT_6_SOL_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
 	[GPT_6_LUNA_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
 	[GPT_61_SOL_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
+	[GPT_62_ASTRA_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
+	[GPT_62_SOL_MODEL_ID]: "CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK",
 };
 
 /**
@@ -369,6 +392,12 @@ function canonicalizeModelName(model: string | undefined): string | undefined {
 	// chain or attempted list keyed that way resolves to the same node.
 	if (withoutEffort === "gpt-6.1") {
 		return GPT_61_SOL_MODEL_ID;
+	}
+
+	// Bare `gpt-6.2` is the plugin's Sol convenience alias. The official API
+	// ids are the explicit `-astra` and `-sol` forms.
+	if (withoutEffort === "gpt-6.2") {
+		return GPT_62_SOL_MODEL_ID;
 	}
 
 	// Daybreak short forms collapse onto the catalog's `-latest` slugs so a

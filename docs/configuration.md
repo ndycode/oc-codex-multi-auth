@@ -68,6 +68,8 @@ either way. Per-model options override global options — see
 | --- | --- |
 | `gpt-6.1-sol` | low, medium, high, xhigh, max, ultra |
 | `gpt-6.1-terra` | low, medium, high, xhigh, max, ultra (shipped templates default to `low`) |
+| `gpt-6.2-astra` | low, medium, high, xhigh, max, ultra (272K default Codex context; ultra resolves to the Codex catalog's xhigh wire effort) |
+| `gpt-6.2-sol` | low, medium, high, xhigh, max, ultra (500K default Codex context; ultra resolves to the Codex catalog's xhigh wire effort) |
 | `gpt-6-astra` | low, medium, high, xhigh, max, ultra |
 | `gpt-6-sol` | low, medium, high, xhigh, max, ultra |
 | `gpt-6-luna` | low, medium, high, xhigh, max |
@@ -103,7 +105,7 @@ it; `minimal` floors to `low` on Codex and on the GPT-5.6 / GPT-6 tiers.
 | `high` | deep reasoning (default for `gpt-5-codex` and xhigh-capable general families) |
 | `xhigh` | max depth for complex tasks (default for `gpt-5.3-codex`/`gpt-5.2-codex`) |
 | `max` | GPT-5.6 / GPT-6 / Daybreak ceiling tier |
-| `ultra` | Codex client-side orchestration tier; sent as `xhigh` on GPT-6 Astra / GPT-6.1 Sol / GPT-6.1 Terra and `max` elsewhere — this plugin does not spawn subagents |
+| `ultra` | Codex client-side orchestration tier; sent as `xhigh` on GPT-6.2 Astra/Sol, GPT-6 Astra, GPT-6.1 Sol, and GPT-6.1 Terra and `max` elsewhere — this plugin does not spawn subagents |
 
 ### Reasoning summary / text verbosity / include / store
 
@@ -153,6 +155,7 @@ The plugin normalizes the selected id before the upstream call. Highlights:
 
 - bare `gpt-6` maps to `gpt-6-astra`; `gpt-6-astra-pro*` collapses onto `gpt-6-astra` (not a Codex-routable id)
 - bare `gpt-6.1` maps to `gpt-6.1-sol`; `gpt-6.1-terra` is a separate model.
+- bare `gpt-6.2` is this plugin's convenience alias for `gpt-6.2-sol`; the official API ids are `gpt-6.2-astra` and `gpt-6.2-sol`.
 - `gpt-daybreak-blue*` / `gpt-daybreak-red*` map to the catalog `-latest` ids; `gpt-5.6-cyber*` maps to itself, never to Sol
 - bare `gpt-5.6` maps to `gpt-5.6-sol`; `gpt-5.6-terra*`/`gpt-5.6-luna*` map to their own tiers
 - `gpt-5.5*`, `gpt-5.5-fast*`, and `gpt-5.5-pro*` normalize to `gpt-5.5` (GPT-5.5 Pro is ChatGPT-only)
@@ -163,8 +166,8 @@ The plugin normalizes the selected id before the upstream call. Highlights:
 
 ### Catalog notes
 
-- The shipped templates carry 12 base model families and 65 variants
-  (`--modern`) or 65 explicit selector entries (`--legacy` / added by `--full`).
+- The shipped templates carry 14 base model families and 77 variants
+  (`--modern`) or 77 explicit selector entries (`--legacy` / added by `--full`).
   The default install writes no catalog at all — it registers the plugin and
   preserves `provider.openai`.
 - `gpt-5.4-mini`, `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, and
@@ -490,9 +493,11 @@ attempts are exhausted; `unsupportedCodexFallbackChain` overrides the chain
 per model.
 
 Default chains (each row is the tail of the general order
-`gpt-6-astra > gpt-6.1-sol > gpt-6-sol > gpt-5.6-sol > gpt-5.6-terra > gpt-5.5 >
+`gpt-6.2-astra > gpt-6.2-sol > gpt-6.1-sol > gpt-6-sol > gpt-5.6-sol > gpt-5.6-terra > gpt-5.5 >
 gpt-6-luna > gpt-5.6-luna` after its own model):
 
+- `gpt-6.2-astra → gpt-6.2-sol → gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna`
+- `gpt-6.2-sol → gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna`
 - `gpt-6-astra → gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna → gpt-5.6-luna`
 - `gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna → gpt-5.6-luna`
 - `gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna → gpt-5.6-luna`
