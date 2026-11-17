@@ -1,10 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { getModelFamily, MODEL_FAMILIES } from "../lib/prompts/codex.js";
 import { getNormalizedModel } from "../lib/request/helpers/model-map.js";
 import { normalizeModel, getReasoningConfig } from "../lib/request/request-transformer.js";
 import { createCodexHeaders, transformRequestForCodex, DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN } from "../lib/request/fetch-helpers.js";
 import { DEFAULT_CODEX_CLIENT_VERSION } from "../lib/request/helpers/user-agent.js";
+
+vi.mock("../lib/prompts/codex.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/prompts/codex.js")>()),
+	getCodexInstructions: vi.fn(async () => "Test instructions"),
+}));
 
 const efforts = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
 
