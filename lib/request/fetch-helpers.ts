@@ -128,8 +128,9 @@ const CHATGPT_CODEX_UNSUPPORTED_MODEL_PATTERN =
 const NORMALIZED_UNSUPPORTED_MODEL_PATTERN =
 	/the model ['"]([^'"]+)['"] is not currently available for this chatgpt account/i;
 export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> = {
-	// GPT-6.2 rows stay within the existing retry budget. Astra falls to Sol,
-	// then the established GPT-6.1/6.0 ladder; Sol starts at GPT-6.1 Sol.
+	// GPT-6.2 rows follow the same general ladder and end at the terminal Luna
+	// tier. Astra has eight fallback targets, so MAX_QUOTA_FALLBACK_SWITCHES
+	// must allow eight hops for a fully blocked request to reach the terminal.
 	[GPT_62_ASTRA_MODEL_ID]: [
 		GPT_62_SOL_MODEL_ID,
 		GPT_61_SOL_MODEL_ID,
@@ -138,6 +139,7 @@ export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> 
 		GPT_56_TERRA_MODEL_ID,
 		GPT_55_MODEL_ID,
 		GPT_6_LUNA_MODEL_ID,
+		GPT_56_LUNA_MODEL_ID,
 	],
 	[GPT_62_SOL_MODEL_ID]: [
 		GPT_61_SOL_MODEL_ID,
@@ -146,6 +148,7 @@ export const DEFAULT_UNSUPPORTED_CODEX_FALLBACK_CHAIN: Record<string, string[]> 
 		GPT_56_TERRA_MODEL_ID,
 		GPT_55_MODEL_ID,
 		GPT_6_LUNA_MODEL_ID,
+		GPT_56_LUNA_MODEL_ID,
 	],
 	// The general rows follow one order, most capable first:
 	//
@@ -1013,973 +1016,376 @@ export function rewriteUrlForCodex(url: string): string {
 /**
  * The service tier the user or host asked for, before per-model filtering.
  * Precedence: the body's `service_tier` (the host's `serviceTier` provider
- * option), then `providerOptions.openai.serviceTier`, then the plugin's
- * per-model/global `serviceTier` config, then a `-fast` model selector
- * (e.g. `gpt-5.5-fast`), which means Codex's Fast tier.
- */
-export function getRequestedServiceTier(
-	originalModel: string | undefined,
-	body: RequestBody,
-	userConfig: UserConfig,
-): string | undefined {
-	const fromBody = body.service_tier;
-	if (typeof fromBody === "string" && fromBody.trim()) return fromBody;
-	const fromProvider = body.providerOptions?.openai?.serviceTier;
-	if (typeof fromProvider === "string" && fromProvider.trim()) return fromProvider;
-	if (originalModel) {
-		const fromConfig = getModelConfig(originalModel, userConfig).serviceTier;
-		if (typeof fromConfig === "string" && fromConfig.trim()) return fromConfig;
-		const bare = originalModel.includes("/")
-			? (originalModel.split("/").pop() ?? originalModel)
-			: originalModel;
-		if (stripEffortSuffix(bare.trim().toLowerCase()).endsWith("-fast")) {
-			return SERVICE_TIER_PRIORITY;
-		}
-	}
-	return undefined;
-}
-
-/** Put the resolved tier on the body, or remove the field when none applies. */
-export function applyServiceTier(body: RequestBody, requestedServiceTier: string | undefined): void {
-	const tier = resolveServiceTierForModel(body.model, requestedServiceTier);
-	if (tier) body.service_tier = tier;
-	else delete body.service_tier;
-}
-
-export async function transformRequestForCodex(
-	init: RequestInit | undefined,
-	url: string,
-	userConfig: UserConfig,
-	codexMode = true,
-	parsedBody?: Record<string, unknown>,
-	options?: {
-		requestTransformMode?: "native" | "legacy";
-		fastSession?: boolean;
-		fastSessionStrategy?: "hybrid" | "always";
-		fastSessionMaxInputItems?: number;
-	},
-): Promise<
-	| {
-			body: RequestBody;
-			updatedInit: RequestInit;
-			/** Tier asked for before per-model filtering; re-resolved on model fallback. */
-			requestedServiceTier?: string;
-	  }
-	| undefined
-> {
-	const hasParsedBody =
-		parsedBody !== undefined &&
-		parsedBody !== null &&
-		typeof parsedBody === "object" &&
-		Object.keys(parsedBody).length > 0;
-	if (!init?.body && !hasParsedBody) return undefined;
-
-	try {
-		// Use pre-parsed body if provided, otherwise parse from init.body
-		let body: RequestBody;
-		if (hasParsedBody) {
-			body = parsedBody as RequestBody;
-		} else {
-			if (typeof init?.body !== "string") return undefined;
-			body = JSON.parse(init.body) as RequestBody;
-		}
-		const originalModel = body.model;
-		const requestTransformMode = options?.requestTransformMode ?? "legacy";
-		const requestedServiceTier = getRequestedServiceTier(originalModel, body, userConfig);
-
-		// OpenCode's AI SDK adapter omits `strict` on function tools, and the
-		// Responses backend treats an omitted flag as strict mode â€” making
-		// optional parameters effectively required, so models fabricate values
-		// (e.g. a sessionID for OpenCode's subagent tool) and fresh subagent
-		// creation fails. Codex CLI pins strict: false on every function tool
-		// for the same reason (codex-rs/tools/src/responses_api.rs). Applies to
-		// both transform modes; explicitly set values are preserved.
-		if (Array.isArray(body.tools)) {
-			body.tools = ensureFunctionToolStrictFalse(body.tools);
-		}
-
-		if (requestTransformMode === "native") {
-			logRequest(LOG_STAGES.BEFORE_TRANSFORM, {
-				url,
-				originalModel,
-				model: originalModel,
-				hasTools: !!body.tools,
-				hasInput: !!body.input,
-				inputLength: body.input?.length,
-				requestTransformMode,
-				body: body as unknown as Record<string, unknown>,
-			});
-
-			const normalizedModel = normalizeModel(originalModel);
-			body.model = normalizedModel;
-			body.instructions = ensureInstructionIdentity(
-				body.instructions,
-				normalizedModel,
-			);
-			body.input = upsertBackendModelIdentityMessage(body.input, normalizedModel);
-			// Native mode keeps the host's effort but still applies the
-			// family clamps legacy mode does: `ultra` is a client-side tier
-			// sent as `max`, and `none`/`max`/`xhigh` step to what the
-			// family accepts. Without this, the default mode put a host
-			// variant's `ultra` on the wire verbatim.
-			if (body.reasoning?.effort) {
-				body.reasoning = clampReasoningForModel(body.reasoning, normalizedModel);
-			}
-			applyServiceTier(body, requestedServiceTier);
-			// Codex always sends the catalog default_verbosity when nothing
-			// chose one (core/src/client.rs); native mode does the same rather
-			// than leaving the backend to its own default.
-			const defaultVerbosity = getCodexCatalogEntry(normalizedModel)?.defaultVerbosity;
-			if (defaultVerbosity && !body.text?.verbosity) {
-				body.text = { ...body.text, verbosity: defaultVerbosity };
-			}
-
-			// Native mode is a lighter transform, not a passthrough: the
-			// stateless/privacy invariants apply on EVERY Codex-bound request.
-			// The ChatGPT backend requires store=false and the encrypted-reasoning
-			// include, and honoring a body that omits (or contradicts) them either
-			// 400s upstream or silently stores the request server-side.
-			body.store = false;
-			const include = Array.isArray(body.include) ? [...body.include] : [];
-			if (!include.includes("reasoning.encrypted_content")) {
-				include.push("reasoning.encrypted_content");
-			}
-			body.include = include;
-
-			logRequest(LOG_STAGES.AFTER_TRANSFORM, {
-				url,
-				originalModel,
-				normalizedModel,
-				hasTools: !!body.tools,
-				hasInput: !!body.input,
-				inputLength: body.input?.length,
-				requestTransformMode,
-				body: body as unknown as Record<string, unknown>,
-			});
-
-			// `body` stays classic; lite is a serialize-time view (see shapeBodyForModel).
-			return {
-				body,
-				updatedInit: {
-					...(init ?? {}),
-					body: JSON.stringify(shapeBodyForModel(body)),
-				},
-				requestedServiceTier,
-			};
-		}
-
-		// Normalize model first to determine which instructions to fetch
-		// This ensures we get the correct model-specific prompt
-		const normalizedModel = normalizeModel(originalModel);
-		const modelFamily = getModelFamily(normalizedModel);
-
-		// Log original request
-		logRequest(LOG_STAGES.BEFORE_TRANSFORM, {
-			url,
-			originalModel,
-			model: body.model,
-			hasTools: !!body.tools,
-			hasInput: !!body.input,
-			inputLength: body.input?.length,
-			codexMode,
-			requestTransformMode,
-			body: body as unknown as Record<string, unknown>,
-		});
-
-		// Fetch model-specific Codex instructions (cached per model family)
-		const codexInstructions = await getCodexInstructions(normalizedModel);
-
-		// Transform request body
-		const transformedBody = await transformRequestBody(
-			body,
-			codexInstructions,
-			userConfig,
-			codexMode,
-			options?.fastSession ?? false,
-			options?.fastSessionStrategy ?? "hybrid",
-			options?.fastSessionMaxInputItems ?? 30,
-		);
-		applyServiceTier(transformedBody, requestedServiceTier);
-
-		// Log transformed request
-		logRequest(LOG_STAGES.AFTER_TRANSFORM, {
-			url,
-			originalModel,
-			normalizedModel: transformedBody.model,
-			modelFamily,
-			hasTools: !!transformedBody.tools,
-			hasInput: !!transformedBody.input,
-			inputLength: transformedBody.input?.length,
-			reasoning: transformedBody.reasoning as unknown,
-			textVerbosity: transformedBody.text?.verbosity,
-			include: transformedBody.include,
-			requestTransformMode,
-			body: transformedBody as unknown as Record<string, unknown>,
-		});
-
-			// `transformedBody` stays classic so the unsupported-model fallback can
-			// re-serialize it for a non-lite model. Lite shaping happens here, per
-			// attempt, against the model actually being sent.
-			return {
-				body: transformedBody,
-				updatedInit: {
-					...(init ?? {}),
-					body: JSON.stringify(shapeBodyForModel(transformedBody)),
-				},
-				requestedServiceTier,
-			};
-	} catch (e) {
-		logError(`${ERROR_MESSAGES.REQUEST_PARSE_ERROR}`, e);
-		return undefined;
-	}
-}
-
-/**
- * Creates headers for Codex API requests
- * @param init - Request init options
- * @param accountId - ChatGPT account ID
- * @param accessToken - OAuth access token
- * @param opts - Optional parameters including model, promptCacheKey, and organizationId
- * @returns Headers object with all required Codex headers
- */
-export function createCodexHeaders(
-    init: RequestInit | undefined,
-    accountId: string,
-    accessToken: string,
-    opts?: {
-        model?: string;
-        promptCacheKey?: string;
-        organizationId?: string;
-        /** Resolved `service_tier` on the wire, for `x-codex-routing-hint`. */
-        serviceTier?: string;
-        /** Sticky-routing token captured earlier in the same turn. */
-        turnState?: string;
-    },
-): Headers {
-	const headers = new Headers(init?.headers ?? {});
-	headers.delete("x-api-key"); // Remove any existing API key
-	headers.set("Authorization", `Bearer ${accessToken}`);
-	headers.set(OPENAI_HEADERS.ACCOUNT_ID, accountId);
-	headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
-
-	// GPT-5.6, GPT-6 Astra and the Daybreak tiers are served over the
-	// responses-lite path.
-	if (usesResponsesLite(opts?.model)) {
-		headers.set(RESPONSES_LITE_HEADER, RESPONSES_LITE_HEADER_VALUE);
-	} else {
-		headers.delete(RESPONSES_LITE_HEADER);
-	}
-
-	// Originator and UA must agree: the backend evaluates model entitlement
-	// per originator and reads the client version from the UA product token.
-	// gpt-5.6 tiers default to the host (opencode) identity â€” the one plain
-	// opencode passes sol with on accounts that reject `codex_cli_rs` (#196);
-	// everything else keeps the Codex CLI identity from PR #199. The host's
-	// own UA (when the runtime injected one) keeps the advertised opencode
-	// version in sync with the real host build.
-	const hostUserAgent = headers.get("user-agent") ?? undefined;
-	const identity = resolveClientIdentity(opts?.model, hostUserAgent);
-	headers.set(OPENAI_HEADERS.ORIGINATOR, identity.originator);
-	if (process.env.CODEX_AUTH_DISABLE_CODEX_USER_AGENT !== "1") {
-		headers.set("user-agent", identity.userAgent);
-	}
-	// Codex's provider config sends `version: <client version>` on every
-	// request (codex-rs/model-provider-info). Only meaningful when claiming
-	// the Codex CLI identity; plain opencode does not send it.
-	const codexVersion =
-		identity.originator === OPENAI_HEADER_VALUES.ORIGINATOR_CODEX
-			? /^codex_cli_rs\/(\S+)/.exec(identity.userAgent)?.[1]
-			: undefined;
-	if (codexVersion) headers.set(OPENAI_HEADERS.VERSION, codexVersion);
-	else headers.delete(OPENAI_HEADERS.VERSION);
-
-	// Codex sends `x-codex-routing-hint: model=<slug>[;tier=<tier>]` on every
-	// ChatGPT-backend request (codex-rs/core/src/client.rs
-	// `build_routing_hint_header`).
-	if (opts?.model) {
-		headers.set(OPENAI_HEADERS.ROUTING_HINT, buildRoutingHint(opts.model, opts.serviceTier));
-	} else {
-		headers.delete(OPENAI_HEADERS.ROUTING_HINT);
-	}
-	if (opts?.turnState) headers.set(OPENAI_HEADERS.TURN_STATE, opts.turnState);
-	else headers.delete(OPENAI_HEADERS.TURN_STATE);
-
-    // Codex 0.166 sends `session-id`/`thread-id` (codex-api/src/requests/
-    // headers.rs); the underscored `session_id`/`conversation_id` pair is the
-    // pre-May-2026 form, still sent alongside for backends that key on it.
-    const cacheKey = opts?.promptCacheKey;
-    for (const name of [
-        OPENAI_HEADERS.CONVERSATION_ID,
-        OPENAI_HEADERS.SESSION_ID,
-        OPENAI_HEADERS.SESSION_ID_V2,
-        OPENAI_HEADERS.THREAD_ID,
-    ]) {
-        if (cacheKey) headers.set(name, cacheKey);
-        else headers.delete(name);
-    }
-
-    // Upstream Codex never sends `openai-organization` on ChatGPT-Codex
-    // requests â€” workspace routing is carried entirely by `chatgpt-account-id`.
-    // Pinning an org can shift the backend's entitlement evaluation to a
-    // workspace outside a limited preview and 400 an otherwise-entitled
-    // account (gpt-5.6-sol, #196). Legacy behavior stays opt-in for multi-org
-    // setups that relied on it.
-    const organizationId = opts?.organizationId;
-    if (
-        organizationId &&
-        process.env.CODEX_AUTH_SEND_ORGANIZATION_HEADER === "1"
-    ) {
-        headers.set(OPENAI_HEADERS.ORGANIZATION_ID, organizationId);
-    } else {
-        headers.delete(OPENAI_HEADERS.ORGANIZATION_ID);
-    }
-
-    headers.set("accept", "text/event-stream");
-    return headers;
-}
-
-/**
- * Handles error responses from the Codex API
- * @param response - Error response from API
- * @param options - Diagnostic-extraction options used to enrich the error
- * @returns An `ErrorHandlingResult` bundling the (possibly remapped) response,
- *   parsed rate-limit info, and the decoded error body
- */
-export async function handleErrorResponse(
-        response: Response,
-        options?: ErrorHandlingOptions,
-): Promise<ErrorHandlingResult> {
-        const bodyText = await safeReadBody(response);
-        const mapped = mapUsageLimit404WithBody(response, bodyText);
-        
-        // Entitlement errors return a ready-to-use Response with 403 status
-        if (mapped && mapped.status === HTTP_STATUS.FORBIDDEN) {
-                return { response: mapped, rateLimit: undefined, errorBody: undefined };
-        }
-        
-        const finalResponse = mapped ?? response;
-
-        let errorBody: unknown;
-        try {
-                errorBody = bodyText ? JSON.parse(bodyText) : undefined;
-        } catch {
-                errorBody = { message: bodyText };
-        }
-
-        const diagnostics = extractErrorDiagnostics(finalResponse, options);
-        const normalizedError = normalizeErrorPayload(
-                errorBody,
-                bodyText,
-                finalResponse.statusText,
-                finalResponse.status,
-                diagnostics,
-        );
-        const errorResponse = ensureJsonErrorResponse(finalResponse, normalizedError);
-        const retryAsServerError = isServerOverloadedError(normalizedError);
-        // Decide once, from the same overload verdict the caller branches on, so
-        // the durable block and the retry-after delay can never disagree about
-        // whether these headers mean anything.
-        const quotaHeadersAuthoritative = isQuotaHeaderAuthority(
-                finalResponse.status,
-                retryAsServerError,
-        );
-        const rateLimit = extractRateLimitInfoFromBody(
-                finalResponse,
-                bodyText,
-                quotaHeadersAuthoritative,
-        );
-
-        if (finalResponse.status === HTTP_STATUS.UNAUTHORIZED) {
-                logWarn("Codex upstream returned 401 Unauthorized", diagnostics);
-        }
-
-        logRequest(LOG_STAGES.ERROR_RESPONSE, {
-                status: finalResponse.status,
-                statusText: finalResponse.statusText,
-                diagnostics,
-        });
-
-        return {
-		response: errorResponse,
-		rateLimit,
-		errorBody: normalizedError,
-		retryAsServerError,
-		quotaHeadersAuthoritative: quotaHeadersAuthoritative && rateLimit !== undefined,
-	};
-}
-
-/**
- * Handles successful responses from the Codex API
- * Converts SSE to JSON for non-streaming requests (generateText)
- * Passes through SSE for streaming requests (streamText)
- * @param response - Success response from API
- * @param isStreaming - Whether this is a streaming request (stream=true in body)
- * @param options - Optional `streamStallTimeoutMs` (inter-chunk gap) and
- *   `maxStreamDurationMs` (total post-headers deadline) overrides
- * @returns Processed response (SSEâ†’JSON for non-streaming, stream for streaming)
- */
-export async function handleSuccessResponse(
-    response: Response,
-    isStreaming: boolean,
-    options?: { streamStallTimeoutMs?: number; maxStreamDurationMs?: number },
-): Promise<Response> {
-    // Check for deprecation headers (RFC 8594)
-    const deprecation = response.headers.get("Deprecation");
-    const sunset = response.headers.get("Sunset");
-    if (deprecation || sunset) {
-        logWarn(`API deprecation notice`, { deprecation, sunset });
-    }
-
-    const responseHeaders = ensureContentType(response.headers);
-
-	// For non-streaming requests (generateText), convert SSE to JSON
-	if (!isStreaming) {
-		return await convertSseToJson(response, responseHeaders, options);
-	}
-
-	// For streaming requests (streamText), return stream as-is
-	return new Response(response.body, {
-		status: response.status,
-		statusText: response.statusText,
-		headers: responseHeaders,
-	});
-}
-
-/**
- * Read an error/diagnostic body under a hard byte cap and a total timeout,
- * then run it through the logger's secret masking.
- *
- * The old `clone().text()` was unbounded (a 150MB error body spiked the heap
- * by ~300MB) and had no deadline (a body that dripped forever hung the whole
- * error path â€” the stall machinery only exists on the SSE path). And the raw
- * text flowed into `error.message` verbatim, so a reverse-proxy HTML page
- * with internal IPs or an echoed `Bearer`/`sk-*` token leaked to the client.
- * The bounded reader cancels the stream at the cap so backpressure reaches
- * the socket, and maskString is the same redaction the request logger uses.
- */
-async function safeReadBody(response: Response): Promise<string> {
-        try {
-                const text = await readBoundedResponseText(response.clone());
-                return maskString(text);
-        } catch {
-                return "";
-        }
-}
-
-function mapUsageLimit404WithBody(response: Response, bodyText: string): Response | null {
-        if (response.status !== HTTP_STATUS.NOT_FOUND) return null;
-        if (!bodyText) return null;
-
-	let code = "";
-	try {
-		const parsed = JSON.parse(bodyText) as { error?: { code?: string | number; type?: string } };
-		code = (parsed?.error?.code ?? parsed?.error?.type ?? "").toString();
-	} catch {
-		code = "";
-	}
-
-	// Check for entitlement errors first - these should NOT be treated as rate limits
-	if (isEntitlementError(code, bodyText)) {
-		return createEntitlementErrorResponse(bodyText);
-	}
-
-	const haystack = `${code} ${bodyText}`.toLowerCase();
-	if (!/usage_limit_reached|rate_limit_exceeded|usage limit/i.test(haystack)) {
-		return null;
-	}
-
-        const headers = new Headers(response.headers);
-        return new Response(bodyText, {
-                status: HTTP_STATUS.TOO_MANY_REQUESTS,
-                statusText: "Too Many Requests",
-                headers,
-        });
-}
-
-/**
- * Whether the `x-codex-*` quota headers on an error response may be trusted as
- * the account's real quota state.
- *
- * They are believable only when the backend weighed this very request against
- * the quota and refused it for a usage limit â€” HTTP 429, including a 404 that
- * `mapUsageLimit404WithBody` remapped. Every other error class can echo a stale
- * snapshot alongside an unrelated failure: entitlement errors (issues #16/#17),
- * auth failures, 5xx, and upstream overloads dressed up as a 429. Acting on
- * that echo is what blocked healthy accounts for hours.
- *
- * Every consumer of those headers routes through this predicate, so the rule
- * lives in exactly one place instead of being re-derived per call site.
- */
-function isQuotaHeaderAuthority(
-        status: number,
-        isServerOverload: boolean,
-): boolean {
-        return status === HTTP_STATUS.TOO_MANY_REQUESTS && !isServerOverload;
-}
-
-function extractRateLimitInfoFromBody(
-        response: Response,
-        bodyText: string,
-        quotaHeadersAuthoritative: boolean,
-): RateLimitInfo | undefined {
-        const isStatusRateLimit =
-                response.status === HTTP_STATUS.TOO_MANY_REQUESTS;
-        const parsedErrorBody = parseStructuredErrorBody(bodyText);
-        const parsed = parseRateLimitBody(parsedErrorBody);
-        const isServerOverload = isServerOverloadedError(parsedErrorBody);
-
-        if (isServerOverload && !isStatusRateLimit) {
-                return undefined;
-        }
-
-        const haystack = `${parsed?.code ?? ""} ${bodyText}`.toLowerCase();
-        
-        // Entitlement errors should not be treated as rate limits
-        if (isEntitlementError(parsed?.code ?? "", bodyText)) {
-                return undefined;
-        }
-        
-        const isRateLimit =
-                isStatusRateLimit ||
-                isServerOverload ||
-                /usage_limit_reached|rate_limit_exceeded|rate_limit|usage limit/i.test(
-                        haystack,
-                );
-        if (!isRateLimit) return undefined;
-
-        // The uncapped exhausted-window reset rides on the same authority rule as
-        // the durable block: on any status other than a genuine 429 a stale
-        // `used-percent: 100` would otherwise become an hours-long, uncappable
-        // `retryAfterMs` and freeze the account through `markRateLimitedWithReason`
-        // â€” the exact block the caller-side gate was added to prevent.
-        const retryAfterMs =
-                parseRetryAfterMs(response, parsed, quotaHeadersAuthoritative) ?? 60000;
-
-        return { retryAfterMs, code: parsed?.code };
-}
-
-interface RateLimitErrorBody {
-	error?: {
-		code?: string | number;
-		type?: string;
-		context?: {
-			type?: string;
-		};
-		resets_at?: number;
-		reset_at?: number;
-		retry_after_ms?: number;
-		retry_after?: number;
-	};
-}
-
-function parseRateLimitBody(
-	parsedBody: RateLimitErrorBody | undefined,
-): { code?: string; type?: string; contextType?: string; resetsAt?: number; retryAfterMs?: number } | undefined {
-	if (!parsedBody) return undefined;
-	const error = parsedBody.error ?? {};
-	const code = (error.code ?? error.type ?? "").toString();
-	const type = typeof error.type === "string" ? error.type : undefined;
-	const contextType = typeof error.context?.type === "string" ? error.context.type : undefined;
-	const resetsAt = toNumber(error.resets_at ?? error.reset_at);
-	// `retry_after_ms` is milliseconds; `retry_after` is seconds. Keep their
-	// scales distinct: collapsing them and feeding the result through
-	// normalizeRetryAfter's <1000 "looks like seconds" heuristic turned a
-	// sub-second `retry_after_ms` (e.g. 500) into a multi-minute backoff.
-	const retryAfterMsRaw = toNumber(error.retry_after_ms);
-	const retryAfterSeconds = toNumber(error.retry_after);
-	const retryAfterMs =
-		retryAfterMsRaw !== undefined
-			? retryAfterMsRaw
-			: retryAfterSeconds !== undefined
-				? retryAfterSeconds * 1000
-				: undefined;
-	return { code, type, contextType, resetsAt, retryAfterMs };
-}
-
-function parseStructuredErrorBody(body: string): RateLimitErrorBody | undefined {
-	if (!body) return undefined;
-	try {
-		return JSON.parse(body) as RateLimitErrorBody;
-	} catch {
-		return undefined;
-	}
-}
-
-type ErrorPayload = {
-        error: {
-                message: string;
-                type?: string;
-                code?: string | number;
-                context?: {
-                        type?: string;
-                };
-                unsupported_model?: string;
-                diagnostics?: ErrorDiagnostics;
-        };
-};
-
-/**
- * Upper bound for text that lands in `error.message`. The raw-body fallback
- * below used to echo the whole upstream body verbatim â€” a multi-hundred-KB
- * HTML error page, truncated mid-string or not, is not a message.
- */
-const MAX_ERROR_MESSAGE_CHARS = 2_000;
-
-/**
- * Flatten and bound text destined for `error.message`: upstream bodies are
- * multi-line and arbitrarily large, and neither property belongs in a field
- * that callers render and log verbatim. The bounded read upstream caps the
- * source; this caps what survives normalization.
- */
-function toErrorMessageText(text: string): string {
-        const normalized = text.replace(/\s+/g, " ").trim();
-        if (normalized.length <= MAX_ERROR_MESSAGE_CHARS) return normalized;
-        return `${normalized.slice(0, MAX_ERROR_MESSAGE_CHARS)}â€¦[truncated]`;
-}
-
-function normalizeErrorPayload(
-        errorBody: unknown,
-        bodyText: string,
-        statusText: string,
-        status: number,
-        diagnostics?: ErrorDiagnostics,
-): ErrorPayload {
-	if (isDeactivatedWorkspaceError(errorBody, status)) {
-		const payload: ErrorPayload = {
-			error: {
-				message:
-					"The selected ChatGPT workspace is deactivated. This workspace entry should be removed from rotation or re-authorized before retrying.",
-				type: "workspace_deactivated",
-				code: DEACTIVATED_WORKSPACE_ERROR_CODE,
-			},
-		};
-		if (diagnostics && Object.keys(diagnostics).length > 0) {
-			payload.error.diagnostics = diagnostics;
-		}
-		return payload;
-	}
-
-        if (isUnsupportedCodexModelForChatGpt(status, bodyText)) {
-                const unsupportedModel =
-			extractUnsupportedCodexModelFromText(bodyText) ?? "requested model";
-				const payload: ErrorPayload = {
-						error: {
-								message:
-										`The model '${unsupportedModel}' is not currently available for this ChatGPT account when using Codex OAuth. ` +
-										"This is an account/workspace entitlement gate, not a temporary rate limit. " +
-										"Default gpt-5.6 tiers, gpt-5.5, and gpt-5-codex selectors auto-degrade down their fallback chains " +
-										"(opt out via CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK/GPT55/CODEX=1). " +
-										"Try 'gpt-5.5' (latest general), 'gpt-5-codex' (canonical), or legacy aliases like 'gpt-5.3-codex'/'gpt-5.2-codex', or enable automatic fallback via " +
-										'unsupportedCodexPolicy: "fallback" (or CODEX_AUTH_UNSUPPORTED_MODEL_POLICY=fallback). ' +
-										"(Legacy: CODEX_AUTH_FALLBACK_UNSUPPORTED_MODEL=1 or fallbackOnUnsupportedCodexModel).",
-								type: "entitlement_error",
-								code: CHATGPT_CODEX_UNSUPPORTED_MODEL_CODE,
-								unsupported_model: unsupportedModel,
-						},
-				};
-                if (diagnostics && Object.keys(diagnostics).length > 0) {
-                        payload.error.diagnostics = diagnostics;
-                }
-                return payload;
-        }
-
-        if (isRecord(errorBody)) {
-                const maybeError = errorBody.error;
-                if (isRecord(maybeError) && typeof maybeError.message === "string") {
-                        const payload: ErrorPayload = {
-                                error: {
-                                        message: toErrorMessageText(maybeError.message),
-                                },
-                        };
-                        if (typeof maybeError.type === "string") {
-                                payload.error.type = maybeError.type;
-                        }
-                        if (typeof maybeError.code === "string" || typeof maybeError.code === "number") {
-                                payload.error.code = maybeError.code;
-                        }
-                        if (
-                                isRecord(maybeError.context) &&
-                                typeof maybeError.context.type === "string"
-                        ) {
-                                payload.error.context = { type: maybeError.context.type };
-                        }
-                        if (diagnostics && Object.keys(diagnostics).length > 0) {
-                                payload.error.diagnostics = diagnostics;
-                        }
-                        if (status === HTTP_STATUS.UNAUTHORIZED) {
-                                payload.error.message = `${payload.error.message} (run \`opencode auth login\` if this persists)`;
-                        }
-                        return payload;
-                }
-
-                if (typeof errorBody.message === "string") {
-                        const payload: ErrorPayload = { error: { message: toErrorMessageText(errorBody.message) } };
-                        if (diagnostics && Object.keys(diagnostics).length > 0) {
-                                payload.error.diagnostics = diagnostics;
-                        }
-                        if (status === HTTP_STATUS.UNAUTHORIZED) {
-                                payload.error.message = `${payload.error.message} (run \`opencode auth login\` if this persists)`;
-                        }
-                        return payload;
-                }
-
-                // FastAPI-style bodies carry the human-readable error on a
-                // top-level `detail` field (string, or a record holding
-                // message/code/type). Without this branch they surfaced as
-                // the raw JSON string of the whole body.
-                const detail = errorBody.detail;
-                const detailMessage =
-                        typeof detail === "string"
-                                ? detail
-                                : isRecord(detail) && typeof detail.message === "string"
-                                        ? detail.message
-                                        : undefined;
-                if (typeof detailMessage === "string" && detailMessage.trim()) {
-                        const payload: ErrorPayload = {
-                                error: { message: toErrorMessageText(detailMessage) },
-                        };
-                        if (isRecord(detail)) {
-                                if (typeof detail.type === "string") {
-                                        payload.error.type = detail.type;
-                                }
-                                if (
-                                        typeof detail.code === "string" ||
-                                        typeof detail.code === "number"
-                                ) {
-                                        payload.error.code = detail.code;
-                                }
-                        }
-                        if (diagnostics && Object.keys(diagnostics).length > 0) {
-                                payload.error.diagnostics = diagnostics;
-                        }
-                        if (status === HTTP_STATUS.UNAUTHORIZED) {
-                                payload.error.message = `${payload.error.message} (run \`opencode auth login\` if this persists)`;
-                        }
-                        return payload;
-                }
-        }
-
-        const trimmed = bodyText.trim();
-        if (trimmed) {
-                const payload: ErrorPayload = { error: { message: toErrorMessageText(trimmed) } };
-                if (diagnostics && Object.keys(diagnostics).length > 0) {
-                        payload.error.diagnostics = diagnostics;
-                }
-                if (status === HTTP_STATUS.UNAUTHORIZED) {
-                        payload.error.message = `${payload.error.message} (run \`opencode auth login\` if this persists)`;
-                }
-                return payload;
-        }
-
-        if (statusText) {
-                const payload: ErrorPayload = { error: { message: toErrorMessageText(statusText) } };
-                if (diagnostics && Object.keys(diagnostics).length > 0) {
-                        payload.error.diagnostics = diagnostics;
-                }
-                if (status === HTTP_STATUS.UNAUTHORIZED) {
-                        payload.error.message = `${payload.error.message} (run \`opencode auth login\` if this persists)`;
-                }
-                return payload;
-        }
-
-        const payload: ErrorPayload = { error: { message: "Request failed" } };
-        if (diagnostics && Object.keys(diagnostics).length > 0) {
-                payload.error.diagnostics = diagnostics;
-        }
-        if (status === HTTP_STATUS.UNAUTHORIZED) {
-                payload.error.message = `${payload.error.message} (run \`opencode auth login\` if this persists)`;
-        }
-        return payload;
-}
-
-function ensureJsonErrorResponse(response: Response, payload: ErrorPayload): Response {
-        const headers = new Headers(response.headers);
-        headers.set("content-type", "application/json; charset=utf-8");
-        return new Response(JSON.stringify(payload), {
-                status: response.status,
-                statusText: response.statusText,
-                headers,
-	});
-}
-
-function parseRetryAfterMs(
-        response: Response,
-        parsedBody: { resetsAt?: number; retryAfterMs?: number } | undefined,
-        trustExhaustedWindows: boolean,
-): number | null {
-        // A window the backend reports as fully spent (`used-percent >= 100`)
-        // outranks every other signal, and is deliberately uncapped. Its reset
-        // is the earliest moment the account can serve again; a `retry-after`
-        // of 30s or the sooner 5h reset would just put the account back into
-        // rotation to fail again (issue #218). Only honour it when the caller
-        // says those headers are authoritative for this response.
-        if (trustExhaustedWindows) {
-                const exhaustedResetAtMs = getQuotaExhaustedResetAtMs(response.headers);
-                if (exhaustedResetAtMs !== undefined) {
-                        const delta = exhaustedResetAtMs - Date.now();
-                        if (delta > 0) return delta;
-                }
-        }
-
-        if (parsedBody?.retryAfterMs !== undefined) {
-                // Already normalized to milliseconds in parseRateLimitBody (ms field
-                // used verbatim, seconds field converted via *1000). Do NOT pass
-                // through a <1000 "looks like seconds" heuristic, which would
-                // mis-scale a genuine sub-second value into minutes. Cap at 5 min.
-                const ms = parsedBody.retryAfterMs;
-                if (Number.isFinite(ms) && ms > 0) {
-                        // Floor at 1ms: a sub-ms value like retry_after_ms: 0.5
-                        // floored to 0 flowed into markRateLimitedWithReason(0),
-                        // where a zero delay means "window elapsed" and DELETES
-                        // existing rate-limit blocks â€” a hostile 429 could clear
-                        // every block on the account.
-                        return Math.min(Math.max(1, Math.floor(ms)), MAX_RETRY_DELAY_MS);
-                }
-        }
-
-        // The header paths mirror the body fields above and get the same 5-min
-        // cap: an oversized or bogus `retry-after` must not freeze an account
-        // far past the cap the body path enforces. The reset-at paths below are
-        // deliberately uncapped â€” quota windows legitimately reset hours out.
-        const retryAfterMsHeader = response.headers.get("retry-after-ms");
-        if (retryAfterMsHeader) {
-                const parsed = Number.parseInt(retryAfterMsHeader, 10);
-                if (!Number.isNaN(parsed) && parsed > 0) {
-                        return Math.min(parsed, MAX_RETRY_DELAY_MS);
-                }
-        }
-
-        const retryAfterHeader = response.headers.get("retry-after");
-        if (retryAfterHeader) {
-                const parsed = Number.parseInt(retryAfterHeader, 10);
-                if (!Number.isNaN(parsed) && parsed > 0) {
-                        return Math.min(parsed * 1000, MAX_RETRY_DELAY_MS);
-                }
-                // RFC 7231 also permits an absolute HTTP-date
-                // ("Retry-After: Wed, 21 Oct 2099 07:28:00 GMT"). parseInt on
-                // one is NaN, so only the non-numeric branch reaches
-                // Date.parse â€” a numeric-but-non-positive value (0, negative)
-                // keeps its existing "ignore and fall through" verdict. A
-                // past/unparseable date likewise falls through rather than
-                // manufacturing a delay; future dates get the same 5-min cap.
-                if (Number.isNaN(parsed)) {
-                        const dateMs = Date.parse(retryAfterHeader);
-                        if (!Number.isNaN(dateMs)) {
-                                const delta = dateMs - Date.now();
-                                if (delta > 0) {
-                                        return Math.min(
-                                                Math.floor(delta),
-                                                MAX_RETRY_DELAY_MS,
-                                        );
-                                }
-                        }
-                }
-        }
-
-        // No window claimed exhaustion, so this is an ordinary throttle rather
-        // than a spent quota: the soonest reset is the right one to wait for.
-        const now = Date.now();
-        const resetCandidates: number[] = [];
-
-        // Read the Codex windows through the shared parser rather than the
-        // reset-at header alone, so a 429 carrying only `-reset-after-seconds`
-        // or an ISO `-reset-at` produces a candidate instead of falling back to
-        // the 60s default. Windows the plan has switched off are skipped: their
-        // reset says nothing about when this request can go through.
-        //
-        // This is the second uncapped read of the same `x-codex-*` headers, so it
-        // takes the same authority gate as the exhausted-window shortcut above:
-        // otherwise an untrusted snapshot walks straight back in through the
-        // "ordinary throttle" door and produces the very hours-long delay the
-        // shortcut was gated to prevent. The generic `x-ratelimit-reset`
-        // header and the body `resets_at` sit on the same uncapped delay path
-        // and take the same gate: on any status other than a genuine 429 they
-        // are untrusted echoes, and honoring one hands a stale or hostile
-        // value an uncapped multi-year block through markRateLimitedWithReason.
-        if (trustExhaustedWindows) {
-                for (const window of parseCodexQuotaWindows(response.headers, now)) {
-                        if (isQuotaWindowDisabled(window)) continue;
-                        const resetAtMs = window.resetAtMs;
-                        if (typeof resetAtMs !== "number" || !Number.isFinite(resetAtMs)) continue;
-                        const delta = resetAtMs - now;
-                        if (delta > 0) resetCandidates.push(delta);
-                }
-
-                const resetAtHeaders = ["x-ratelimit-reset"];
-                for (const header of resetAtHeaders) {
-                        const value = response.headers.get(header);
-                        if (!value) continue;
-                        const parsed = Number.parseInt(value, 10);
-                        if (!Number.isNaN(parsed) && parsed > 0) {
-                                // The <10^10 discriminator keeps epoch seconds
-                                // distinct from epoch milliseconds; flipping or
-                                // dropping it mis-scales every value by 1000x.
-                                const timestamp =
-                                        parsed < 10_000_000_000 ? parsed * 1000 : parsed;
-                                const delta = timestamp - now;
-                                // Same MAX_QUOTA_RESET_HORIZON_MS guard the
-                                // x-codex-* parser applies in withinResetHorizon:
-                                // without it a hostile `x-ratelimit-reset` wrote
-                                // a monotonic, effectively-forever persisted
-                                // block that no later 429 could shorten.
-                                if (delta > 0 && delta <= MAX_QUOTA_RESET_HORIZON_MS) {
-                                        resetCandidates.push(delta);
-                                }
-                        }
-                }
-
-                if (parsedBody?.resetsAt) {
-                        const timestamp =
-                                parsedBody.resetsAt < 10_000_000_000
-                                        ? parsedBody.resetsAt * 1000
-                                        : parsedBody.resetsAt;
-                        const delta = timestamp - now;
-                        if (delta > 0 && delta <= MAX_QUOTA_RESET_HORIZON_MS) {
-                                resetCandidates.push(delta);
-                        }
-                }
-        }
-
-        if (resetCandidates.length > 0) {
-                return Math.min(...resetCandidates);
-        }
-
-        return null;
-}
-
-const MAX_RETRY_DELAY_MS = 5 * 60 * 1000;
-
-function toNumber(value: unknown): number | undefined {
-        if (value === null || value === undefined) return undefined;
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function extractErrorDiagnostics(
-        response: Response,
-        options?: ErrorHandlingOptions,
-): ErrorDiagnostics | undefined {
-        const requestId =
-                response.headers.get("x-request-id") ??
-                response.headers.get("request-id") ??
-                response.headers.get("openai-request-id") ??
-                response.headers.get("x-openai-request-id") ??
-                undefined;
-        const cfRay = response.headers.get("cf-ray") ?? undefined;
-
-        const diagnostics: ErrorDiagnostics = {
-                httpStatus: response.status,
-                requestId,
-                cfRay,
-                correlationId: options?.requestCorrelationId,
-                threadId: options?.threadId,
-        };
-
-        for (const [key, value] of Object.entries(diagnostics)) {
-                if (value === undefined || value === "") {
-                        delete diagnostics[key as keyof ErrorDiagnostics];
-                }
-        }
-
-        return Object.keys(diagnostics).length > 0 ? diagnostics : undefined;
-}
+ * option), then `providerOptions.openai.serviceTier`×^÷¶‰Ëkºwµç[Ù[
+ÜšYÚ[˜[[Ù[
+NÂ‚BBX›ÙK›[Ù[H›Ü›X[^™Y[Ù[Â‚BBX›ÙKš[œİXİ[ÛœÈH[œİ\™R[œİXİ[Û’Y[]J‚BBBX›ÙKš[œİXİ[ÛœË‚BBB[›Ü›X[^™Y[Ù[‚BBJNÂ‚BBX›ÙKš[œ]H\Ù\˜XÚÙ[™[Ù[Y[]SY\ÜØYÙJ›ÙKš[œ]›Ü›X[^™Y[Ù[
+NÂ‚BBKËÈ˜]]™H[ÙHÙY\ÈHÜİ	ÜÈY™›Ü]İ[\Y\ÈB‚BBKËÈ˜[Z[HÛ[\ÈYØXŞH[ÙHÙ\Îˆ[˜X\ÈHÛY[\ÚYHY\‚‚BBKËÈÙ[\ÈX^[™›Û™XØX^ØYÚİ\ÈÚ]B‚BBKËÈ˜[Z[HXØÙ\ËˆÚ]İ]\ËHY˜][[ÙH]HÜİ‚BBKËÈ˜\šX[	ÜÈ[˜XÛˆHÚ\™H™\˜˜][K‚‚BBZYˆ
+›ÙKœ™X\ÛÛš[™ÏË™Y™›Ü
+HÂ‚BBBX›ÙKœ™X\ÛÛš[™ÈHÛ[\™X\ÛÛš[™Ñ›Ü“[Ù[
+›ÙKœ™X\ÛÛš[™Ë›Ü›X[^™Y[Ù[
+NÂ‚BB_B‚BBX\TÙ\šXÙUY\Š›ÙK™\]Y\İYÙ\šXÙUY\ŠNÂ‚BBKËÈÛÙ^[Ø^\ÈÙ[™ÈHØ][ÙÈY˜][İ™\˜›ÜÚ]HÚ[ˆ›İ[™Â‚BBKËÈÚÜÙHÛ™H
+ÛÜ™KÜÜ˜ËØÛY[œœÊNÈ˜]]™H[ÙHÙ\ÈHØ[YH˜]\‚‚BBKËÈ[ˆX]š[™ÈH˜XÚÙ[™È]ÈİÛˆY˜][‚‚BBXÛÛœİY˜][™\˜›ÜÚ]HHÙ]ÛÙ^Ø][ÙÑ[J›Ü›X[^™Y[Ù[
+OË™Y˜][™\˜›ÜÚ]NÂ‚BBZYˆ
+Y˜][™\˜›ÜÚ]H	‰ˆX›ÙK^Ë™\˜›ÜÚ]JHÂ‚BBBX›ÙK^HÈ‹‹˜›ÙK^™\˜›ÜÚ]NˆY˜][™\˜›ÜÚ]HNÂ‚BB_B‚‚BBKËÈ˜]]™H[ÙH\ÈHYÚ\ˆ˜[œÙ›Ü›K›İH\Üİ›İYÚˆB‚BBKËÈİ][\ÜËÜš]˜XŞH[˜\šX[È\HÛˆU‘T–HÛÙ^X›İ[™™\]Y\İ‚‚BBKËÈHÚ]Ô˜XÚÙ[™™\]Z\™\ÈİÜ™OY˜[ÙH[™H[˜Ü\Y\™X\ÛÛš[™Â‚BBKËÈ[˜ÛYK[™Û›Üš[™ÈH›ÙH]ÛZ]È
+ÜˆÛÛ˜YXİÊH[HZ]\‚‚BBKËÈÈ\İ™X[HÜˆÚ[[HİÜ™\ÈH™\]Y\İÙ\™\‹\ÚYK‚‚BBX›ÙKœİÜ™HH˜[ÙNÂ‚BBXÛÛœİ[˜ÛYHH\œ˜^Kš\Ğ\œ˜^J›ÙKš[˜ÛYJHÈË‹‹˜›ÙKš[˜ÛYWHˆ×NÂ‚BBZYˆ
+Z[˜ÛYKš[˜ÛY\Êœ™X\ÛÛš[™Ë™[˜Ü\YØÛÛ[ŠJHÂ‚BBBZ[˜ÛYKœ\Ú
+œ™X\ÛÛš[™Ë™[˜Ü\YØÛÛ[ŠNÂ‚BB_B‚BBX›ÙKš[˜ÛYHH[˜ÛYNÂ‚‚BB[ÙÔ™\]Y\İ
+Ñ×ÔÕQÑTËQ•T—ÕS”Ñ“Ô“KÂ‚BBB]\›‚BBB[ÜšYÚ[˜[[Ù[‚BBB[›Ü›X[^™Y[Ù[‚BBBZ\ÕÛÛÎˆHX›ÙKÛÛË‚BBBZ\Ò[œ]ˆHX›ÙKš[œ]‚BBBZ[œ][™İˆ›ÙKš[œ]Ë›[™İ‚BBB\™\]Y\İ˜[œÙ›Ü›S[ÙK‚BBBX›ÙNˆ›ÙH\È[šÛ›İÛˆ\È™XÛÜ™İš[™Ë[šÛ›İÛ‹‚BB_JNÂ‚‚BBKËÈ›ÙXİ^\ÈÛ\ÜÚXÎÈ]H\ÈHÙ\šX[^™K][YHšY]È
+ÙYHÚ\P›ÙQ›Ü“[Ù[
+K‚‚BB\™]\›ˆÂ‚BBBX›ÙK‚BBB]\]Y[š]ˆÂ‚BBBBK‹‹Š[š]ÏÈßJK‚BBBBX›ÙNˆ”ÓÓ‹œİš[™ÚYJÚ\P›ÙQ›Ü“[Ù[
+›ÙJJK‚BBB_K‚BBB\™\]Y\İYÙ\šXÙUY\‹‚BB_NÂ‚B_B‚‚BKËÈ›Ü›X[^™H[Ù[š\œİÈ]\›Z[™HÚXÚ[œİXİ[ÛœÈÈ™]Ú‚BKËÈ\È[œİ\™\ÈÙHÙ]HÛÜœ™Xİ[Ù[\ÜXÚYšXÈ›Û\‚BXÛÛœİ›Ü›X[^™Y[Ù[H›Ü›X[^™S[Ù[
+ÜšYÚ[˜[[Ù[
+NÂ‚BXÛÛœİ[Ù[˜[Z[HHÙ][Ù[˜[Z[J›Ü›X[^™Y[Ù[
+NÂ‚‚BKËÈÙÈÜšYÚ[˜[™\]Y\İ‚B[ÙÔ™\]Y\İ
+Ñ×ÔÕQÑTË‘Q“Ô‘WÕS”Ñ“Ô“KÂ‚BB]\›‚BB[ÜšYÚ[˜[[Ù[‚BB[[Ù[ˆ›ÙK›[Ù[‚BBZ\ÕÛÛÎˆHX›ÙKÛÛË‚BBZ\Ò[œ]ˆHX›ÙKš[œ]‚BBZ[œ][™İˆ›ÙKš[œ]Ë›[™İ‚BBXÛÙ^[ÙK‚BB\™\]Y\İ˜[œÙ›Ü›S[ÙK‚BBX›ÙNˆ›ÙH\È[šÛ›İÛˆ\È™XÛÜ™İš[™Ë[šÛ›İÛ‹‚B_JNÂ‚‚BKËÈ™]Ú[Ù[\ÜXÚYšXÈÛÙ^[œİXİ[ÛœÈ
+ØXÚY\ˆ[Ù[˜[Z[JB‚BXÛÛœİÛÙ^[œİXİ[ÛœÈH]ØZ]Ù]ÛÙ^[œİXİ[ÛœÊ›Ü›X[^™Y[Ù[
+NÂ‚‚BKËÈ˜[œÙ›Ü›H™\]Y\İ›ÙB‚BXÛÛœİ˜[œÙ›Ü›YY›ÙHH]ØZ]˜[œÙ›Ü›T™\]Y\İ›ÙJ‚BBX›ÙK‚BBXÛÙ^[œİXİ[ÛœË‚BB]\Ù\ÛÛ™šYË‚BBXÛÙ^[ÙK‚BB[Ü[ÛœÏË™˜\İÙ\ÜÚ[ÛˆÏÈ˜[ÙK‚BB[Ü[ÛœÏË™˜\İÙ\ÜÚ[Û”İ˜]YŞHÏÈšXœšY‹‚BB[Ü[ÛœÏË™˜\İÙ\ÜÚ[Û“X^[œ]][\ÈÏÈÌ‚BJNÂ‚BX\TÙ\šXÙUY\Š˜[œÙ›Ü›YY›ÙK™\]Y\İYÙ\šXÙUY\ŠNÂ‚‚BKËÈÙÈ˜[œÙ›Ü›YY™\]Y\İ‚B[ÙÔ™\]Y\İ
+Ñ×ÔÕQÑTËQ•T—ÕS”Ñ“Ô“KÂ‚BB]\›‚BB[ÜšYÚ[˜[[Ù[‚BB[›Ü›X[^™Y[Ù[ˆ˜[œÙ›Ü›YY›ÙK›[Ù[‚BB[[Ù[˜[Z[K‚BBZ\ÕÛÛÎˆH]˜[œÙ›Ü›YY›ÙKÛÛË‚BBZ\Ò[œ]ˆH]˜[œÙ›Ü›YY›ÙKš[œ]‚BBZ[œ][™İˆ˜[œÙ›Ü›YY›ÙKš[œ]Ë›[™İ‚BB\™X\ÛÛš[™Îˆ˜[œÙ›Ü›YY›ÙKœ™X\ÛÛš[™È\È[šÛ›İÛ‹‚BB]^™\˜›ÜÚ]Nˆ˜[œÙ›Ü›YY›ÙK^Ë™\˜›ÜÚ]K‚BBZ[˜ÛYNˆ˜[œÙ›Ü›YY›ÙKš[˜ÛYK‚BB\™\]Y\İ˜[œÙ›Ü›S[ÙK‚BBX›ÙNˆ˜[œÙ›Ü›YY›ÙH\È[šÛ›İÛˆ\È™XÛÜ™İš[™Ë[šÛ›İÛ‹‚B_JNÂ‚‚BBKËÈ˜[œÙ›Ü›YY›ÙXİ^\ÈÛ\ÜÚXÈÛÈH[œİ\ÜY[[Ù[˜[˜XÚÈØ[‚‚BBKËÈ™K\Ù\šX[^™H]›ÜˆH›Û‹[]H[Ù[ˆ]HÚ\[™È\[œÈ\™K\‚‚BBKËÈ][\YØZ[œİH[Ù[XİX[H™Z[™ÈÙ[‚‚BB\™]\›ˆÂ‚BBBX›ÙNˆ˜[œÙ›Ü›YY›ÙK‚BBB]\]Y[š]ˆÂ‚BBBBK‹‹Š[š]ÏÈßJK‚BBBBX›ÙNˆ”ÓÓ‹œİš[™ÚYJÚ\P›ÙQ›Ü“[Ù[
+˜[œÙ›Ü›YY›ÙJJK‚BBB_K‚BBB\™\]Y\İYÙ\šXÙUY\‹‚BB_NÂ‚_HØ]Ú
+JHÂ‚B[ÙÑ\œ›ÜŠ	ÑT”“Ô—ÓQTÔĞQÑTË”‘TUQTÕÔT”ÑWÑT”“ÔŸXJNÂ‚B\™]\›ˆ[™Yš[™YÂ‚_BŸB‚‹ÊŠ‚ˆ
+ˆÜ™X]\ÈXY\œÈ›ÜˆÛÙ^TH™\]Y\İÂˆ
+ˆ\˜[H[š]H™\]Y\İ[š]Ü[ÛœÂˆ
+ˆ\˜[HXØÛİ[YHÚ]ÔXØÛİ[Qˆ
+ˆ\˜[HXØÙ\ÜÕÚÙ[ˆHĞ]]XØÙ\ÜÈÚÙ[‚ˆ
+ˆ\˜[HÜÈHÜ[Û˜[\˜[Y]\œÈ[˜ÛY[™È[Ù[›Û\ØXÚRÙ^K[™Ü™Ø[š^˜][Û’Yˆ
+ˆ™]\›œÈXY\œÈØš™XİÚ][™\]Z\™YÛÙ^XY\œÂˆ
+‹Â™^Ü[˜İ[ÛˆÜ™X]PÛÙ^XY\œÊˆ[š]ˆ™\]Y\İ[š][™Yš[™YˆXØÛİ[Yˆİš[™ËˆXØÙ\ÜÕÚÙ[ˆİš[™ËˆÜÏÎˆÂˆ[Ù[Îˆİš[™ÎÂˆ›Û\ØXÚRÙ^OÎˆİš[™ÎÂˆÜ™Ø[š^˜][Û’YÎˆİš[™ÎÂˆÊŠˆ™\ÛÛ™YÙ\šXÙWİY\˜ÛˆHÚ\™K›ÜˆXÛÙ^\›İ][™ËZ[ˆ
+‹ÂˆÙ\šXÙUY\Îˆİš[™ÎÂˆÊŠˆİXÚŞK\›İ][™ÈÚÙ[ˆØ\\™YX\›Y\ˆ[ˆHØ[YH\›‹ˆ
+‹Âˆ\›”İ]OÎˆİš[™ÎÂˆKŠNˆXY\œÈÂ‚XÛÛœİXY\œÈH™]ÈXY\œÊ[š]ËšXY\œÈÏÈßJNÂ‚ZXY\œË™[]JX\KZÙ^HŠNÈËÈ™[[İ™H[H^\İ[™ÈTHÙ^B‚ZXY\œËœÙ]
+]]Üš^˜][Ûˆ‹™X\™\ˆ	ØXØÙ\ÜÕÚÙ[ŸX
+NÂ‚ZXY\œËœÙ]
+ÔSRWÒPQT”ËPĞÓÕS•ÒQXØÛİ[Y
+NÂ‚ZXY\œËœÙ]
+ÔSRWÒPQT”Ë‘UKÔSRWÒPQT—ÕSQTË‘UWÔ‘TÔÓ”ÑTÊNÂ‚‚KËÈÔMK‹ÔMˆ\İ˜H[™H^Xœ™XZÈY\œÈ\™HÙ\™Yİ™\ˆB‚KËÈ™\ÜÛœÙ\Ë[]H]‚‚ZYˆ
+\Ù\Ô™\ÜÛœÙ\Ó]JÜÏË›[Ù[
+JHÂ‚BZXY\œËœÙ]
+‘TÔÓ”ÑT×ÓUWÒPQT‹‘TÔÓ”ÑT×ÓUWÒPQT—ÕSQJNÂ‚_H[ÙHÂ‚BZXY\œË™[]J‘TÔÓ”ÑT×ÓUWÒPQTŠNÂ‚_B‚‚KËÈÜšYÚ[˜]Üˆ[™PH]\İYÜ™YNˆH˜XÚÙ[™]˜[X]\È[Ù[[][Y[‚KËÈ\ˆÜšYÚ[˜]Üˆ[™™XYÈHÛY[™\œÚ[Ûˆœ›ÛHHPH›ÙXİÚÙ[‹‚‚KËÈÜMKˆY\œÈY˜][ÈHÜİ
+Ü[˜ÛÙJHY[]H8 %HÛ™HZ[‚‚KËÈÜ[˜ÛÙH\ÜÙ\ÈÛÛÚ]ÛˆXØÛİ[È]™Z™XİÛÙ^ØÛWÜœØ
+ÌNMŠNÂ‚KËÈ]™\][™È[ÙHÙY\ÈHÛÙ^ÓHY[]Hœ›ÛHˆÌNNKˆHÜİ	ÜÂ‚KËÈİÛˆPH
+Ú[ˆH[[YH[š™XİYÛ™JHÙY\ÈHY™\\ÙYÜ[˜ÛÙB‚KËÈ™\œÚ[Ûˆ[ˆŞ[˜ÈÚ]H™X[ÜİZ[‚‚XÛÛœİÜİ\Ù\YÙ[HXY\œË™Ù]
+\Ù\‹XYÙ[ŠHÏÈ[™Yš[™YÂ‚XÛÛœİY[]HH™\ÛÛ™PÛY[Y[]JÜÏË›[Ù[Üİ\Ù\YÙ[
+NÂ‚ZXY\œËœÙ]
+ÔSRWÒPQT”Ë“Ô’QÒSUÔ‹Y[]K›ÜšYÚ[˜]ÜŠNÂ‚ZYˆ
+›ØÙ\ÜË™[‹ÓÑVĞUUÑTĞP“WĞÓÑVÕTÑT—ĞQÑS•OOHŒHŠHÂ‚BZXY\œËœÙ]
+\Ù\‹XYÙ[‹Y[]K\Ù\YÙ[
+NÂ‚_B‚KËÈÛÙ^	ÜÈ›İšY\ˆÛÛ™šYÈÙ[™È™\œÚ[ÛˆÛY[™\œÚ[Û˜Ûˆ]™\B‚KËÈ™\]Y\İ
+ÛÙ^\œËÛ[Ù[\›İšY\‹Z[™›ÊKˆÛ›HYX[š[™Ù[Ú[ˆÛZ[Z[™Â‚KËÈHÛÙ^ÓHY[]NÈZ[ˆÜ[˜ÛÙHÙ\È›İÙ[™]‚‚XÛÛœİÛÙ^™\œÚ[ÛˆB‚BZY[]K›ÜšYÚ[˜]ÜˆOOHÔSRWÒPQT—ÕSQTË“Ô’QÒSUÔ—ĞÓÑV‚BBOÈ×˜ÛÙ^ØÛWÜœ×ÊÊÊKË™^XÊY[]K\Ù\YÙ[
+OË–ÌWB‚BBNˆ[™Yš[™YÂ‚ZYˆ
+ÛÙ^™\œÚ[ÛŠHXY\œËœÙ]
+ÔSRWÒPQT”Ë•‘T”ÒSÓ‹ÛÙ^™\œÚ[ÛŠNÂ‚Y[ÙHXY\œË™[]JÔSRWÒPQT”Ë•‘T”ÒSÓŠNÂ‚‚KËÈÛÙ^Ù[™ÈXÛÙ^\›İ][™ËZ[ˆ[Ù[OÛYÏ–ÎİY\OY\—XÛˆ]™\B‚KËÈÚ]ÔX˜XÚÙ[™™\]Y\İ
+ÛÙ^\œËØÛÜ™KÜÜ˜ËØÛY[œœÂ‚KËÈZ[Ü›İ][™×Ú[ÚXY\˜
+K‚‚ZYˆ
+ÜÏË›[Ù[
+HÂ‚BZXY\œËœÙ]
+ÔSRWÒPQT”Ë”“ÕUS‘×ÒS•Z[›İ][™Ò[
+ÜË›[Ù[ÜËœÙ\šXÙUY\ŠJNÂ‚_H[ÙHÂ‚BZXY\œË™[]JÔSRWÒPQT”Ë”“ÕUS‘×ÒS•
+NÂ‚_B‚ZYˆ
+ÜÏË\›”İ]JHXY\œËœÙ]
+ÔSRWÒPQT”Ë•T“—ÔÕUKÜË\›”İ]JNÂ‚Y[ÙHXY\œË™[]JÔSRWÒPQT”Ë•T“—ÔÕUJNÂ‚ˆËÈÛÙ^ŒMˆÙ[™ÈÙ\ÜÚ[Û‹ZYØ™XYZY
+ÛÙ^X\KÜÜ˜ËÜ™\]Y\İËÂˆËÈXY\œËœœÊNÈH[™\œØÛÜ™YÙ\ÜÚ[Û—ÚYØÛÛ™\œØ][Û—ÚYZ\ˆ\ÈBˆËÈ™KSX^KLŒˆ›Ü›Kİ[Ù[[Û™ÜÚYH›Üˆ˜XÚÙ[™È]Ù^HÛˆ]‚ˆÛÛœİØXÚRÙ^HHÜÏËœ›Û\ØXÚRÙ^NÂˆ›Üˆ
+ÛÛœİ˜[YHÙˆÂˆÔSRWÒPQT”ËÓÓ•‘T”ĞUSÓ—ÒQˆÔSRWÒPQT”Ë”ÑTÔÒSÓ—ÒQˆÔSRWÒPQT”Ë”ÑTÔÒSÓ—ÒQÕŒ‹ˆÔSRWÒPQT”Ë•‘PQÒQˆJHÂˆYˆ
+ØXÚRÙ^JHXY\œËœÙ]
+˜[YKØXÚRÙ^JNÂˆ[ÙHXY\œË™[]J˜[YJNÂˆB‚ˆËÈ\İ™X[HÛÙ^™]™\ˆÙ[™ÈÜ[˜ZK[Ü™Ø[š^˜][Û˜ÛˆÚ]ÔPÛÙ^ˆËÈ™\]Y\İÈ8 %ÛÜšÜÜXÙH›İ][™È\ÈØ\œšYY[\™[HHÚ]ÜXXØÛİ[ZY‚ˆËÈ[›š[™È[ˆÜ™ÈØ[ˆÚYH˜XÚÙ[™	ÜÈ[][Y[]˜[X][ÛˆÈBˆËÈÛÜšÜÜXÙHİ]ÚYHH[Z]Y™]šY]È[™[ˆİ\Ú\ÙKY[]YˆËÈXØÛİ[
+ÜMK‹\ÛÛÌNMŠKˆYØXŞH™Z]š[Üˆİ^\ÈÜZ[ˆ›Üˆ][K[Ü™ÂˆËÈÙ]\È]™[YYÛˆ]‚ˆÛÛœİÜ™Ø[š^˜][Û’YHÜÏË›Ü™Ø[š^˜][Û’YÂˆYˆ
+ˆÜ™Ø[š^˜][Û’Y	‰‚ˆ›ØÙ\ÜË™[‹ÓÑVĞUUÔÑS‘ÓÔ‘ĞS’VUSÓ—ÒPQTˆOOHŒH‚ˆ
+HÂˆXY\œËœÙ]
+ÔSRWÒPQT”Ë“Ô‘ĞS’VUSÓ—ÒQÜ™Ø[š^˜][Û’Y
+NÂˆH[ÙHÂˆXY\œË™[]JÔSRWÒPQT”Ë“Ô‘ĞS’VUSÓ—ÒQ
+NÂˆB‚ˆXY\œËœÙ]
+˜XØÙ\‹^Ù]™[\İ™X[HŠNÂˆ™]\›ˆXY\œÎÂŸB‚‹ÊŠ‚ˆ
+ˆ[™\È\œ›Üˆ™\ÜÛœÙ\Èœ›ÛHHÛÙ^TBˆ
+ˆ\˜[H™\ÜÛœÙHH\œ›Üˆ™\ÜÛœÙHœ›ÛHTBˆ
+ˆ\˜[HÜ[ÛœÈHXYÛ›ÜİXËY^˜Xİ[ÛˆÜ[ÛœÈ\ÙYÈ[œšXÚH\œ›Ü‚ˆ
+ˆ™]\›œÈ[ˆ\œ›Ü’[™[™Ô™\İ[[™[™ÈH
+ÜÜÚX›H™[X\Y
+H™\ÜÛœÙKˆ
+ˆ\œÙY˜]K[[Z][™›Ë[™HXÛÙY\œ›Üˆ›ÙBˆ
+‹Â™^Ü\Ş[˜È[˜İ[Ûˆ[™Q\œ›Ü”™\ÜÛœÙJˆ™\ÜÛœÙNˆ™\ÜÛœÙKˆÜ[ÛœÏÎˆ\œ›Ü’[™[™ÓÜ[ÛœËŠNˆ›ÛZ\ÙO\œ›Ü’[™[™Ô™\İ[ˆÂˆÛÛœİ›ÙU^H]ØZ]ØY™T™XY›ÙJ™\ÜÛœÙJNÂˆÛÛœİX\YHX\\ØYÙS[Z]Ú]›ÙJ™\ÜÛœÙK›ÙU^
+NÂˆˆËÈ[][Y[\œ›ÜœÈ™]\›ˆH™XYK]Ë]\ÙH™\ÜÛœÙHÚ]Èİ]\ÂˆYˆ
+X\Y	‰ˆX\Yœİ]\ÈOOHÔÕUTË‘“Ô’QSŠHÂˆ™]\›ˆÈ™\ÜÛœÙNˆX\Y˜]S[Z]ˆ[™Yš[™Y\œ›Ü›ÙNˆ[™Yš[™YNÂˆBˆˆÛÛœİš[˜[™\ÜÛœÙHHX\YÏÈ™\ÜÛœÙNÂ‚ˆ]\œ›Ü›ÙNˆ[šÛ›İÛÂˆHÂˆ\œ›Ü›ÙHH›ÙU^È”ÓÓ‹œ\œÙJ›ÙU^
+Hˆ[™Yš[™YÂˆHØ]ÚÂˆ\œ›Ü›ÙHHÈY\ÜØYÙNˆ›ÙU^NÂˆB‚ˆÛÛœİXYÛ›ÜİXÜÈH^˜Xİ\œ›Ü‘XYÛ›ÜİXÜÊš[˜[™\ÜÛœÙKÜ[ÛœÊNÂˆÛÛœİ›Ü›X[^™Y\œ›ÜˆH›Ü›X[^™Q\œ›Ü”^[ØY
+ˆ\œ›Ü›ÙKˆ›ÙU^ˆš[˜[™\ÜÛœÙKœİ]\Õ^ˆš[˜[™\ÜÛœÙKœİ]\ËˆXYÛ›ÜİXÜËˆ
+NÂˆÛÛœİ\œ›Ü”™\ÜÛœÙHH[œİ\™RœÛÛ‘\œ›Ü”™\ÜÛœÙJš[˜[™\ÜÛœÙK›Ü›X[^™Y\œ›ÜŠNÂˆÛÛœİ™]P\ÔÙ\™\‘\œ›ÜˆH\ÔÙ\™\“İ™\›ØYY\œ›ÜŠ›Ü›X[^™Y\œ›ÜŠNÂˆËÈXÚYHÛ˜ÙKœ›ÛHHØ[YHİ™\›ØY™\™XİHØ[\ˆœ˜[˜Ú\ÈÛ‹ÛÂˆËÈH\˜X›H›ØÚÈ[™H™]KXY\ˆ[^HØ[ˆ™]™\ˆ\ØYÜ™YHX›İ]ˆËÈÚ]\ˆ\ÙHXY\œÈYX[ˆ[][™Ë‚ˆÛÛœİ][İRXY\œĞ]]Üš]]]™HH\Ô][İRXY\]]Üš]Jˆš[˜[™\ÜÛœÙKœİ]\Ëˆ™]P\ÔÙ\™\‘\œ›Ü‹ˆ
+NÂˆÛÛœİ˜]S[Z]H^˜Xİ˜]S[Z][™›Ñœ›ÛP›ÙJˆš[˜[™\ÜÛœÙKˆ›ÙU^ˆ][İRXY\œĞ]]Üš]]]™Kˆ
+NÂ‚ˆYˆ
+š[˜[™\ÜÛœÙKœİ]\ÈOOHÔÕUTË•SUUÔ’V‘Q
+HÂˆÙÕØ\›ŠÛÙ^\İ™X[H™]\›™YH[˜]]Üš^™Y‹XYÛ›ÜİXÜÊNÂˆB‚ˆÙÔ™\]Y\İ
+Ñ×ÔÕQÑTË‘T”“Ô—Ô‘TÔÓ”ÑKÂˆİ]\Îˆš[˜[™\ÜÛœÙKœİ]\Ëˆİ]\Õ^ˆš[˜[™\ÜÛœÙKœİ]\Õ^ˆXYÛ›ÜİXÜËˆJNÂ‚ˆ™]\›ˆÂ‚B\™\ÜÛœÙNˆ\œ›Ü”™\ÜÛœÙK‚B\˜]S[Z]‚BY\œ›Ü›ÙNˆ›Ü›X[^™Y\œ›Ü‹‚B\™]P\ÔÙ\™\‘\œ›Ü‹‚B\][İRXY\œĞ]]Üš]]]™Nˆ][İRXY\œĞ]]Üš]]]™H	‰ˆ˜]S[Z]OOH[™Yš[™Y‚_NÂŸB‚‹ÊŠ‚ˆ
+ˆ[™\ÈİXØÙ\ÜÙ[™\ÜÛœÙ\Èœ›ÛHHÛÙ^TBˆ
+ˆÛÛ™\ÈÔÑHÈ”ÓÓˆ›Üˆ›Û‹\İ™X[Z[™È™\]Y\İÈ
+Ù[™\˜]U^
+Bˆ
+ˆ\ÜÙ\È›İYÚÔÑH›Üˆİ™X[Z[™È™\]Y\İÈ
+İ™X[U^
+Bˆ
+ˆ\˜[H™\ÜÛœÙHHİXØÙ\ÜÈ™\ÜÛœÙHœ›ÛHTBˆ
+ˆ\˜[H\Ôİ™X[Z[™ÈHÚ]\ˆ\È\ÈHİ™X[Z[™È™\]Y\İ
+İ™X[O]YH[ˆ›ÙJBˆ
+ˆ\˜[HÜ[ÛœÈHÜ[Û˜[İ™X[Tİ[[Y[İ]\Ø
+[\‹XÚ[šÈØ\
+H[™ˆ
+ˆX^İ™X[Q\˜][Û“\Ø
+İ[ÜİZXY\œÈXY[™JHİ™\œšY\Âˆ
+ˆ™]\›œÈ›ØÙ\ÜÙY™\ÜÛœÙH
+ÔÑx¡¤’”ÓÓˆ›Üˆ›Û‹\İ™X[Z[™Ëİ™X[H›Üˆİ™X[Z[™ÊBˆ
+‹Â™^Ü\Ş[˜È[˜İ[Ûˆ[™TİXØÙ\ÜÔ™\ÜÛœÙJˆ™\ÜÛœÙNˆ™\ÜÛœÙKˆ\Ôİ™X[Z[™Îˆ›ÛÛX[‹ˆÜ[ÛœÏÎˆÈİ™X[Tİ[[Y[İ]\ÏÎˆ[X™\ÈX^İ™X[Q\˜][Û“\ÏÎˆ[X™\ˆKŠNˆ›ÛZ\ÙO™\ÜÛœÙOˆÂˆËÈÚXÚÈ›Üˆ\™XØ][ÛˆXY\œÈ
+‘ÈNM
+BˆÛÛœİ\™XØ][ÛˆH™\ÜÛœÙKšXY\œË™Ù]
+‘\™XØ][ÛˆŠNÂˆÛÛœİİ[œÙ]H™\ÜÛœÙKšXY\œË™Ù]
+”İ[œÙ]ŠNÂˆYˆ
+\™XØ][Ûˆİ[œÙ]
+HÂˆÙÕØ\›ŠTH\™XØ][Ûˆ›İXÙXÈ\™XØ][Û‹İ[œÙ]JNÂˆB‚ˆÛÛœİ™\ÜÛœÙRXY\œÈH[œİ\™PÛÛ[\J™\ÜÛœÙKšXY\œÊNÂ‚‚KËÈ›Üˆ›Û‹\İ™X[Z[™È™\]Y\İÈ
+Ù[™\˜]U^
+KÛÛ™\ÔÑHÈ”ÓÓ‚‚ZYˆ
+Z\Ôİ™X[Z[™ÊHÂ‚B\™]\›ˆ]ØZ]ÛÛ™\ÜÙUÒœÛÛŠ™\ÜÛœÙK™\ÜÛœÙRXY\œËÜ[ÛœÊNÂ‚_B‚‚KËÈ›Üˆİ™X[Z[™È™\]Y\İÈ
+İ™X[U^
+K™]\›ˆİ™X[H\ËZ\Â‚\™]\›ˆ™]È™\ÜÛœÙJ™\ÜÛœÙK˜›ÙKÂ‚B\İ]\Îˆ™\ÜÛœÙKœİ]\Ë‚B\İ]\Õ^ˆ™\ÜÛœÙKœİ]\Õ^‚BZXY\œÎˆ™\ÜÛœÙRXY\œË‚_JNÂŸB‚‹ÊŠ‚ˆ
+ˆ™XY[ˆ\œ›Ü‹ÙXYÛ›ÜİXÈ›ÙH[™\ˆH\™]HØ\[™Hİ[[Y[İ]ˆ
+ˆ[ˆ[ˆ]›İYÚHÙÙÙ\‰ÜÈÙXÜ™]X\ÚÚ[™Ë‚ˆ
+‚ˆ
+ˆHÛÛÛ™J
+K^
+
+XØ\È[˜›İ[™Y
+HMLPˆ\œ›Üˆ›ÙHÜZÙYHX\ˆ
+ˆHŒÌPŠH[™Y›ÈXY[™H
+H›ÙH]š\Y›Ü™]™\ˆ[™ÈHÚÛBˆ
+ˆ\œ›Üˆ]8 %Hİ[XXÚ[™\HÛ›H^\İÈÛˆHÔÑH]
+Kˆ[™H˜]Âˆ
+ˆ^›İÙY[È\œ›Ü‹›Y\ÜØYÙX™\˜˜][KÛÈH™]™\œÙK\›ŞHSYÙBˆ
+ˆÚ][\›˜[TÈÜˆ[ˆXÚÙY™X\™\˜ØÚËJ˜ÚÙ[ˆXZÙYÈHÛY[‚ˆ
+ˆH›İ[™Y™XY\ˆØ[˜Ù[ÈHİ™X[H]HØ\ÛÈ˜XÚÜ™\Üİ\™H™XXÚ\Âˆ
+ˆHÛØÚÙ][™X\ÚÔİš[™È\ÈHØ[YH™YXİ[ÛˆH™\]Y\İÙÙÙ\ˆ\Ù\Ë‚ˆ
+‹Â˜\Ş[˜È[˜İ[ÛˆØY™T™XY›ÙJ™\ÜÛœÙNˆ™\ÜÛœÙJNˆ›ÛZ\ÙOİš[™ÏˆÂˆHÂˆÛÛœİ^H]ØZ]™XY›İ[™Y™\ÜÛœÙU^
+™\ÜÛœÙK˜ÛÛ™J
+JNÂˆ™]\›ˆX\ÚÔİš[™Ê^
+NÂˆHØ]ÚÂˆ™]\›ˆˆÂˆBŸB‚™[˜İ[ÛˆX\\ØYÙS[Z]Ú]›ÙJ™\ÜÛœÙNˆ™\ÜÛœÙK›ÙU^ˆİš[™ÊNˆ™\ÜÛœÙH[ÂˆYˆ
+™\ÜÛœÙKœİ]\ÈOOHÔÕUTË““ÕÑ“ÕS‘
+H™]\›ˆ[ÂˆYˆ
+X›ÙU^
+H™]\›ˆ[Â‚‚[]ÛÙHHˆÂ‚]HÂ‚BXÛÛœİ\œÙYH”ÓÓ‹œ\œÙJ›ÙU^
+H\ÈÈ\œ›ÜÎˆÈÛÙOÎˆİš[™È[X™\È\OÎˆİš[™ÈHNÂ‚BXÛÙHH
+\œÙYË™\œ›ÜË˜ÛÙHÏÈ\œÙYË™\œ›ÜË\HÏÈˆŠKÔİš[™Ê
+NÂ‚_HØ]ÚÂ‚BXÛÙHHˆÂ‚_B‚‚KËÈÚXÚÈ›Üˆ[][Y[\œ›ÜœÈš\œİH\ÙHÚİ[“Õ™H™X]Y\È˜]H[Z]Â‚ZYˆ
+\Ñ[][Y[\œ›ÜŠÛÙK›ÙU^
+JHÂ‚B\™]\›ˆÜ™X]Q[][Y[\œ›Ü”™\ÜÛœÙJ›ÙU^
+NÂ‚_B‚‚XÛÛœİ^\İXÚÈH	ØÛÙ_H	Ø›ÙU^XÓİÙ\Ø\ÙJ
+NÂ‚ZYˆ
+Kİ\ØYÙWÛ[Z]Ü™XXÚY˜]WÛ[Z]Ù^ÙYYY\ØYÙH[Z]ÚK\İ
+^\İXÚÊJHÂ‚B\™]\›ˆ[Â‚_B‚ˆÛÛœİXY\œÈH™]ÈXY\œÊ™\ÜÛœÙKšXY\œÊNÂˆ™]\›ˆ™]È™\ÜÛœÙJ›ÙU^Âˆİ]\ÎˆÔÕUTË•Ó×ÓPS–WÔ‘TUQTÕËˆİ]\Õ^ˆ•ÛÈX[H™\]Y\İÈ‹ˆXY\œËˆJNÂŸB‚‹ÊŠ‚ˆ
+ˆÚ]\ˆHXÛÙ^J˜][İHXY\œÈÛˆ[ˆ\œ›Üˆ™\ÜÛœÙHX^H™H\İY\Âˆ
+ˆHXØÛİ[	ÜÈ™X[][İHİ]K‚ˆ
+‚ˆ
+ˆ^H\™H™[Y]˜X›HÛ›HÚ[ˆH˜XÚÙ[™ÙZYÚY\È™\H™\]Y\İYØZ[œİˆ
+ˆH][İH[™™Y\ÙY]›ÜˆH\ØYÙH[Z]8 %K[˜ÛY[™ÈH]ˆ
+ˆX\\ØYÙS[Z]Ú]›ÙX™[X\Yˆ]™\Hİ\ˆ\œ›ÜˆÛ\ÜÈØ[ˆXÚÈHİ[Bˆ
+ˆÛ˜\Úİ[Û™ÜÚYH[ˆ[œ™[]Y˜Z[\™Nˆ[][Y[\œ›ÜœÈ
+\ÜİY\ÈÌM‹ÈÌMÊKˆ
+ˆ]]˜Z[\™\Ë^[™\İ™X[Hİ™\›ØYÈ™\ÜÙY\\ÈHKˆXİ[™ÈÛ‚ˆ
+ˆ]XÚÈ\ÈÚ]›ØÚÙYX[HXØÛİ[È›Üˆİ\œË‚ˆ
+‚ˆ
+ˆ]™\HÛÛœİ[Y\ˆÙˆÜÙHXY\œÈ›İ]\È›İYÚ\È™YXØ]KÛÈH[Bˆ
+ˆ]™\È[ˆ^XİHÛ™HXÙH[œİXYÙˆ™Z[™È™KY\š]™Y\ˆØ[Ú]K‚ˆ
+‹Â™[˜İ[Ûˆ\Ô][İRXY\]]Üš]Jˆİ]\Îˆ[X™\‹ˆ\ÔÙ\™\“İ™\›ØYˆ›ÛÛX[‹ŠNˆ›ÛÛX[ˆÂˆ™]\›ˆİ]\ÈOOHÔÕUTË•Ó×ÓPS–WÔ‘TUQTÕÈ	‰ˆZ\ÔÙ\™\“İ™\›ØYÂŸB‚™[˜İ[Ûˆ^˜Xİ˜]S[Z][™›Ñœ›ÛP›ÙJˆ™\ÜÛœÙNˆ™\ÜÛœÙKˆ›ÙU^ˆİš[™Ëˆ][İRXY\œĞ]]Üš]]]™Nˆ›ÛÛX[‹ŠNˆ˜]S[Z][™›È[™Yš[™YÂˆÛÛœİ\Ôİ]\Ô˜]S[Z]Bˆ™\ÜÛœÙKœİ]\ÈOOHÔÕUTË•Ó×ÓPS–WÔ‘TUQTÕÎÂˆÛÛœİ\œÙY\œ›Ü›ÙHH\œÙTİXİ\™Y\œ›Ü›ÙJ›ÙU^
+NÂˆÛÛœİ\œÙYH\œÙT˜]S[Z]›ÙJ\œÙY\œ›Ü›ÙJNÂˆÛÛœİ\ÔÙ\™\“İ™\›ØYH\ÔÙ\™\“İ™\›ØYY\œ›ÜŠ\œÙY\œ›Ü›ÙJNÂ‚ˆYˆ
+\ÔÙ\™\“İ™\›ØY	‰ˆZ\Ôİ]\Ô˜]S[Z]
+HÂˆ™]\›ˆ[™Yš[™YÂˆB‚ˆÛÛœİ^\İXÚÈH	Ü\œÙYË˜ÛÙHÏÈˆŸH	Ø›ÙU^XÓİÙ\Ø\ÙJ
+NÂˆˆËÈ[][Y[\œ›ÜœÈÚİ[›İ™H™X]Y\È˜]H[Z]ÂˆYˆ
+\Ñ[][Y[\œ›ÜŠ\œÙYË˜ÛÙHÏÈˆ‹›ÙU^
+JHÂˆ™]\›ˆ[™Yš[™YÂˆBˆˆÛÛœİ\Ô˜]S[Z]Bˆ\Ôİ]\Ô˜]S[Z]ˆ\ÔÙ\™\“İ™\›ØYˆİ\ØYÙWÛ[Z]Ü™XXÚY˜]WÛ[Z]Ù^ÙYYY˜]WÛ[Z]\ØYÙH[Z]ÚK\İ
+ˆ^\İXÚËˆ
+NÂˆYˆ
+Z\Ô˜]S[Z]
+H™]\›ˆ[™Yš[™YÂ‚ˆËÈH[˜Ø\Y^]\İY]Ú[™İÈ™\Ù]šY\ÈÛˆHØ[YH]]Üš]H[H\ÂˆËÈH\˜X›H›ØÚÎˆÛˆ[Hİ]\Èİ\ˆ[ˆHÙ[Z[™HHHİ[BˆËÈ\ÙY\\˜Ù[ˆLÛİ[İ\Ú\ÙH™XÛÛYH[ˆİ\œË[Û™Ë[˜Ø\X›BˆËÈ™]PY\“\Ø[™œ™Y^™HHXØÛİ[›İYÚX\šÔ˜]S[Z]YÚ]™X\ÛÛ˜ˆËÈ8 %H^Xİ›ØÚÈHØ[\‹\ÚYHØ]HØ\ÈYYÈ™]™[‚ˆÛÛœİ™]PY\“\ÈBˆ\œÙT™]PY\“\Ê™\ÜÛœÙK\œÙY][İRXY\œĞ]]Üš]]]™JHÏÈŒÂ‚ˆ™]\›ˆÈ™]PY\“\ËÛÙNˆ\œÙYË˜ÛÙHNÂŸB‚š[\™˜XÙH˜]S[Z]\œ›Ü›ÙHÂ‚Y\œ›ÜÎˆÂ‚BXÛÙOÎˆİš[™È[X™\Â‚B]\OÎˆİš[™ÎÂ‚BXÛÛ^ÎˆÂ‚BB]\OÎˆİš[™ÎÂ‚B_NÂ‚B\™\Ù]×Ø]Îˆ[X™\Â‚B\™\Ù]Ø]Îˆ[X™\Â‚B\™]WØY\—Û\ÏÎˆ[X™\Â‚B\™]WØY\Îˆ[X™\Â‚_NÂŸB‚™[˜İ[Ûˆ\œÙT˜]S[Z]›ÙJ‚\\œÙY›ÙNˆ˜]S[Z]\œ›Ü›ÙH[™Yš[™YŠNˆÈÛÙOÎˆİš[™ÎÈ\OÎˆİš[™ÎÈÛÛ^\OÎˆİš[™ÎÈ™\Ù]Ğ]Îˆ[X™\È™]PY\“\ÏÎˆ[X™\ˆH[™Yš[™YÂ‚ZYˆ
+\\œÙY›ÙJH™]\›ˆ[™Yš[™YÂ‚XÛÛœİ\œ›ÜˆH\œÙY›ÙK™\œ›ÜˆÏÈßNÂ‚XÛÛœİÛÙHH
+\œ›Ü‹˜ÛÙHÏÈ\œ›Ü‹\HÏÈˆŠKÔİš[™Ê
+NÂ‚XÛÛœİ\HH\[Ùˆ\œ›Ü‹\HOOHœİš[™ÈˆÈ\œ›Ü‹\Hˆ[™Yš[™YÂ‚XÛÛœİÛÛ^\HH\[Ùˆ\œ›Ü‹˜ÛÛ^Ë\HOOHœİš[™ÈˆÈ\œ›Ü‹˜ÛÛ^\Hˆ[™Yš[™YÂ‚XÛÛœİ™\Ù]Ğ]HÓ[X™\Š\œ›Ü‹œ™\Ù]×Ø]ÏÈ\œ›Ü‹œ™\Ù]Ø]
+NÂ‚KËÈ™]WØY\—Û\Ø\ÈZ[\ÙXÛÛ™ÎÈ™]WØY\˜\ÈÙXÛÛ™ËˆÙY\Z\‚‚KËÈØØ[\È\İ[˜İˆÛÛ\Ú[™È[H[™™YY[™ÈH™\İ[›İYÚ‚KËÈ›Ü›X[^™T™]PY\‰ÜÈL›ÛÚÜÈZÙHÙXÛÛ™Èˆ]\š\İXÈ\›™YB‚KËÈİX‹\ÙXÛÛ™™]WØY\—Û\Ø
+K™ËˆL
+H[ÈH][K[Z[]H˜XÚÛÙ™‹‚‚XÛÛœİ™]PY\“\Ô˜]ÈHÓ[X™\Š\œ›Ü‹œ™]WØY\—Û\ÊNÂ‚XÛÛœİ™]PY\”ÙXÛÛ™ÈHÓ[X™\Š\œ›Ü‹œ™]WØY\ŠNÂ‚XÛÛœİ™]PY\“\ÈB‚B\™]PY\“\Ô˜]ÈOOH[™Yš[™Y‚BBOÈ™]PY\“\Ô˜]Â‚BBNˆ™]PY\”ÙXÛÛ™ÈOOH[™Yš[™Y‚BBBOÈ™]PY\”ÙXÛÛ™È
+ˆL‚BBBNˆ[™Yš[™YÂ‚\™]\›ˆÈÛÙK\KÛÛ^\K™\Ù]Ğ]™]PY\“\ÈNÂŸB‚™[˜İ[Ûˆ\œÙTİXİ\™Y\œ›Ü›ÙJ›ÙNˆİš[™ÊNˆ˜]S[Z]\œ›Ü›ÙH[™Yš[™YÂ‚ZYˆ
+X›ÙJH™]\›ˆ[™Yš[™YÂ‚]HÂ‚B\™]\›ˆ”ÓÓ‹œ\œÙJ›ÙJH\È˜]S[Z]\œ›Ü›ÙNÂ‚_HØ]ÚÂ‚B\™]\›ˆ[™Yš[™YÂ‚_BŸB‚\H\œ›Ü”^[ØYHÂˆ\œ›ÜˆÂˆY\ÜØYÙNˆİš[™ÎÂˆ\OÎˆİš[™ÎÂˆÛÙOÎˆİš[™È[X™\ÂˆÛÛ^ÎˆÂˆ\OÎˆİš[™ÎÂˆNÂˆ[œİ\ÜYÛ[Ù[Îˆİš[™ÎÂˆXYÛ›ÜİXÜÏÎˆ\œ›Ü‘XYÛ›ÜİXÜÎÂˆNÂŸNÂ‚‹ÊŠ‚ˆ
+ˆ\\ˆ›İ[™›Üˆ^][™È[ˆ\œ›Ü‹›Y\ÜØYÙXˆH˜]ËX›ÙH˜[˜XÚÂˆ
+ˆ™[İÈ\ÙYÈXÚÈHÚÛH\İ™X[H›ÙH™\˜˜][H8 %H][KZ[™™YRĞ‚ˆ
+ˆS\œ›ÜˆYÙK[˜Ø]YZY\İš[™ÈÜˆ›İ\È›İHY\ÜØYÙK‚ˆ
+‹Â˜ÛÛœİPVÑT”“Ô—ÓQTÔĞQÑWĞÒT”ÈH—ÌÂ‚‹ÊŠ‚ˆ
+ˆ›][ˆ[™›İ[™^\İ[™Y›Üˆ\œ›Ü‹›Y\ÜØYÙXˆ\İ™X[H›ÙY\È\™Bˆ
+ˆ][K[[™H[™\˜š]˜\š[H\™ÙK[™™Z]\ˆ›Ü\H™[Û™ÜÈ[ˆHšY[ˆ
+ˆ]Ø[\œÈ™[™\ˆ[™ÙÈ™\˜˜][KˆH›İ[™Y™XY\İ™X[HØ\ÈBˆ
+ˆÛİ\˜ÙNÈ\ÈØ\ÈÚ]İ\š]™\È›Ü›X[^˜][Û‹‚ˆ
+‹Â™[˜İ[ÛˆÑ\œ›Ü“Y\ÜØYÙU^
+^ˆİš[™ÊNˆİš[™ÈÂˆÛÛœİ›Ü›X[^™YH^œ™\XÙJ×ÊËÙËˆŠKš[J
+NÂˆYˆ
+›Ü›X[^™Y›[™İHPVÑT”“Ô—ÓQTÔĞQÑWĞÒT”ÊH™]\›ˆ›Ü›X[^™YÂˆ™]\›ˆ	Û›Ü›X[^™YœÛXÙJPVÑT”“Ô—ÓQTÔĞQÑWĞÒT”Ê_x )–İ[˜Ø]YXÂŸB‚™[˜İ[Ûˆ›Ü›X[^™Q\œ›Ü”^[ØY
+ˆ\œ›Ü›ÙNˆ[šÛ›İÛ‹ˆ›ÙU^ˆİš[™Ëˆİ]\Õ^ˆİš[™Ëˆİ]\Îˆ[X™\‹ˆXYÛ›ÜİXÜÏÎˆ\œ›Ü‘XYÛ›ÜİXÜËŠNˆ\œ›Ü”^[ØYÂ‚ZYˆ
+\ÑXXİ]˜]YÛÜšÜÜXÙQ\œ›ÜŠ\œ›Ü›ÙKİ]\ÊJHÂ‚BXÛÛœİ^[ØYˆ\œ›Ü”^[ØYHÂ‚BBY\œ›ÜˆÂ‚BBB[Y\ÜØYÙN‚‚BBBBH•HÙ[XİYÚ]ÔÛÜšÜÜXÙH\ÈXXİ]˜]Yˆ\ÈÛÜšÜÜXÙH[HÚİ[™H™[[İ™Yœ›ÛH›İ][ÛˆÜˆ™KX]]Üš^™Y™Y›Ü™H™]Z[™Ëˆ‹‚BBB]\NˆÛÜšÜÜXÙWÙXXİ]˜]Y‹‚BBBXÛÙNˆPPÕUUQÕÓÔ’ÔÔPÑWÑT”“Ô—ĞÓÑK‚BB_K‚B_NÂ‚BZYˆ
+XYÛ›ÜİXÜÈ	‰ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆ
+HÂ‚BB\^[ØY™\œ›Ü‹™XYÛ›ÜİXÜÈHXYÛ›ÜİXÜÎÂ‚B_B‚B\™]\›ˆ^[ØYÂ‚_B‚ˆYˆ
+\Õ[œİ\ÜYÛÙ^[Ù[›ÜÚ]Ü
+İ]\Ë›ÙU^
+JHÂˆÛÛœİ[œİ\ÜY[Ù[B‚BBY^˜Xİ[œİ\ÜYÛÙ^[Ù[œ›ÛU^
+›ÙU^
+HÏÈœ™\]Y\İY[Ù[Â‚BBBXÛÛœİ^[ØYˆ\œ›Ü”^[ØYHÂ‚BBBBBY\œ›ÜˆÂ‚BBBBBBB[Y\ÜØYÙN‚‚BBBBBBBBBXH[Ù[	Éİ[œİ\ÜY[Ù[IÈ\È›İİ\œ™[H]˜Z[X›H›Üˆ\ÈÚ]ÔXØÛİ[Ú[ˆ\Ú[™ÈÛÙ^Ğ]]ˆ
+Â‚BBBBBBBBBH•\È\È[ˆXØÛİ[İÛÜšÜÜXÙH[][Y[Ø]K›İH[\Ü˜\H˜]H[Z]ˆˆ
+Â‚BBBBBBBBBH‘Y˜][ÜMKˆY\œËÜMKK[™ÜMKXÛÙ^Ù[XİÜœÈ]]ËYYÜ˜YHİÛˆZ\ˆ˜[˜XÚÈÚZ[œÈˆ
+Â‚BBBBBBBBBHŠÜİ]šXHÓÑVĞUUÑTĞP“WÑÔM—ĞUU×ÑSPÒËÑÔMKĞÓÑVLJKˆˆ
+Â‚BBBBBBBBBH•H	ÙÜMKIÈ
+]\İÙ[™\˜[
+K	ÙÜMKXÛÙ^	È
+Ø[›ÛšXØ[
+KÜˆYØXŞH[X\Ù\ÈZÙH	ÙÜMKŒËXÛÙ^	ËÉÙÜMKŒ‹XÛÙ^	ËÜˆ[˜X›H]]ÛX]XÈ˜[˜XÚÈšXHˆ
+Â‚BBBBBBBBBIİ[œİ\ÜYÛÙ^ÛXŞNˆ™˜[˜XÚÈˆ
+ÜˆÓÑVĞUUÕS”ÕTÔ•QÓSÑSÔÓPÖOY˜[˜XÚÊKˆ	È
+Â‚BBBBBBBBBHŠYØXŞNˆÓÑVĞUUÑSPÒ×ÕS”ÕTÔ•QÓSÑSLHÜˆ˜[˜XÚÓÛ•[œİ\ÜYÛÙ^[Ù[
+Kˆ‹‚BBBBBBB]\Nˆ™[][Y[Ù\œ›Üˆ‹‚BBBBBBBXÛÙNˆÒUÔĞÓÑVÕS”ÕTÔ•QÓSÑSĞÓÑK‚BBBBBBB][œİ\ÜYÛ[Ù[ˆ[œİ\ÜY[Ù[‚BBBBB_K‚BBB_NÂˆYˆ
+XYÛ›ÜİXÜÈ	‰ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆ
+HÂˆ^[ØY™\œ›Ü‹™XYÛ›ÜİXÜÈHXYÛ›ÜİXÜÎÂˆBˆ™]\›ˆ^[ØYÂˆB‚ˆYˆ
+\Ô™XÛÜ™
+\œ›Ü›ÙJJHÂˆÛÛœİX^X™Q\œ›ÜˆH\œ›Ü›ÙK™\œ›ÜÂˆYˆ
+\Ô™XÛÜ™
+X^X™Q\œ›ÜŠH	‰ˆ\[ÙˆX^X™Q\œ›Ü‹›Y\ÜØYÙHOOHœİš[™ÈŠHÂˆÛÛœİ^[ØYˆ\œ›Ü”^[ØYHÂˆ\œ›ÜˆÂˆY\ÜØYÙNˆÑ\œ›Ü“Y\ÜØYÙU^
+X^X™Q\œ›Ü‹›Y\ÜØYÙJKˆKˆNÂˆYˆ
+\[ÙˆX^X™Q\œ›Ü‹\HOOHœİš[™ÈŠHÂˆ^[ØY™\œ›Ü‹\HHX^X™Q\œ›Ü‹\NÂˆBˆYˆ
+\[ÙˆX^X™Q\œ›Ü‹˜ÛÙHOOHœİš[™Èˆ\[ÙˆX^X™Q\œ›Ü‹˜ÛÙHOOH›[X™\ˆŠHÂˆ^[ØY™\œ›Ü‹˜ÛÙHHX^X™Q\œ›Ü‹˜ÛÙNÂˆBˆYˆ
+ˆ\Ô™XÛÜ™
+X^X™Q\œ›Ü‹˜ÛÛ^
+H	‰‚ˆ\[ÙˆX^X™Q\œ›Ü‹˜ÛÛ^\HOOHœİš[™È‚ˆ
+HÂˆ^[ØY™\œ›Ü‹˜ÛÛ^HÈ\NˆX^X™Q\œ›Ü‹˜ÛÛ^\HNÂˆBˆYˆ
+XYÛ›ÜİXÜÈ	‰ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆ
+HÂˆ^[ØY™\œ›Ü‹™XYÛ›ÜİXÜÈHXYÛ›ÜİXÜÎÂˆBˆYˆ
+İ]\ÈOOHÔÕUTË•SUUÔ’V‘Q
+HÂˆ^[ØY™\œ›Ü‹›Y\ÜØYÙHH	Ü^[ØY™\œ›Ü‹›Y\ÜØYÙ_H
+[ˆÜ[˜ÛÙH]]ÙÚ[—Yˆ\È\œÚ\İÊXÂˆBˆ™]\›ˆ^[ØYÂˆB‚ˆYˆ
+\[Ùˆ\œ›Ü›ÙK›Y\ÜØYÙHOOHœİš[™ÈŠHÂˆÛÛœİ^[ØYˆ\œ›Ü”^[ØYHÈ\œ›ÜˆÈY\ÜØYÙNˆÑ\œ›Ü“Y\ÜØYÙU^
+\œ›Ü›ÙK›Y\ÜØYÙJHHNÂˆYˆ
+XYÛ›ÜİXÜÈ	‰ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆ
+HÂˆ^[ØY™\œ›Ü‹™XYÛ›ÜİXÜÈHXYÛ›ÜİXÜÎÂˆBˆYˆ
+İ]\ÈOOHÔÕUTË•SUUÔ’V‘Q
+HÂˆ^[ØY™\œ›Ü‹›Y\ÜØYÙHH	Ü^[ØY™\œ›Ü‹›Y\ÜØYÙ_H
+[ˆÜ[˜ÛÙH]]ÙÚ[—Yˆ\È\œÚ\İÊXÂˆBˆ™]\›ˆ^[ØYÂˆB‚ˆËÈ˜\İTK\İ[H›ÙY\ÈØ\œHH[X[‹\™XYX›H\œ›ÜˆÛˆBˆËÈÜ[]™[]Z[šY[
+İš[™ËÜˆH™XÛÜ™Û[™ÂˆËÈY\ÜØYÙKØÛÙKİ\JKˆÚ]İ]\Èœ˜[˜Ú^Hİ\™˜XÙY\ÂˆËÈH˜]È”ÓÓˆİš[™ÈÙˆHÚÛH›ÙK‚ˆÛÛœİ]Z[H\œ›Ü›ÙK™]Z[ÂˆÛÛœİ]Z[Y\ÜØYÙHBˆ\[Ùˆ]Z[OOHœİš[™È‚ˆÈ]Z[ˆˆ\Ô™XÛÜ™
+]Z[
+H	‰ˆ\[Ùˆ]Z[›Y\ÜØYÙHOOHœİš[™È‚ˆÈ]Z[›Y\ÜØYÙBˆˆ[™Yš[™YÂˆYˆ
+\[Ùˆ]Z[Y\ÜØYÙHOOHœİš[™Èˆ	‰ˆ]Z[Y\ÜØYÙKš[J
+JHÂˆÛÛœİ^[ØYˆ\œ›Ü”^[ØYHÂˆ\œ›ÜˆÈY\ÜØYÙNˆÑ\œ›Ü“Y\ÜØYÙU^
+]Z[Y\ÜØYÙJHKˆNÂˆYˆ
+\Ô™XÛÜ™
+]Z[
+JHÂˆYˆ
+\[Ùˆ]Z[\HOOHœİš[™ÈŠHÂˆ^[ØY™\œ›Ü‹\HH]Z[\NÂˆBˆYˆ
+ˆ\[Ùˆ]Z[˜ÛÙHOOHœİš[™Èˆˆ\[Ùˆ]Z[˜ÛÙHOOH›[X™\ˆ‚ˆ
+HÂˆ^[ØY™\œ›Ü‹˜ÛÙHH]Z[˜ÛÙNÂˆBˆBˆYˆ
+XYÛ›ÜİXÜÈ	‰ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆ
+HÂˆ^[ØY™\œ›Ü‹™XYÛ›ÜİXÜÈHXYÛ›ÜİXÜÎÂˆBˆYˆ
+İ]\ÈOOHÔÕUTË•SUUÔ’V‘Q
+HÂˆ^[ØY™\œ›Ü‹›Y\ÜØYÙHH	Ü^[ØY™\œ›Ü‹›Y\ÜØYÙ_H
+[ˆÜ[˜ÛÙH]]ÙÚ[—Yˆ\È\œÚ\İÊXÂˆBˆ™]\›ˆ^[ØYÂˆBˆB‚ˆÛÛœİš[[YYH›ÙU^š[J
+NÂˆYˆ
+š[[YY
+HÂˆÛÛœİ^[ØYˆ\œ›Ü”^[ØYHÈ\œ›ÜˆÈY\ÜØYÙNˆÑ\œ›Ü“Y\ÜØYÙU^
+š[[YY
+HHNÂˆYˆ
+XYÛ›ÜİXÜÈ	‰ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆ
+HÂˆ^[ØY™\œ›Ü‹™XYÛ›ÜİXÜÈHXYÛ›ÜİXÜÎÂˆBˆYˆ
+İ]\ÈOOHÔÕUTË•SUUÔ’V‘Q
+HÂˆ^[ØY™\œ›Ü‹›Y\ÜØYÙHH	Ü^[ØY™\œ›Ü‹›Y\ÜØYÙ_H
+[ˆÜ[˜ÛÙH]]ÙÚ[—Yˆ\È\œÚ\İÊXÂˆBˆ™]\›ˆ^[ØYÂˆB‚ˆYˆ
+İ]\Õ^
+HÂˆÛÛœİ^[ØYˆ\œ›Ü”^[ØYHÈ\œ›ÜˆÈY\ÜØYÙNˆÑ\œ›Ü“Y\ÜØYÙU^
+İ]\Õ^
+HHNÂˆYˆ
+XYÛ›ÜİXÜÈ	‰ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆ
+HÂˆ^[ØY™\œ›Ü‹™XYÛ›ÜİXÜÈHXYÛ›ÜİXÜÎÂˆBˆYˆ
+İ]\ÈOOHÔÕUTË•SUUÔ’V‘Q
+HÂˆ^[ØY™\œ›Ü‹›Y\ÜØYÙHH	Ü^[ØY™\œ›Ü‹›Y\ÜØYÙ_H
+[ˆÜ[˜ÛÙH]]ÙÚ[—Yˆ\È\œÚ\İÊXÂˆBˆ™]\›ˆ^[ØYÂˆB‚ˆÛÛœİ^[ØYˆ\œ›Ü”^[ØYHÈ\œ›ÜˆÈY\ÜØYÙNˆ”™\]Y\İ˜Z[YˆHNÂˆYˆ
+XYÛ›ÜİXÜÈ	‰ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆ
+HÂˆ^[ØY™\œ›Ü‹™XYÛ›ÜİXÜÈHXYÛ›ÜİXÜÎÂˆBˆYˆ
+İ]\ÈOOHÔÕUTË•SUUÔ’V‘Q
+HÂˆ^[ØY™\œ›Ü‹›Y\ÜØYÙHH	Ü^[ØY™\œ›Ü‹›Y\ÜØYÙ_H
+[ˆÜ[˜ÛÙH]]ÙÚ[—Yˆ\È\œÚ\İÊXÂˆBˆ™]\›ˆ^[ØYÂŸB‚™[˜İ[Ûˆ[œİ\™RœÛÛ‘\œ›Ü”™\ÜÛœÙJ™\ÜÛœÙNˆ™\ÜÛœÙK^[ØYˆ\œ›Ü”^[ØY
+Nˆ™\ÜÛœÙHÂˆÛÛœİXY\œÈH™]ÈXY\œÊ™\ÜÛœÙKšXY\œÊNÂˆXY\œËœÙ]
+˜ÛÛ[]\H‹˜\XØ][Û‹ÚœÛÛÈÚ\œÙ]]]‹NŠNÂˆ™]\›ˆ™]È™\ÜÛœÙJ”ÓÓ‹œİš[™ÚYJ^[ØY
+KÂˆİ]\Îˆ™\ÜÛœÙKœİ]\Ëˆİ]\Õ^ˆ™\ÜÛœÙKœİ]\Õ^ˆXY\œË‚_JNÂŸB‚™[˜İ[Ûˆ\œÙT™]PY\“\Êˆ™\ÜÛœÙNˆ™\ÜÛœÙKˆ\œÙY›ÙNˆÈ™\Ù]Ğ]Îˆ[X™\È™]PY\“\ÏÎˆ[X™\ˆH[™Yš[™Yˆ\İ^]\İYÚ[™İÜÎˆ›ÛÛX[‹ŠNˆ[X™\ˆ[ÂˆËÈHÚ[™İÈH˜XÚÙ[™™\ÜÈ\È[HÜ[
+\ÙY\\˜Ù[HL
+BˆËÈİ]˜[šÜÈ]™\Hİ\ˆÚYÛ˜[[™\È[X™\˜][H[˜Ø\Yˆ]È™\Ù]ˆËÈ\ÈHX\›Y\İ[ÛY[HXØÛİ[Ø[ˆÙ\™HYØZ[ÈH™]KXY\˜ˆËÈÙˆÌÈÜˆHÛÛÛ™\ˆZ™\Ù]Ûİ[\İ]HXØÛİ[˜XÚÈ[ÂˆËÈ›İ][ÛˆÈ˜Z[YØZ[ˆ
+\ÜİYHÌŒN
+KˆÛ›HÛ›İ\ˆ]Ú[ˆHØ[\‚ˆËÈØ^\ÈÜÙHXY\œÈ\™H]]Üš]]]™H›Üˆ\È™\ÜÛœÙK‚ˆYˆ
+\İ^]\İYÚ[™İÜÊHÂˆÛÛœİ^]\İY™\Ù]]\ÈHÙ]][İQ^]\İY™\Ù]]\Ê™\ÜÛœÙKšXY\œÊNÂˆYˆ
+^]\İY™\Ù]]\ÈOOH[™Yš[™Y
+HÂˆÛÛœİ[HH^]\İY™\Ù]]\ÈH]K››İÊ
+NÂˆYˆ
+[Hˆ
+H™]\›ˆ[NÂˆBˆB‚ˆYˆ
+\œÙY›ÙOËœ™]PY\“\ÈOOH[™Yš[™Y
+HÂˆËÈ[™XYH›Ü›X[^™YÈZ[\ÙXÛÛ™È[ˆ\œÙT˜]S[Z]›ÙH
+\ÈšY[ˆËÈ\ÙY™\˜˜][KÙXÛÛ™ÈšY[ÛÛ™\YšXH
+ŒL
+KˆÈ“Õ\ÜÂˆËÈ›İYÚHL›ÛÚÜÈZÙHÙXÛÛ™Èˆ]\š\İXËÚXÚÛİ[ˆËÈZ\Ë\ØØ[HHÙ[Z[™HİX‹\ÙXÛÛ™˜[YH[ÈZ[]\ËˆØ\]HZ[‹‚ˆÛÛœİ\ÈH\œÙY›ÙKœ™]PY\“\ÎÂˆYˆ
+[X™\‹š\Ñš[š]J\ÊH	‰ˆ\Èˆ
+HÂˆËÈ›ÛÜˆ][\ÎˆHİX‹[\È˜[YHZÙH™]WØY\—Û\ÎˆBˆËÈ›ÛÜ™YÈ›İÙY[ÈX\šÔ˜]S[Z]YÚ]™X\ÛÛŠ
+KˆËÈÚ\™HH™\›È[^HYX[œÈÚ[™İÈ[\ÙYˆ[™SUTÂˆËÈ^\İ[™È˜]K[[Z]›ØÚÜÈ8 %HÜİ[HHÛİ[ÛX\‚ˆËÈ]™\H›ØÚÈÛˆHXØÛİ[‚ˆ™]\›ˆX]›Z[ŠX]›X^
+KX]™›ÛÜŠ\ÊJKPVÔ‘U–WÑSVWÓTÊNÂˆBˆB‚ˆËÈHXY\ˆ]ÈZ\œ›ÜˆH›ÙHšY[ÈX›İ™H[™Ù]HØ[YHK[Z[‚ˆËÈØ\ˆ[ˆİ™\œÚ^™YÜˆ›Ùİ\È™]KXY\˜]\İ›İœ™Y^™H[ˆXØÛİ[ˆËÈ˜\ˆ\İHØ\H›ÙH][™›Ü˜Ù\ËˆH™\Ù]X]]È™[İÈ\™BˆËÈ[X™\˜][H[˜Ø\Y8 %][İHÚ[™İÜÈYÚ][X][H™\Ù]İ\œÈİ]‚ˆÛÛœİ™]PY\“\ÒXY\ˆH™\ÜÛœÙKšXY\œË™Ù]
+œ™]KXY\‹[\ÈŠNÂˆYˆ
+™]PY\“\ÒXY\ŠHÂˆÛÛœİ\œÙYH[X™\‹œ\œÙR[
+™]PY\“\ÒXY\‹L
+NÂˆYˆ
+S[X™\‹š\Ó˜SŠ\œÙY
+H	‰ˆ\œÙYˆ
+HÂˆ™]\›ˆX]›Z[Š\œÙYPVÔ‘U–WÑSVWÓTÊNÂˆBˆB‚ˆÛÛœİ™]PY\’XY\ˆH™\ÜÛœÙKšXY\œË™Ù]
+œ™]KXY\ˆŠNÂˆYˆ
+™]PY\’XY\ŠHÂˆÛÛœİ\œÙYH[X™\‹œ\œÙR[
+™]PY\’XY\‹L
+NÂˆYˆ
+S[X™\‹š\Ó˜SŠ\œÙY
+H	‰ˆ\œÙYˆ
+HÂˆ™]\›ˆX]›Z[Š\œÙY
+ˆLPVÔ‘U–WÑSVWÓTÊNÂˆBˆËÈ‘ÈÌŒÌH[ÛÈ\›Z]È[ˆXœÛÛ]HY]BˆËÈ
+”™]KPY\ˆÙYŒHØİŒNHÎŒŒÓUŠKˆ\œÙR[Û‚ˆËÈÛ™H\È˜S‹ÛÈÛ›HH›Û‹[[Y\šXÈœ˜[˜Ú™XXÚ\ÂˆËÈ]Kœ\œÙH8 %H[Y\šXËX][›Û‹\ÜÚ]]™H˜[YH
+™YØ]]™JBˆËÈÙY\È]È^\İ[™ÈšYÛ›Ü™H[™˜[›İYÚˆ™\™XİˆBˆËÈ\İİ[œ\œÙXX›H]HZÙ]Ú\ÙH˜[È›İYÚ˜]\ˆ[‚ˆËÈX[Y˜Xİ\š[™ÈH[^NÈ]\™H]\ÈÙ]HØ[YHK[Z[ˆØ\‚ˆYˆ
+[X™\‹š\Ó˜SŠ\œÙY
+JHÂˆÛÛœİ]S\ÈH]Kœ\œÙJ™]PY\’XY\ŠNÂˆYˆ
+S[X™\‹š\Ó˜SŠ]S\ÊJHÂˆÛÛœİ[HH]S\ÈH]K››İÊ
+NÂˆYˆ
+[Hˆ
+HÂˆ™]\›ˆX]›Z[ŠˆX]™›ÛÜŠ[JKˆPVÔ‘U–WÑSVWÓTËˆ
+NÂˆBˆBˆBˆB‚ˆËÈ›ÈÚ[™İÈÛZ[YY^]\İ[Û‹ÛÈ\È\È[ˆÜ™[˜\H›İH˜]\‚ˆËÈ[ˆHÜ[][İNˆHÛÛÛ™\İ™\Ù]\ÈHšYÚÛ™HÈØZ]›Ü‹‚ˆÛÛœİ›İÈH]K››İÊ
+NÂˆÛÛœİ™\Ù]Ø[™Y]\Îˆ[X™\–×HH×NÂ‚ˆËÈ™XYHÛÙ^Ú[™İÜÈ›İYÚHÚ\™Y\œÙ\ˆ˜]\ˆ[ˆBˆËÈ™\Ù]X]XY\ˆ[Û™KÛÈHHØ\œZ[™ÈÛ›H\™\Ù]XY\‹\ÙXÛÛ™ØˆËÈÜˆ[ˆTÓÈ\™\Ù]X]›ÙXÙ\ÈHØ[™Y]H[œİXYÙˆ˜[[™È˜XÚÈÂˆËÈHŒÈY˜][ˆÚ[™İÜÈH[ˆ\ÈİÚ]ÚYÙ™ˆ\™HÚÚ\YˆZ\‚ˆËÈ™\Ù]Ø^\È›İ[™ÈX›İ]Ú[ˆ\È™\]Y\İØ[ˆÛÈ›İYÚ‚ˆËÂˆËÈ\È\ÈHÙXÛÛ™[˜Ø\Y™XYÙˆHØ[YHXÛÙ^J˜XY\œËÛÈ]ˆËÈZÙ\ÈHØ[YH]]Üš]HØ]H\ÈH^]\İY]Ú[™İÈÚÜİ]X›İ™N‚ˆËÈİ\Ú\ÙH[ˆ[\İYÛ˜\ÚİØ[ÜÈİ˜ZYÚ˜XÚÈ[ˆ›İYÚBˆËÈ›Ü™[˜\H›İHˆÛÜˆ[™›ÙXÙ\ÈH™\Hİ\œË[Û™È[^HBˆËÈÚÜİ]Ø\ÈØ]YÈ™]™[ˆHÙ[™\šXÈ\˜][[Z]\™\Ù]ˆËÈXY\ˆ[™H›ÙH™\Ù]×Ø]Ú]ÛˆHØ[YH[˜Ø\Y[^H]ˆËÈ[™ZÙHHØ[YHØ]NˆÛˆ[Hİ]\Èİ\ˆ[ˆHÙ[Z[™HH^BˆËÈ\™H[\İYXÚÙ\Ë[™Û›Üš[™ÈÛ™H[™ÈHİ[HÜˆÜİ[BˆËÈ˜[YH[ˆ[˜Ø\Y][K^YX\ˆ›ØÚÈ›İYÚX\šÔ˜]S[Z]YÚ]™X\ÛÛ‹‚ˆYˆ
+\İ^]\İYÚ[™İÜÊHÂˆ›Üˆ
+ÛÛœİÚ[™İÈÙˆ\œÙPÛÙ^][İUÚ[™İÜÊ™\ÜÛœÙKšXY\œË›İÊJHÂˆYˆ
+\Ô][İUÚ[™İÑ\ØX›Y
+Ú[™İÊJHÛÛ[YNÂˆÛÛœİ™\Ù]]\ÈHÚ[™İËœ™\Ù]]\ÎÂˆYˆ
+\[Ùˆ™\Ù]]\ÈOOH›[X™\ˆˆS[X™\‹š\Ñš[š]J™\Ù]]\ÊJHÛÛ[YNÂˆÛÛœİ[HH™\Ù]]\ÈH›İÎÂˆYˆ
+[Hˆ
+H™\Ù]Ø[™Y]\Ëœ\Ú
+[JNÂˆB‚ˆÛÛœİ™\Ù]]XY\œÈHÈ\˜][[Z]\™\Ù]—NÂˆ›Üˆ
+ÛÛœİXY\ˆÙˆ™\Ù]]XY\œÊHÂˆÛÛœİ˜[YHH™\ÜÛœÙKšXY\œË™Ù]
+XY\ŠNÂˆYˆ
+]˜[YJHÛÛ[YNÂˆÛÛœİ\œÙYH[X™\‹œ\œÙR[
+˜[YKL
+NÂˆYˆ
+S[X™\‹š\Ó˜SŠ\œÙY
+H	‰ˆ\œÙYˆ
+HÂˆËÈHLŒL\ØÜš[Z[˜]ÜˆÙY\È\ØÚÙXÛÛ™ÂˆËÈ\İ[˜İœ›ÛH\ØÚZ[\ÙXÛÛ™ÎÈ›\[™ÈÜ‚ˆËÈ›Ü[™È]Z\Ë\ØØ[\È]™\H˜[YHHL‚ˆÛÛœİ[Y\İ[\Bˆ\œÙYLÌÌÌÈ\œÙY
+ˆLˆ\œÙYÂˆÛÛœİ[HH[Y\İ[\H›İÎÂˆËÈØ[YHPVÔUSÕWÔ‘TÑUÒÔ’V“Ó—ÓTÈİX\™BˆËÈXÛÙ^Jˆ\œÙ\ˆ\Y\È[ˆÚ][”™\Ù]Üš^›Û‚ˆËÈÚ]İ]]HÜİ[H\˜][[Z]\™\Ù]Ü›İBˆËÈH[Û›İÛšXËY™™Xİ]™[KY›Ü™]™\ˆ\œÚ\İYˆËÈ›ØÚÈ]›È]\ˆHÛİ[ÚÜ[‹‚ˆYˆ
+[Hˆ	‰ˆ[HHPVÔUSÕWÔ‘TÑUÒÔ’V“Ó—ÓTÊHÂˆ™\Ù]Ø[™Y]\Ëœ\Ú
+[JNÂˆBˆBˆB‚ˆYˆ
+\œÙY›ÙOËœ™\Ù]Ğ]
+HÂˆÛÛœİ[Y\İ[\Bˆ\œÙY›ÙKœ™\Ù]Ğ]LÌÌÌˆÈ\œÙY›ÙKœ™\Ù]Ğ]
+ˆLˆˆ\œÙY›ÙKœ™\Ù]Ğ]ÂˆÛÛœİ[HH[Y\İ[\H›İÎÂˆYˆ
+[Hˆ	‰ˆ[HHPVÔUSÕWÔ‘TÑUÒÔ’V“Ó—ÓTÊHÂˆ™\Ù]Ø[™Y]\Ëœ\Ú
+[JNÂˆBˆBˆB‚ˆYˆ
+™\Ù]Ø[™Y]\Ë›[™İˆ
+HÂˆ™]\›ˆX]›Z[Š‹‹œ™\Ù]Ø[™Y]\ÊNÂˆB‚ˆ™]\›ˆ[ÂŸB‚˜ÛÛœİPVÔ‘U–WÑSVWÓTÈHH
+ˆŒ
+ˆLÂ‚™[˜İ[ÛˆÓ[X™\Š˜[YNˆ[šÛ›İÛŠNˆ[X™\ˆ[™Yš[™YÂˆYˆ
+˜[YHOOH[˜[YHOOH[™Yš[™Y
+H™]\›ˆ[™Yš[™YÂˆÛÛœİ\œÙYH[X™\Š˜[YJNÂˆ™]\›ˆ[X™\‹š\Ñš[š]J\œÙY
+HÈ\œÙYˆ[™Yš[™YÂŸB‚™[˜İ[Ûˆ^˜Xİ\œ›Ü‘XYÛ›ÜİXÜÊˆ™\ÜÛœÙNˆ™\ÜÛœÙKˆÜ[ÛœÏÎˆ\œ›Ü’[™[™ÓÜ[ÛœËŠNˆ\œ›Ü‘XYÛ›ÜİXÜÈ[™Yš[™YÂˆÛÛœİ™\]Y\İYBˆ™\ÜÛœÙKšXY\œË™Ù]
+\™\]Y\İZYŠHÏÂˆ™\ÜÛœÙKšXY\œË™Ù]
+œ™\]Y\İZYŠHÏÂˆ™\ÜÛœÙKšXY\œË™Ù]
+›Ü[˜ZK\™\]Y\İZYŠHÏÂˆ™\ÜÛœÙKšXY\œË™Ù]
+[Ü[˜ZK\™\]Y\İZYŠHÏÂˆ[™Yš[™YÂˆÛÛœİÙ”˜^HH™\ÜÛœÙKšXY\œË™Ù]
+˜Ù‹\˜^HŠHÏÈ[™Yš[™YÂ‚ˆÛÛœİXYÛ›ÜİXÜÎˆ\œ›Ü‘XYÛ›ÜİXÜÈHÂˆİ]\Îˆ™\ÜÛœÙKœİ]\Ëˆ™\]Y\İYˆÙ”˜^KˆÛÜœ™[][Û’YˆÜ[ÛœÏËœ™\]Y\İÛÜœ™[][Û’Yˆ™XYYˆÜ[ÛœÏË™XYYˆNÂ‚ˆ›Üˆ
+ÛÛœİÚÙ^K˜[YWHÙˆØš™Xİ™[šY\ÊXYÛ›ÜİXÜÊJHÂˆYˆ
+˜[YHOOH[™Yš[™Y˜[YHOOHˆŠHÂˆ[]HXYÛ›ÜİXÜÖÚÙ^H\ÈÙ^[Ùˆ\œ›Ü‘XYÛ›ÜİXÜ×NÂˆBˆB‚ˆ™]\›ˆØš™XİšÙ^\ÊXYÛ›ÜİXÜÊK›[™İˆÈXYÛ›ÜİXÜÈˆ[™Yš[™YÂŸB

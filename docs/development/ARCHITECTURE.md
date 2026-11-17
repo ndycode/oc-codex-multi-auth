@@ -49,7 +49,7 @@ There is no lib-wide barrel; modules import focused paths directly.
 7. Select the account: `modelAccountPools`/`modelAccountPoolModes` (`preferred` falls back to the general pool, `strict` does not), then `rotationStrategy` with cooldowns, quota windows, token bucket, and `CODEX_AUTH_ACCOUNT_ID` pinning.
 8. Refresh the token through the queued refresh path when needed; attach OAuth + Codex headers.
 9. Send; fold SSE events into a response as lines arrive, extract rate-limit/quota headers (`x-codex-primary-*`/`x-codex-secondary-*` via `lib/quota-windows.ts`), map errors.
-10. On failure: consume the matching retry-budget class, update health + circuit breaker, rotate, or fall back along the model chain (max `MAX_QUOTA_FALLBACK_SWITCHES` = 6 hops). On recoverable session errors, classify and show a recovery toast.
+10. On failure: consume the matching retry-budget class, update health + circuit breaker, rotate, or fall back along the model chain (max `MAX_QUOTA_FALLBACK_SWITCHES` = 8 hops). On recoverable session errors, classify and show a recovery toast.
 11. Persist: runtime metrics, account health stamps, TUI quota cache, storage.
 
 ---

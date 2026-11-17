@@ -496,8 +496,8 @@ Default chains (each row is the tail of the general order
 `gpt-6.2-astra > gpt-6.2-sol > gpt-6.1-sol > gpt-6-sol > gpt-5.6-sol > gpt-5.6-terra > gpt-5.5 >
 gpt-6-luna > gpt-5.6-luna` after its own model):
 
-- `gpt-6.2-astra → gpt-6.2-sol → gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna`
-- `gpt-6.2-sol → gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna`
+- `gpt-6.2-astra → gpt-6.2-sol → gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna → gpt-5.6-luna`
+- `gpt-6.2-sol → gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna → gpt-5.6-luna`
 - `gpt-6-astra → gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna → gpt-5.6-luna`
 - `gpt-6.1-sol → gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna → gpt-5.6-luna`
 - `gpt-6-sol → gpt-5.6-sol → gpt-5.6-terra → gpt-5.5 → gpt-6-luna → gpt-5.6-luna`
@@ -527,7 +527,7 @@ rode in on an entry id; a directly selected non-entry id stays strict. For upstr
 the fallback only moves to a model with an eligible account under that pool's
 policy — an unavailable strict pool stays a strict-pool error — and a shared
 subscription block follows the account to every model, so changing models
-cannot bypass it. A single request hops across at most 7 quota-exhausted
+cannot bypass it. A single request hops across at most 8 quota-exhausted
 models (`MAX_QUOTA_FALLBACK_SWITCHES` in `lib/constants.ts`).
 
 Custom chain example:
