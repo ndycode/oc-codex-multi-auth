@@ -77,7 +77,7 @@ Canonical state lives under `~/.opencode`; OpenCode config under `~/.config/open
 | --- | --- |
 | `~/.opencode/openai-codex-auth-config.json` | Plugin runtime config |
 | `~/.opencode/oc-codex-multi-auth-accounts.json` | Global V3 pool |
-| `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` | Per-project V3 pool (default on) |
+| `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` | Per-project V3 pool (opt-in) |
 | `oc-codex-multi-auth-flagged-accounts.json` | Deactivated/flagged metadata, written beside the active pool file |
 | `backups/codex-credential-snapshot-*.json` | Pre-write snapshot of the previous pool; retention prunes only this prefix |
 | `oc-codex-multi-auth-quota-notifications.json` | Cross-process quota-notification state, beside the active pool file |

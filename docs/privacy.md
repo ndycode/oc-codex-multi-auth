@@ -89,7 +89,7 @@ Everything below lives on your machine. Mode bits (`0o600`/`0o700`) are applied
 | Item | Path | Mode (POSIX) |
 | --- | --- | --- |
 | Global account pool | `~/.opencode/oc-codex-multi-auth-accounts.json` | file `0o600`, dir `0o700` |
-| Per-project pool (default on) | `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` | `0o600` / `0o700` |
+| Per-project pool (opt-in) | `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` | `0o600` / `0o700` |
 | Flagged (quarantined) accounts | `oc-codex-multi-auth-flagged-accounts.json` beside the active accounts file | `0o600` / `0o700` |
 | Credential snapshots (pre-write backups) | `backups/codex-credential-snapshot-*.json` beside the active accounts file | `0o600` / `0o700` |
 | Rotation journal | `<accounts-file>.refresh.pending.<hash>` (one per consumed token) beside the active accounts file — a refresh committed upstream but not yet saved to the pool | `0o600` / `0o700` |

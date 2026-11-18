@@ -476,8 +476,9 @@ codex-pool action="set-mode" model="gpt-5.6-sol" poolMode="strict"
 
 Also supports `status` (default), `add`, `remove`, `clear`, `dryRun=true`, and
 JSON output. Mutations hot-reload on the next request. The config file is
-global while account storage is per-project by default, so references
-unavailable in the current project are reported but not pruned. Routing
+global while account storage is global by default; per-project storage is an
+explicit opt-in. References unavailable in the current project are reported
+but not pruned. Routing
 diagnostics expose `general`, `preferred`, `general-fallback`, `strict`, or
 `strict-unavailable`.
 

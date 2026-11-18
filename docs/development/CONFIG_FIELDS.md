@@ -221,10 +221,11 @@ for the user-facing table.
 Business-seat identities; `modelAccountPoolModes` sets each mapping to
 `preferred` (default) or `strict`. Both are file-only. Keys are normalized
 case-insensitively after model normalization, so `gpt-5.1-codex` and
-`gpt-5-codex` land on the same pool. The config file is global while account
-storage is per-project by default, so a pool can reference accounts that are
-unavailable in the current project — the loader reports them as unresolved
-but does not prune them. Mutations go through the `codex-pool` tool.
+`gpt-5-codex` land on the same pool. The config file and account storage are
+global by default. When per-project storage is enabled, a pool can reference
+accounts that are unavailable in the current project — the loader reports them
+as unresolved but does not prune them. Mutations go through the `codex-pool`
+tool.
 
 ## Non-schema environment variables (context)
 

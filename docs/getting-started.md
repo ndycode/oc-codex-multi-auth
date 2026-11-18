@@ -58,8 +58,9 @@ authorize redirect is `http://localhost:1455/auth/callback`. Authorization and
 token exchange go to `auth.openai.com`.
 
 Run `opencode auth login` again per account to build a multi-account pool.
-Pools are per-project by default, so log in from the directory where you use
-OpenCode.
+The shared global pool is used by default. Set `CODEX_AUTH_PER_PROJECT_ACCOUNTS=1`
+or `perProjectAccounts: true` to opt into per-project storage, then log in from
+the directory where you use OpenCode.
 
 ### Remote or headless login
 

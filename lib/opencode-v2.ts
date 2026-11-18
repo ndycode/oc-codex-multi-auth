@@ -409,7 +409,7 @@ async function setupScopedV2(
 							? `The browser must reach localhost:${OAUTH_CALLBACK_PORT} on the OpenCode service host. If the client and service are on different machines without port forwarding, cancel and choose ${AUTH_LABELS.OAUTH_DEVICE_CODE} or ${AUTH_LABELS.OAUTH_MANUAL}.\n`
 							: "";
 						const instructions = flow.url
-							? `${flow.instructions}\n${remoteInstructions}Adds to this project's Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
+								? `${flow.instructions}\n${remoteInstructions}Adds this account to the configured Codex account pool. Use a private browser window or switch accounts to add a different login. Repeat opencode auth login for another account; view the pool with /codex-accounts.`
 							: flow.instructions;
 						const credential = (code?: string): Promise<Credential.OAuth> => run(async () => {
 							const result = flow.method === "code" ? await flow.callback(code ?? "") : await flow.callback();
