@@ -18,6 +18,8 @@ import {
 	GPT_6_SOL_MODEL_ID,
 	GPT_61_SOL_MODEL_ID,
 	GPT_61_TERRA_MODEL_ID,
+	GPT_62_ASTRA_MODEL_ID,
+	GPT_62_SOL_MODEL_ID,
 	getNormalizedModel,
 } from "./helpers/model-map.js";
 import {
@@ -108,6 +110,13 @@ export function normalizeModel(model: string | undefined): string {
 	}
 	if (/\bgpt(?:-| )6\.1(?:\b|[- ])/.test(normalized)) {
 		return GPT_61_SOL_MODEL_ID;
+	}
+	// GPT-6.2 must precede GPT-6.1 and the bare GPT-6 branch.
+	if (/\bgpt(?:-| )6\.2(?:-| )astra(?:\b|[- ])/.test(normalized)) {
+		return GPT_62_ASTRA_MODEL_ID;
+	}
+	if (/\bgpt(?:-| )6\.2(?:\b|[- ])/.test(normalized)) {
+		return GPT_62_SOL_MODEL_ID;
 	}
 	// Sol and Luna must precede the catch-all `gpt-6` branch below.
 	if (/\bgpt(?:-| )6(?:-| )sol(?:\b|[- ])/.test(normalized)) {
@@ -625,13 +634,15 @@ export function getReasoningConfig(
 	const isGpt6Luna = canonicalModelName === GPT_6_LUNA_MODEL_ID;
 	const isGpt61Sol = canonicalModelName === GPT_61_SOL_MODEL_ID;
 	const isGpt61Terra = canonicalModelName === GPT_61_TERRA_MODEL_ID;
+	const isGpt62Astra = canonicalModelName === GPT_62_ASTRA_MODEL_ID;
+	const isGpt62Sol = canonicalModelName === GPT_62_SOL_MODEL_ID;
 
 	/** Families whose whole effort range is low..max(+ultra) with no none/minimal. */
 	const isFullEffortFamily =
-		isGpt56 || isGpt6Astra || isGpt6Sol || isGpt6Luna || isGpt61Sol || isGpt61Terra || isDaybreak;
+		isGpt56 || isGpt6Astra || isGpt6Sol || isGpt6Luna || isGpt61Sol || isGpt61Terra || isGpt62Astra || isGpt62Sol || isDaybreak;
 	const supportsMax = isFullEffortFamily;
 	const supportsUltra =
-		isGpt56Sol || isGpt56Terra || isGpt6Astra || isGpt6Sol || isGpt61Sol || isGpt61Terra || isDaybreak;
+		isGpt56Sol || isGpt56Terra || isGpt6Astra || isGpt6Sol || isGpt61Sol || isGpt61Terra || isGpt62Astra || isGpt62Sol || isDaybreak;
 
 	// GPT-5.4 Mini is a first-class explicit model.
 	const isGpt54Mini = canonicalModelName === "gpt-5.4-mini";
