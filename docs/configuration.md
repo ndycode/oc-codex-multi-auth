@@ -90,8 +90,9 @@ either way. Per-model options override global options — see
 
 Clamps the plugin applies before the wire, in both native and legacy mode:
 `ultra` is a client-side tier resolved the way Codex does it (the catalog's
-`multi_agent_reasoning_effort`, which is `xhigh` on `gpt-6-astra`,
-`gpt-6.1-sol`, and `gpt-6.1-terra`; `max` everywhere else); `max` steps down
+`multi_agent_reasoning_effort`, which is `xhigh` on `gpt-6.2-astra`,
+`gpt-6.2-sol`, `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6.1-terra`; `max`
+everywhere else); `max` steps down
 to `xhigh` on families without it; `xhigh` steps down to
 `high` on families without it; `none` floors to `low` on families that reject
 it; `minimal` floors to `low` on Codex and on the GPT-5.6 / GPT-6 tiers.
@@ -178,7 +179,7 @@ The plugin normalizes the selected id before the upstream call. Highlights:
   fail at startup for most users. Add them by hand if your workspace is
   entitled. The three cyber tiers have no fallback chain, on purpose — a
   security-specialty request must not be silently answered by a general model.
-- GPT-5.6 tiers, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, and the Daybreak
+- GPT-5.6 tiers, GPT-6.2 Astra/Sol, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, and the Daybreak
   tiers are sent over the **responses-lite** path with default client identity `opencode`; other
   models default to `codex_cli_rs`. `CODEX_AUTH_CLIENT_IDENTITY` overrides.
 - Because 5.6 and GPT-6 rolled out gradually, an unentitled account

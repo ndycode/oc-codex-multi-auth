@@ -10,7 +10,7 @@ Public overview of how the plugin installs config, handles ChatGPT Plus/Pro OAut
 - OpenCode loads `dist/index.js` as the provider plugin (built from `index.ts`) and `dist/tui.js` as the TUI quota-status plugin (built from `tui.ts`). On OpenCode 2.0.16+, the same default exports also carry a V2 `setup` hook (`lib/opencode-v2*.ts`) that reuses the shared V1 runtime.
 - The plugin registers **25** `codex-*` tools via **25 per-file factories** under `lib/tools/` (`codex-list`, `codex-switch`, `codex-warm`, and 22 others).
 - Requests to the ChatGPT-backed Codex API stay stateless: `store: false`, `stream: true`, and `reasoning.encrypted_content`.
-- GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, the Daybreak tiers, and GPT-5.6 use the responses-lite request shape; other models keep the classic shape.
+- GPT-6.2 Astra/Sol, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, the Daybreak tiers, and GPT-5.6 use the responses-lite request shape; other models keep the classic shape.
 - Account, config, backup, log, and quota state stays local under `~/.opencode` and `~/.config/opencode`. Per-project account pools are on by default.
 
 ---
@@ -29,7 +29,7 @@ index.ts
   |- resolve config (file + env overrides)
   |- pick account: modelAccountPools -> rotationStrategy (hybrid default)
   |- refresh token if needed (queued, cross-process lease)
-  |- shape body: native or legacy mode; responses-lite for GPT-6/5.6/Daybreak
+  |- shape body: native or legacy mode; responses-lite for GPT-6.2/GPT-6/5.6/Daybreak
   |- attach OAuth headers + client identity
   |- retry budgets, circuit breaker, rate-limit backoff, fallback chains
   v
