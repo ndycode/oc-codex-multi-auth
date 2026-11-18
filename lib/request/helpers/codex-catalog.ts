@@ -29,6 +29,8 @@ import {
 	GPT_6_SOL_MODEL_ID,
 	GPT_61_SOL_MODEL_ID,
 	GPT_61_TERRA_MODEL_ID,
+	GPT_62_ASTRA_MODEL_ID,
+	GPT_62_SOL_MODEL_ID,
 } from "./model-map.js";
 
 /** Request value Codex sends for its "Fast" tier. */
@@ -49,6 +51,8 @@ export const CODEX_MODEL_CATALOG: Readonly<Record<string, CodexCatalogEntry>> = 
 	[GPT_6_ASTRA_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
 	[GPT_61_SOL_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
 	[GPT_61_TERRA_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
+	[GPT_62_ASTRA_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
+	[GPT_62_SOL_MODEL_ID]: { serviceTiers: FAST, multiAgentReasoningEffort: "xhigh", defaultVerbosity: "low" },
 	[GPT_6_SOL_MODEL_ID]: { serviceTiers: FAST, defaultServiceTier: SERVICE_TIER_PRIORITY, defaultVerbosity: "low" },
 	[GPT_6_LUNA_MODEL_ID]: { serviceTiers: FAST, defaultServiceTier: SERVICE_TIER_PRIORITY, defaultVerbosity: "low" },
 	[GPT_56_SOL_MODEL_ID]: { serviceTiers: FAST, defaultVerbosity: "low" },

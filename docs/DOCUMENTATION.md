@@ -45,8 +45,8 @@ docs/
 
 | File | Purpose |
 | --- | --- |
-| `config/opencode-modern.json` | variant-picker template (12 bases / 65 variants) |
-| `config/opencode-legacy.json` | explicit-only template (65 entries) |
+| `config/opencode-modern.json` | variant-picker template (14 bases / 77 variants) |
+| `config/opencode-legacy.json` | explicit-only template (77 entries) |
 | `config/minimal-opencode.json` | minimal debug template |
 | `config/README.md` | template selection + install modes |
 

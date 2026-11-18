@@ -26,6 +26,10 @@ import type { Auth } from '../lib/types.js';
 import { OPENAI_HEADERS, OPENAI_HEADER_VALUES, CODEX_BASE_URL } from '../lib/constants.js';
 import { StorageTransactionContentionError } from '../lib/errors.js';
 import { clearRateLimitBackoffState } from '../lib/request/rate-limit-backoff.js';
+import {
+	DEFAULT_CODEX_CLIENT_VERSION,
+	buildCodexUserAgent,
+} from '../lib/request/helpers/user-agent.js';
 
 const { coordinatePersistedRefreshMock } = vi.hoisted(() => ({
 	coordinatePersistedRefreshMock: vi.fn(async (identity: { refreshToken: string }) => {
@@ -345,9 +349,15 @@ describe('Fetch Helpers Module', () => {
 		});
 
 		it('sends a Codex CLI user-agent by default, replacing the host user-agent', () => {
-			const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as RequestInit;
-			const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.5' });
-			expect(headers.get('user-agent')).toMatch(/^codex_cli_rs\/\d+\.\d+\.\d+ \(/);
+			vi.stubEnv('CODEX_AUTH_CLIENT_VERSION', '');
+			try {
+				const init = { headers: { 'user-agent': 'opencode/1.17.20' } } as RequestInit;
+				const headers = createCodexHeaders(init, accountId, accessToken, { model: 'gpt-5.5' });
+				expect(headers.get('user-agent')).toBe(buildCodexUserAgent());
+				expect(headers.get('user-agent')).toContain(`codex_cli_rs/${DEFAULT_CODEX_CLIENT_VERSION}`);
+			} finally {
+				vi.unstubAllEnvs();
+			}
 		});
 
 		it('sends the host identity for gpt-5.6 models by default', () => {
