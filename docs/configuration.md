@@ -231,7 +231,7 @@ Format: `field | env override | type | default | bounds | meaning`.
 | `spendCredits` | `CODEX_AUTH_SPEND_CREDITS` | boolean | `false` | — | once no account entitled to the requested model has plan quota left, serve from an account that still holds Codex credits instead of waiting for a reset; see [Spending Codex credits](#spending-codex-credits) |
 | `modelAccountPools` | (file only) | object: model → account-id array | `{}` | keys/values non-empty strings | pin an effective model to stable account or Business-seat identities; matched case-insensitively after model normalization |
 | `modelAccountPoolModes` | (file only) | object: model → `preferred` \| `strict` | `{}` (all `preferred`) | — | `preferred` falls back to the general pool when the mapping has no selectable account; `strict` never leaves its list and fails with `strict_pool_unavailable` |
-| `perProjectAccounts` | `CODEX_AUTH_PER_PROJECT_ACCOUNTS` | boolean | `true` | — | `true`: each project gets its own pool under `~/.opencode/projects/<project-key>/`; `false`: the global `~/.opencode/` pool. Toggling switches scope live (in-flight requests drain first) but does **not** migrate or delete the other scope's accounts, flagged, or backup files — copy or remove them yourself |
+| `perProjectAccounts` | `CODEX_AUTH_PER_PROJECT_ACCOUNTS` | boolean | `false` | — | `true`: each project gets its own pool under `~/.opencode/projects/<project-key>/`; `false`: the global `~/.opencode/` pool. Toggling switches scope live (in-flight requests drain first) but does **not** migrate or delete the other scope's accounts, flagged, or backup files — copy or remove them yourself |
 | `credentialSnapshots` | `CODEX_AUTH_CREDENTIAL_SNAPSHOTS` | boolean | `true` | — | copy the previous account store into `backups/` before a significant write; JSON backend only, not `CODEX_KEYCHAIN` |
 | `credentialSnapshotsMaxCount` | `CODEX_AUTH_CREDENTIAL_SNAPSHOTS_MAX_COUNT` | integer | `10` | int ≥0 (`0` = keep all) | snapshots kept; env is strict — a non-integer or negative env value is rejected, not clamped |
 | `autoUpdate` | `CODEX_AUTH_AUTO_UPDATE` | boolean | `true` | — | daily npm check; clear the OpenCode plugin cache on exit when a newer version exists |
@@ -480,8 +480,9 @@ codex-pool action="set-mode" model="gpt-5.6-sol" poolMode="strict"
 
 Also supports `status` (default), `add`, `remove`, `clear`, `dryRun=true`, and
 JSON output. Mutations hot-reload on the next request. The config file is
-global while account storage is per-project by default, so references
-unavailable in the current project are reported but not pruned. Routing
+global while account storage is global by default; per-project storage is an
+explicit opt-in. References unavailable in the current project are reported
+but not pruned. Routing
 diagnostics expose `general`, `preferred`, `general-fallback`, `strict`, or
 `strict-unavailable`.
 

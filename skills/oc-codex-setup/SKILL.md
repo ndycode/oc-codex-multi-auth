@@ -69,7 +69,7 @@ All live in `~/.opencode/openai-codex-auth-config.json`; every boolean env overr
 
 | Knob | Default | Purpose |
 | --- | --- | --- |
-| `perProjectAccounts` | `true` | Per-project pools under `~/.opencode/projects/<key>/` |
+| `perProjectAccounts` | `false` | Global pool by default; opt in to per-project pools under `~/.opencode/projects/<key>/` |
 | `rotationStrategy` | `hybrid` | `sticky` / `round-robin` alternatives |
 | `maskEmail` | `false` | Render emails as `us***@example.com` |
 | `quotaNotifications.autoProtectCredits` | `true` | 30-min `/wham/usage` poll that blocks spent accounts pre-429 |

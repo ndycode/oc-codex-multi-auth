@@ -15,7 +15,7 @@ Using the official Codex CLI rather than OpenCode? The sibling project [`codex-m
 
 ## What it does
 
-- **Account pool** — OAuth login for multiple ChatGPT accounts, stored locally under `~/.opencode`, with per-project pools under `projects/<project-key>/` on by default.
+- **Account pool** — OAuth login for multiple ChatGPT accounts, stored locally under `~/.opencode`, with a shared global pool by default; set `CODEX_AUTH_PER_PROJECT_ACCOUNTS=1` to opt into per-project pools under `projects/<project-key>/`.
 - **Rotation** — health-scored hybrid selection picks the best enabled account per request, with cooldowns, automatic token refresh, and failover on rate limits.
 - **Model catalog** — 14 base models covering 77 variants: GPT-6.1 Sol/Terra, GPT-6 Astra/Sol/Luna, the GPT-5.6 tiers, GPT-5.5, and more, routed through the stateless Codex contract (`store: false` + `reasoning.encrypted_content`).
 - **Quota in the prompt** — the TUI prompt line shows remaining quota for the serving account, the whole pool, or banked reset credits, with rotating screens.
@@ -144,7 +144,7 @@ These accept `--json` and `--config-path <file>` (`install`/`update` reject `--c
 
 ## Rotation, in one paragraph
 
-Each request picks the healthiest enabled account (`rotationStrategy`, default `hybrid`): health scores drop on failures and rate limits, cooldowns keep a burned account out of the running, tokens refresh as needed, and failover walks the pool within a bounded retry budget. Logging into the same account again updates its entry rather than duplicating it. Pools are **per-project by default** — the plugin walks up from the working directory looking for a project marker (`.git`, `package.json`, `.opencode`, and friends), stopping at your home directory; without a marker it uses global storage. Set `CODEX_AUTH_PER_PROJECT_ACCOUNTS=0` to force the global pool.
+Each request picks the healthiest enabled account (`rotationStrategy`, default `hybrid`): health scores drop on failures and rate limits, cooldowns keep a burned account out of the running, tokens refresh as needed, and failover walks the pool within a bounded retry budget. Logging into the same account again updates its entry rather than duplicating it. The shared global pool is the default. Set `CODEX_AUTH_PER_PROJECT_ACCOUNTS=1` to opt into per-project pools; the plugin then walks up from the working directory looking for a project marker (`.git`, `package.json`, `.opencode`, and friends), stopping at your home directory. Without that opt-in, it uses `~/.opencode/oc-codex-multi-auth-accounts.json`.
 
 Accounts whose plan quota is used up are left alone until it resets, even when they hold Codex credits. Set `spendCredits: true` to spend those credits once no account has plan quota left; a toast names the account and its remaining balance. See [Spending Codex credits](docs/configuration.md#spending-codex-credits).
 
@@ -197,7 +197,7 @@ Plugin settings are re-read per request — most edits need no restart. Boolean 
 
 | Setting | Effect |
 | --- | --- |
-| `CODEX_AUTH_PER_PROJECT_ACCOUNTS=0` | Force the global account pool |
+| `CODEX_AUTH_PER_PROJECT_ACCOUNTS=1` | Opt into per-project account pools |
 | `CODEX_KEYCHAIN=1` | Store accounts in the OS keychain |
 | `CODEX_AUTH_ROTATION_STRATEGY=hybrid\|sticky\|round-robin\|custom` | Account selection strategy |
 | `CODEX_AUTH_SPEND_CREDITS=1` | Spend Codex credits once no account has plan quota left |

@@ -74,7 +74,7 @@ logged warning) and keeps the rest of the file.
 | `spendCredits` | `CODEX_AUTH_SPEND_CREDITS` | boolean | `false` | — | once no entitled account has plan quota, serve from an account with a Codex credit balance; see configuration.md |
 | `modelAccountPools` | (file only) | record: model → account-id array | `{}` | keys/values non-empty strings | pin an effective model to stable account/workspace identities; keys normalize case-insensitively after model normalization |
 | `modelAccountPoolModes` | (file only) | record: model → `preferred` \| `strict` | `{}` (all `preferred`) | — | `preferred` falls back to the general pool when the mapping has no selectable account; `strict` never leaves its list (`strict_pool_unavailable`) |
-| `perProjectAccounts` | `CODEX_AUTH_PER_PROJECT_ACCOUNTS` | boolean | `true` | — | `true`: per-project pools under `~/.opencode/projects/<project-key>/`; `false`: the global pool. Toggling switches scope live but never migrates or prunes the other scope's files |
+| `perProjectAccounts` | `CODEX_AUTH_PER_PROJECT_ACCOUNTS` | boolean | `false` | — | `true`: per-project pools under `~/.opencode/projects/<project-key>/`; `false`: the global pool. Toggling switches scope live but never migrates or prunes the other scope's files |
 | `credentialSnapshots` | `CODEX_AUTH_CREDENTIAL_SNAPSHOTS` | boolean | `true` | — | snapshot the previous account store into `backups/` before a significant write; JSON backend only |
 | `credentialSnapshotsMaxCount` | `CODEX_AUTH_CREDENTIAL_SNAPSHOTS_MAX_COUNT` | integer | `10` | int ≥0 (`0` = keep all) | snapshots kept; env is strict — invalid env values are rejected, not clamped |
 | `autoUpdate` | `CODEX_AUTH_AUTO_UPDATE` | boolean | `true` | — | daily npm check; clear the OpenCode plugin cache on exit when a newer version exists |
@@ -221,10 +221,11 @@ for the user-facing table.
 Business-seat identities; `modelAccountPoolModes` sets each mapping to
 `preferred` (default) or `strict`. Both are file-only. Keys are normalized
 case-insensitively after model normalization, so `gpt-5.1-codex` and
-`gpt-5-codex` land on the same pool. The config file is global while account
-storage is per-project by default, so a pool can reference accounts that are
-unavailable in the current project — the loader reports them as unresolved
-but does not prune them. Mutations go through the `codex-pool` tool.
+`gpt-5-codex` land on the same pool. The config file and account storage are
+global by default. When per-project storage is enabled, a pool can reference
+accounts that are unavailable in the current project — the loader reports them
+as unresolved but does not prune them. Mutations go through the `codex-pool`
+tool.
 
 ## Non-schema environment variables (context)
 

@@ -36,9 +36,10 @@ Details: [Getting Started](getting-started.md).
 ## Can I use several ChatGPT accounts?
 
 Yes — that is the point of the plugin. Health-aware rotation (`hybrid` by
-default) picks an account per request. Pools are per-project by default under
-`~/.opencode/projects/<project-key>/`; set `CODEX_AUTH_PER_PROJECT_ACCOUNTS=0`
-for one global pool at `~/.opencode/oc-codex-multi-auth-accounts.json`.
+default) picks an account per request. The shared global pool at
+`~/.opencode/oc-codex-multi-auth-accounts.json` is the default. Set
+`CODEX_AUTH_PER_PROJECT_ACCOUNTS=1` to opt into per-project pools under
+`~/.opencode/projects/<project-key>/`.
 Manage them with `codex-list`, `codex-switch`, `codex-warm`, and `codex-pool`.
 
 ## Where is my data stored?

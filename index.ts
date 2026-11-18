@@ -4502,6 +4502,13 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								),
 							);
 							const poolAccountCount = poolAccounts.length;
+							const poolIndices = new Set(poolAccounts.map((account) => account.index));
+							const enabledPoolSelection = accountManager
+								.getSelectionExplainability(modelFamily, model)
+								.filter((entry) => entry.enabled && poolIndices.has(entry.index));
+							const poolUpstreamBlocked = enabledPoolSelection.length > 0 && enabledPoolSelection.every(
+								(entry) => entry.rateLimitedUntil !== undefined || entry.quotaExhaustedUntil !== undefined,
+							);
 							const unresolvedKeyCount = countUnresolvedPoolKeys(
 								accountSnapshot,
 								preferredAccountIds,
@@ -4527,7 +4534,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								unavailableCount > 0
 									? ` ${unavailableCount} pooled account(s) were never attempted (rate-limited, cooling down, or disabled).`
 									: "";
-							const creditsDetail = describeCreditsWhenOutOfQuota();
+							const creditsDetail = poolUpstreamBlocked ? describeCreditsWhenOutOfQuota() : "";
 							const message =
 								`Strict account pool unavailable for ${effectiveModel}. ` +
 								`${preferredAccountIds.length} configured pool key(s) resolved to ${poolAccountCount} account(s).` +
@@ -4554,7 +4561,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 									},
 								}),
 								{
-									status: poolWaitMs > 0 ? 429 : 503,
+									status: poolWaitMs > 0 && poolUpstreamBlocked ? 429 : 503,
 									headers: {
 										"content-type": "application/json; charset=utf-8",
 									},
@@ -4595,6 +4602,20 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								const upstreamBlocked = enabledSelection.length > 0 && enabledSelection.every(
 									(entry) => entry.rateLimitedUntil !== undefined || entry.quotaExhaustedUntil !== undefined,
 								);
+								// Availability waits include local throttling and auth/server cooldowns;
+								// only an upstream block on every enabled account warrants a 429.
+								const blockDetails = [
+									["upstream rate-limited", enabledSelection.filter((entry) => entry.rateLimitedUntil !== undefined).length],
+									["quota-exhausted", enabledSelection.filter((entry) => entry.quotaExhaustedUntil !== undefined).length],
+									["cooling down", enabledSelection.filter((entry) => entry.coolingDownUntil !== undefined).length],
+									["local request throttle", enabledSelection.filter((entry) => entry.tokensAvailable < 1).length],
+								].filter(([, blockedCount]) => Number(blockedCount) > 0)
+									.map(([reason, blockedCount]) => `${blockedCount} ${reason}`).join(", ");
+								const availabilityMessage = upstreamBlocked
+									? `All ${enabledSelection.length} enabled account(s) are rate-limited or quota-exhausted upstream.`
+									: `No enabled account is currently selectable${blockDetails ? ` (${blockDetails})` : ""}.`;
+								const disabledCount = configuredAccounts.filter((entry) => entry.enabled === false).length;
+								const disabledDetail = disabledCount > 0 ? ` ${disabledCount} configured account(s) are disabled.` : "";
 
 								// Every enabled account has an active upstream block. Before waiting out a
 								// block that can run for days (`retryAllAccountsMaxRetries`
@@ -4661,7 +4682,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 										runtimeMetrics.lastError = `Model fallback: ${previousModel} -> ${model}`;
 										runtimeMetrics.lastErrorCategory = "model-fallback";
 										logWarn(
-											`All ${count} account(s) are rate-limited or out of quota for ${previousModel}. Falling back to ${model}.`,
+											`${availabilityMessage}${disabledDetail} Falling back from ${previousModel} to ${model}.`,
 											{
 												requestedModel: previousModel,
 												effectiveModel: model,
@@ -4676,18 +4697,19 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								if (
 									retryAllAccountsRateLimited &&
 									count > 0 &&
+									!allDisabled &&
 									waitMs > 0 &&
 									(effectiveRetryAllMaxWaitMs === 0 ||
 										waitMs <= effectiveRetryAllMaxWaitMs) &&
 									allRateLimitedRetries < retryAllAccountsMaxRetries &&
 									consumeRetryBudget(
 										"rateLimitGlobal",
-										`All accounts rate-limited wait ${waitMs}ms`,
+										`Account availability wait ${waitMs}ms`,
 										waitMs,
 									)
 								) {
 									const countdownCredits = upstreamBlocked ? describeCreditsWhenOutOfQuota() : "";
-									const countdownMessage = `All ${count} account(s) rate-limited.${countdownCredits} Waiting`;
+									const countdownMessage = `${availabilityMessage}${disabledDetail}${countdownCredits} Waiting`;
 									await sleepWithCountdown(
 										addJitter(waitMs, 0.2),
 										countdownMessage,
@@ -4699,7 +4721,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								}
 
 								const waitLabel = waitMs > 0 ? formatWaitTime(waitMs) : "a bit";
-								const outOfQuotaCredits = waitMs > 0 && count > 0 ? describeCreditsWhenOutOfQuota() : "";
+								const outOfQuotaCredits = waitMs > 0 && upstreamBlocked ? describeCreditsWhenOutOfQuota() : "";
 								// `runtimeMetrics` is plugin-scoped, so `lastErrorCategory` alone
 								// can still hold "unsupported-model" from an *earlier* request.
 								// Require an unsupported response from this traversal as well, or
@@ -4726,7 +4748,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 												? `All ${count} Codex account(s) were disabled automatically (repeated authentication failures or workspace deactivation). Validate the retained credentials with \`codex-health includeDisabled=true\`, then re-enable with \`codex-enable\` — or add an account with \`opencode auth login\`.`
 												: `All ${count} Codex account(s) are disabled. Re-enable with \`codex-enable\` or add an account with \`opencode auth login\`.`
 											: waitMs > 0
-												? `All ${count} account(s) are rate-limited. Try again in ${waitLabel} or add another account with \`opencode auth login\`.${outOfQuotaCredits}`
+												? `${availabilityMessage}${disabledDetail} Try again in ${waitLabel}.${outOfQuotaCredits}`
 												: wasEntitlementExhaustion
 													? `No selectable account succeeded for the requested model across ${count} configured account(s).${entitlementDetail} Codex model access is account/workspace gated; default gpt-5.6-sol/terra/luna selectors auto-fallback down the 5.6 tiers to gpt-5.5, and gpt-5.5/gpt-5-codex through the GPT-5.4 family when possible. Set \`unsupportedCodexPolicy: "fallback"\` for the full manual fallback chain, or see \`codex-health\` for per-account details.`
 													: `All ${count} account(s) failed (server errors or auth issues). Check account health with \`codex-health\`.`;
@@ -4741,7 +4763,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 										: allDisabled
 											? "all_accounts_disabled"
 											: waitMs > 0
-												? "all_accounts_rate_limited"
+												? upstreamBlocked ? "all_accounts_rate_limited" : "accounts_temporarily_unavailable"
 												: wasEntitlementExhaustion
 													? "model_not_entitled"
 													: "all_accounts_failed";
@@ -4751,7 +4773,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 									allDisabled
 										? "account-failure"
 										: waitMs > 0
-											? "rate-limit"
+											? upstreamBlocked ? "rate-limit" : "account-failure"
 											: wasEntitlementExhaustion
 												? "unsupported-model"
 												: "account-failure";
@@ -4760,7 +4782,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 										error: { code, message: `${message} ${REQUEST_LOG_HINT}` },
 									}),
 									{
-										status: waitMs > 0 && !allDisabled ? 429 : 503,
+										status: waitMs > 0 && upstreamBlocked && !allDisabled ? 429 : 503,
 											headers: {
 												"content-type": "application/json; charset=utf-8",
 											},

@@ -275,7 +275,12 @@ describe("OpenAIAuthPlugin rate-limit retry", () => {
 		vi.resetModules();
 	});
 
-	it("waits and retries when all accounts are rate-limited", async () => {
+	it("waits and retries a local throttle without calling it an upstream rate limit", async () => {
+		const { AccountManager } = await import("../lib/accounts.js");
+		vi.spyOn(AccountManager.prototype, "getSelectionExplainability").mockReturnValue([
+			{ index: 0, enabled: true, isCurrentForFamily: true, eligible: false,
+				reasons: ["token-bucket-empty"], healthScore: 100, tokensAvailable: 0, lastUsed: 0 },
+		]);
 		const { OpenAIAuthPlugin } = (await import("../index.js")) as any;
 		const client = {
 			tui: { showToast: vi.fn() },
@@ -302,6 +307,48 @@ describe("OpenAIAuthPlugin rate-limit retry", () => {
 		const response = await fetchPromise;
 		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
 		expect(response.status).toBe(200);
+		const notifications = JSON.stringify(client.tui.showToast.mock.calls);
+		expect(notifications).toContain("local request throttle");
+		expect(notifications).not.toContain("account(s) rate-limited");
+	});
+
+	it.each([
+		["local throttle", { tokensAvailable: 0 }, 503, "accounts_temporarily_unavailable", "local request throttle"],
+		["auth cooldown", { coolingDownUntil: 1000, cooldownReason: "auth-failure" as const }, 503, "accounts_temporarily_unavailable", "cooling down"],
+		["upstream limit", { rateLimitedUntil: 1000 }, 429, "all_accounts_rate_limited", "1 enabled account(s)"],
+		["upstream quota", { quotaExhaustedUntil: 1000 }, 429, "all_accounts_rate_limited", "quota-exhausted"],
+		["mixed upstream and local", { rateLimitedUntil: 1000 }, 503, "accounts_temporarily_unavailable", "local request throttle"],
+	])("classifies %s separately from disabled accounts", async (label, block, status, code, detail) => {
+		process.env.CODEX_AUTH_RETRY_ALL_RATE_LIMITED = "0";
+		const { AccountManager } = await import("../lib/accounts.js");
+		const mixed = label === "mixed upstream and local";
+		const getSnapshot = AccountManager.prototype.getAccountsSnapshot;
+		vi.spyOn(AccountManager.prototype, "getAccountsSnapshot").mockImplementation(function () {
+			return getSnapshot.call(this).map((account) => ({ ...account, enabled: mixed || account.index !== 0 }));
+		});
+		vi.spyOn(AccountManager.prototype, "getSelectionExplainability").mockReturnValue([
+			{ index: 0, enabled: mixed, isCurrentForFamily: false, eligible: false,
+				reasons: mixed ? ["token-bucket-empty"] : ["disabled"], healthScore: 100, tokensAvailable: mixed ? 0 : 50, lastUsed: 0 },
+			{ index: 1, enabled: true, isCurrentForFamily: true, eligible: false,
+				reasons: [], healthScore: 100, tokensAvailable: 50, lastUsed: 0, ...block },
+		]);
+		const { OpenAIAuthPlugin } = await import("../index.js");
+		const client = { tui: { showToast: vi.fn() }, auth: { set: vi.fn() } };
+		const plugin = await OpenAIAuthPlugin({ client } as unknown as Parameters<typeof OpenAIAuthPlugin>[0]);
+		if (!plugin.auth || !("loader" in plugin.auth) || !plugin.auth.loader) throw new Error("Missing auth loader");
+		const sdk = await plugin.auth.loader(async () => ({
+			type: "oauth", access: "FAKE_ACCESS", refresh: "FAKE_REFRESH",
+			expires: Date.now() + 60_000,
+		}), { options: {}, models: {} } as Parameters<typeof plugin.auth.loader>[1]);
+		const fetcher = sdk as { fetch: (url: string, init: RequestInit) => Promise<Response> };
+		const response = await fetcher.fetch("https://example.com", {});
+		const body = await response.json();
+		expect(response.status).toBe(status);
+		expect(body.error.code).toBe(code);
+		expect(body.error.message).toContain(detail);
+		if (!mixed) expect(body.error.message).toContain("1 configured account(s) are disabled");
+		expect(body.error.message).not.toContain("All 2 account(s) are rate-limited");
+		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
 
 	it("rejects with a named AbortError when the caller aborts mid retry-wait (#176)", async () => {

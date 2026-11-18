@@ -567,7 +567,7 @@ describe("standalone per-project account storage", () => {
 		expect(__test.findStandaloneProjectRoot(nested)).toBe(projectDir);
 	});
 
-	it("status --json resolves the per-project pool by default and reports its scope", async () => {
+	it("status --json resolves the per-project pool when enabled and reports its scope", async () => {
 		tempHome = await createTempHome();
 		vi.stubEnv("HOME", tempHome);
 		vi.stubEnv("USERPROFILE", tempHome);
@@ -576,7 +576,7 @@ describe("standalone per-project account storage", () => {
 		const { runInstaller, __test } = await importCore();
 
 		const result = await runInstaller(["status", "--json"], {
-			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome, [PER_PROJECT_ENV]: "1" },
 			projectDir,
 		});
 
@@ -635,7 +635,7 @@ describe("standalone per-project account storage", () => {
 		expect(__test.resolvePerProjectAccounts({ [PER_PROJECT_ENV]: "0" }, opencodeDir)).toBe(false);
 	});
 
-	it("reads perProjectAccounts from the plugin config file, defaulting on", async () => {
+	it("reads perProjectAccounts from the plugin config file, defaulting off", async () => {
 		tempHome = await createTempHome();
 		vi.stubEnv("HOME", tempHome);
 		vi.stubEnv("USERPROFILE", tempHome);
@@ -644,7 +644,7 @@ describe("standalone per-project account storage", () => {
 		await mkdir(opencodeDir, { recursive: true });
 		const pluginConfig = join(opencodeDir, "openai-codex-auth-config.json");
 
-		expect(__test.resolvePerProjectAccounts({}, opencodeDir)).toBe(true);
+		expect(__test.resolvePerProjectAccounts({}, opencodeDir)).toBe(false);
 		await writeFile(pluginConfig, JSON.stringify({ perProjectAccounts: false }), "utf-8");
 		expect(__test.resolvePerProjectAccounts({}, opencodeDir)).toBe(false);
 		await writeFile(pluginConfig, JSON.stringify({ perProjectAccounts: true }), "utf-8");

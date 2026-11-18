@@ -732,8 +732,8 @@ function findNonFiniteNumberPaths(value, path = "$", found = [], depth = 0) {
 // --- Per-project account pool resolution --------------------------------------
 // Mirror of `lib/storage/paths.ts` so the standalone CLI lands on the same
 // accounts file the plugin writes: per-project pools under
-// `~/.opencode/projects/<project-key>/` when `perProjectAccounts` is on (the
-// shipped default), the global `~/.opencode/<file>` otherwise. The plugin
+// `~/.opencode/projects/<project-key>/` when `perProjectAccounts` is enabled,
+// the global `~/.opencode/<file>` by default. The plugin
 // receives the project directory from the OpenCode hook input; the CLI
 // equivalent is the directory the command is run from, overridable through
 // `options.projectDir` for tests.
@@ -802,7 +802,7 @@ function findStandaloneProjectRoot(startDir, homeDir = resolveHomeDirectory()) {
  * Mirror of `getPerProjectAccounts` (lib/config.ts): the env override accepts
  * only the literal "1" as true (every other set value is false, per
  * EnvBooleanSchema), then the plugin config file's `perProjectAccounts`, then
- * the shipped default (on). An unreadable config file falls back to the
+ * the shipped default (off). An unreadable config file falls back to the
  * default exactly as `loadPluginConfig` does. The plugin reads its config
  * under `homedir()`; the CLI resolves it under the same home it already uses
  * for the accounts file so a redirected HOME keeps both consistent.
@@ -814,7 +814,7 @@ function resolvePerProjectAccounts(env, opencodeDir) {
 		const configPath = join(opencodeDir, STANDALONE_PLUGIN_CONFIG_FILE_NAME);
 		// A FIFO/device here would block readFileSync forever; treat a
 		// non-regular file the same as an unreadable one and keep the default.
-		if (specialFileError(configPath)) return true;
+		if (specialFileError(configPath)) return false;
 		const parsed = JSON.parse(readFileSync(configPath, "utf-8"));
 		if (isPlainObject(parsed) && typeof parsed.perProjectAccounts === "boolean") {
 			return parsed.perProjectAccounts;
@@ -822,7 +822,7 @@ function resolvePerProjectAccounts(env, opencodeDir) {
 	} catch {
 		// Missing or unreadable plugin config falls through to the default.
 	}
-	return true;
+	return false;
 }
 
 /**
