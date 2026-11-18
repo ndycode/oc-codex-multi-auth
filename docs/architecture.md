@@ -10,8 +10,8 @@ Public overview of how the plugin installs config, handles ChatGPT Plus/Pro OAut
 - OpenCode loads `dist/index.js` as the provider plugin (built from `index.ts`) and `dist/tui.js` as the TUI quota-status plugin (built from `tui.ts`). On OpenCode 2.0.16+, the same default exports also carry a V2 `setup` hook (`lib/opencode-v2*.ts`) that reuses the shared V1 runtime.
 - The plugin registers **25** `codex-*` tools via **25 per-file factories** under `lib/tools/` (`codex-list`, `codex-switch`, `codex-warm`, and 22 others).
 - Requests to the ChatGPT-backed Codex API stay stateless: `store: false`, `stream: true`, and `reasoning.encrypted_content`.
-- GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, the Daybreak tiers, and GPT-5.6 use the responses-lite request shape; other models keep the classic shape.
-- Account, config, backup, log, and quota state stays local under `~/.opencode` and `~/.config/opencode`. Per-project account pools are on by default.
+- GPT-6.2 Astra/Sol, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, the Daybreak tiers, and GPT-5.6 use the responses-lite request shape; other models keep the classic shape.
+- Account, config, backup, log, and quota state stays local under `~/.opencode` and `~/.config/opencode`. The global account pool is the default; per-project account pools are opt-in.
 
 ---
 
@@ -29,7 +29,7 @@ index.ts
   |- resolve config (file + env overrides)
   |- pick account: modelAccountPools -> rotationStrategy (hybrid default)
   |- refresh token if needed (queued, cross-process lease)
-  |- shape body: native or legacy mode; responses-lite for GPT-6/5.6/Daybreak
+  |- shape body: native or legacy mode; responses-lite for GPT-6.2/GPT-6/5.6/Daybreak
   |- attach OAuth headers + client identity
   |- retry budgets, circuit breaker, rate-limit backoff, fallback chains
   v
@@ -52,15 +52,15 @@ tui.ts renders prompt quota status; codex-* tools expose the same state
 | --- | --- |
 | (default) / `--plugin-only` | Register plugin entries; preserve `provider.openai` |
 | `--v2` | V2 `plugins` entry only (refuses `opencode.jsonc` or V1 `plugin` entries) |
-| `--modern` | Compact modern template: 12 base model families + variant picker (65 variants) |
-| `--full` | Modern bases **plus** 65 explicit selector IDs |
-| `--legacy` | Explicit-only template (65 entries) |
+| `--modern` | Compact modern template: 14 base model families + variant picker (77 variants) |
+| `--full` | Modern bases **plus** 77 explicit selector IDs |
+| `--legacy` | Explicit-only template (77 entries) |
 
 Standalone commands (no agent loop): `doctor`, `status`, `list`, `limits`, `dashboard`, `health`, `diag`, `warm`. See [tools-and-cli.md](tools-and-cli.md).
 
 ### Provider plugin (`index.ts`)
 
-Owns the auth loader, account manager lifecycle, the custom fetch pipeline, runtime metrics, and `ToolContext` construction for the tool registry. `PluginInput.directory` (falling back to `worktree`) binds per-project storage to the project OpenCode was launched in.
+Owns the auth loader, account manager lifecycle, the custom fetch pipeline, runtime metrics, and `ToolContext` construction for the tool registry. `PluginInput.directory` (falling back to `worktree`) identifies the project for opt-in per-project storage; the global pool is used by default.
 
 Auth methods exposed to OpenCode are the **four OAuth labels only**: default browser, open URL manually, device code, and manual URL paste. There is no API-key login. All four land in the same account pool; the manual URL paste requires the full callback URL because its `state` parameter binds the pasted value to the login attempt.
 
@@ -68,12 +68,12 @@ Auth methods exposed to OpenCode are the **four OAuth labels only**: default bro
 
 - URL rewrite to `chatgpt.com/backend-api/codex/responses` by default. `OPENAI_BASE_URL` is honored only when `CODEX_AUTH_ALLOW_OPENAI_BASE_URL=1` explicitly trusts a gateway, and the check is fail-closed: HTTPS required for remote hosts, literal loopback IPs (`127.0.0.0/8`, `::1`) are the only HTTP targets, credentials/query/fragments and redirects are rejected. A rejected value fails loudly with a `[oc-codex-multi-auth]`-prefixed error.
 - **Native mode** (default) preserves the host payload shape, normalizes the model name, clamps any host-supplied reasoning effort to the family envelope (`ultra` goes out as the catalog's multi-agent effort: `xhigh` on Astra/6.1 Sol/6.1 Terra, `max` elsewhere), resolves the service tier, and upserts one `## Backend Model Identity` developer message naming the outgoing model. `store: false` and `reasoning.encrypted_content` ride in via the shipped config templates. **Legacy mode** (`lib/request/request-transformer.ts`) applies compatibility rewrites and sets all three invariants unconditionally.
-- **Responses-lite** reshapes the body for `gpt-6.1-sol`/`gpt-6.1-terra`/`gpt-6-astra`/`gpt-6-sol`/`gpt-6-luna`, the Daybreak tiers, and `gpt-5.6-*`: tool definitions move into `input` as `additional_tools`, instructions become a developer message, top-level `tools` is omitted, and `x-openai-internal-codex-responses-lite: true` is sent. The reshape applies per attempt against the model actually sent, so a fallback to a classic model re-serializes correctly.
+- **Responses-lite** reshapes the body for `gpt-6.2-astra`/`gpt-6.2-sol` and the existing `gpt-6.1-sol`/`gpt-6.1-terra`/`gpt-6-astra`/`gpt-6-sol`/`gpt-6-luna`, the Daybreak tiers, and `gpt-5.6-*`: tool definitions move into `input` as `additional_tools`, instructions become a developer message, top-level `tools` is omitted, and `x-openai-internal-codex-responses-lite: true` is sent. The reshape applies per attempt against the model actually sent, so a fallback to a classic model re-serializes correctly.
 - **Wire shape (Codex 0.166 parity)**: no request carries a top-level `instructions` field; base instructions travel as the first developer message in `input` for every model. On responses-lite models, function and custom tools are grouped into one `functions` namespace inside `additional_tools`, and the item is skipped when a turn has no tools.
 - **Service tier** mirrors Codex's Fast tier: `service_tier: "priority"` only for models whose catalog offers it, the catalog default (Fast on `gpt-6-sol`/`gpt-6-luna`) when unset, and `x-codex-routing-hint` on every request (`lib/request/helpers/codex-catalog.ts`).
 - **Sticky routing**: the `x-codex-turn-state` token from a turn's first response is replayed on that turn's tool-result continuations and dropped at the next user message, per session and account (`lib/request/turn-state.ts`).
 - **Client identity** defaults to `opencode` for responses-lite models and `codex_cli_rs` otherwise; override with `CODEX_AUTH_CLIENT_IDENTITY`. The Codex identity also sends `version: <client version>`.
-- **Auto-fallback** covers preview entitlement gates: GPT-6 Astra/6.1 Sol/Sol/Luna chains down through the GPT-5.6 tiers to `gpt-5.6-luna` (opt out with `CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK=1`), GPT-5.6 chains to `gpt-5.5`/`gpt-6-luna`/`gpt-5.6-luna` (`CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK=1`), and the Daybreak cyber tiers have no chain — they fail loudly. `unsupportedCodexPolicy: "fallback"` enables broader chains; a single request hops at most `MAX_QUOTA_FALLBACK_SWITCHES` (7) models.
+- **Auto-fallback** covers preview entitlement gates: GPT-6.2 Astra/Sol and the existing GPT-6 Astra/6.1 Sol/Sol/Luna chains down through the GPT-5.6 tiers (opt out with `CODEX_AUTH_DISABLE_GPT6_AUTO_FALLBACK=1`), GPT-5.6 chains to `gpt-5.5`/`gpt-6-luna`/`gpt-5.6-luna` (`CODEX_AUTH_DISABLE_GPT56_AUTO_FALLBACK=1`), and the Daybreak cyber tiers have no chain — they fail loudly. `unsupportedCodexPolicy: "fallback"` enables broader chains; a single request hops at most `MAX_QUOTA_FALLBACK_SWITCHES` (8) models.
 - `lib/request/response-handler.ts` folds SSE events into one response as lines arrive, guards stream stalls, and detects empty responses for the retry loop.
 
 ### Account rotation and pools

@@ -107,7 +107,7 @@ const DEFAULT_CONFIG: PluginConfig = {
 	rateLimitToastDebounceMs: 60_000,
 	toastDurationMs: 5_000,
 	accountToasts: true,
-	perProjectAccounts: true,
+	perProjectAccounts: false,
 	credentialSnapshots: true,
 	credentialSnapshotsMaxCount: 10,
 	sessionRecovery: true,
@@ -1243,7 +1243,7 @@ export function getPerProjectAccounts(pluginConfig: PluginConfig): boolean {
 	return resolveBooleanSetting(
 		"CODEX_AUTH_PER_PROJECT_ACCOUNTS",
 		pluginConfig.perProjectAccounts,
-		true,
+		false,
 	);
 }
 

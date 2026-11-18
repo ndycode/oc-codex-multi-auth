@@ -9,7 +9,7 @@ The npm bin is an installer for OpenCode config plus a thin standalone CLI
 
 - OpenCode V1 loads `index.ts` (provider plugin) and `tui.ts` (prompt quota status) from the built `dist/` exports.
 - OpenCode V2 loads the same package through the `setup` hook on each default export instead — see OPENCODE V2 below.
-- Runtime state stays local under `~/.opencode`; per-project account pools are on by default. Project-root detection walks up for markers (`.git`, `package.json`, `.opencode`, …) and stops at the home directory — `$HOME` itself is never a project; outside a project the global pool is used.
+- Runtime state stays local under `~/.opencode`; account pools are global by default, with per-project pools opt-in. Project-root detection walks up for markers (`.git`, `package.json`, `.opencode`, …) and stops at the home directory — `$HOME` itself is never a project; outside a project the global pool is used.
 
 ## STRUCTURE
 
@@ -112,6 +112,6 @@ kept as-is, including one pointing at a working checkout.
 
 - OAuth redirect `http://localhost:1455/auth/callback`; the callback server binds both `127.0.0.1` and `[::1]` on port 1455 (IPv6 bind failure is tolerated when IPv4 works).
 - State files: plugin config `~/.opencode/openai-codex-auth-config.json`; per-project accounts `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json`; global accounts `~/.opencode/oc-codex-multi-auth-accounts.json`; flagged accounts, credential snapshots (`backups/codex-credential-snapshot-*`), pending-rotation journals (`<accounts-file>.refresh.pending.<hash>`), and quota-notification state sit beside the active accounts file; request logs `~/.opencode/logs/codex-plugin/` when enabled.
-- Model catalog: 12 modern bases / 65 variants; legacy template ships 65 explicit entries. Routed but unshipped (add by hand): `gpt-daybreak-blue-latest`, `gpt-daybreak-red-latest`, `gpt-5.6-cyber`. Retired but still resolved/falling back: `gpt-5.4-mini`, `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`.
+- Model catalog: 14 modern bases / 77 variants; legacy template ships 77 explicit entries. Routed but unshipped (add by hand): `gpt-daybreak-blue-latest`, `gpt-daybreak-red-latest`, `gpt-5.6-cyber`. Retired but still resolved/falling back: `gpt-5.4-mini`, `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`.
 - Prompt templates sync from Codex CLI GitHub releases with ETag caching; catalog instructions come from `model_messages.instructions_template` when `base_instructions` is empty; `BUNDLED_CODEX_INSTRUCTIONS` (`lib/prompts/codex-instructions.ts`) is the offline last resort.
 - 5xx server errors rotate accounts with the same health penalty as network errors; RFC 8594 deprecation headers are logged as warnings.

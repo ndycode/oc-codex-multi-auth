@@ -50,7 +50,7 @@ OpenCode 2.0.16+ loads the plugin through a V2 adapter (the `setup` hook) instea
 
 ### Per-project pools
 
-`perProjectAccounts` (default `true`, env `CODEX_AUTH_PER_PROJECT_ACCOUNTS`) gives each project its own pool under `~/.opencode/projects/<project-key>/`. Toggling switches scope live but does not migrate or delete the other scope's files — copy or remove them yourself. `$HOME` itself is never a project root.
+`perProjectAccounts` (default `false`, env `CODEX_AUTH_PER_PROJECT_ACCOUNTS`) optionally gives each project its own pool under `~/.opencode/projects/<project-key>/`. By default, projects share the global pool. Toggling switches scope live but does not migrate or delete the other scope's files — copy or remove them yourself. `$HOME` itself is never a project root.
 
 ---
 

@@ -20,7 +20,7 @@ npx -y oc-codex-multi-auth@latest --modern
 ```
 
 `--modern` fits most setups: it registers the plugin and writes the compact
-catalog of 12 base models with 65 `--variant` presets. Use no flag to keep
+catalog of 14 base models with 77 `--variant` presets. Use no flag to keep
 your existing `provider.openai` untouched, `--full` to also get explicit
 selector IDs, `--legacy` for older OpenCode, or `--v2` for OpenCode 2.0.16+.
 See [Getting Started](getting-started.md).
@@ -36,9 +36,10 @@ Details: [Getting Started](getting-started.md).
 ## Can I use several ChatGPT accounts?
 
 Yes — that is the point of the plugin. Health-aware rotation (`hybrid` by
-default) picks an account per request. Pools are per-project by default under
-`~/.opencode/projects/<project-key>/`; set `CODEX_AUTH_PER_PROJECT_ACCOUNTS=0`
-for one global pool at `~/.opencode/oc-codex-multi-auth-accounts.json`.
+default) picks an account per request. The shared global pool at
+`~/.opencode/oc-codex-multi-auth-accounts.json` is the default. Set
+`CODEX_AUTH_PER_PROJECT_ACCOUNTS=1` to opt into per-project pools under
+`~/.opencode/projects/<project-key>/`.
 Manage them with `codex-list`, `codex-switch`, `codex-warm`, and `codex-pool`.
 
 ## Where is my data stored?

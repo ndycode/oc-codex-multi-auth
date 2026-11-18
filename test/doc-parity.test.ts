@@ -310,7 +310,12 @@ describe("runtime documentation parity", () => {
 		const noun =
 			"(?:bases|base|variants|variant|presets|preset|entries|entry|selector IDs?|model IDs?|model keys?|model definitions?|model families|families)";
 		const countPattern = new RegExp(
-			String.raw`(?<![\d.])(\d+)((?:\s+${qualifier})*)\s+(${noun})\b`,
+			// Some guides put the literal picker flag between the count and noun,
+			// for example "77 `--variant` presets". Keep that wording under the
+			// same parity check so it cannot drift when a catalog grows. Restrict
+			// the optional backticked token to the picker flag; arbitrary inline
+			// code such as "1 `plugin` entries" is not a catalog count.
+			String.raw`(?<![\d.])(\d+)((?:\s+${qualifier})*)(?:\s+` + "`--variant`" + String.raw`)?\s+(${noun})\b`,
 			"g",
 		);
 

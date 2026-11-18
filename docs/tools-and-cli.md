@@ -130,14 +130,14 @@ Bin: `oc-codex-multi-auth` (or `npx -y oc-codex-multi-auth@latest …`).
 `resolveStandaloneStorage` picks, in order:
 
 1. `--config-path <path>` — used verbatim (`scope: explicit`);
-2. the **per-project** pool for the current directory's project root when `perProjectAccounts` is on (the default) — `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` (`scope: project`);
+2. the **per-project** pool for the current directory's project root when `perProjectAccounts` is enabled (set `CODEX_AUTH_PER_PROJECT_ACCOUNTS=1` or `perProjectAccounts: true`) — `~/.opencode/projects/<project-key>/oc-codex-multi-auth-accounts.json` (`scope: project`);
 3. the global `~/.opencode/oc-codex-multi-auth-accounts.json` (`scope: global`).
 
 Project-root detection walks up looking for markers (`.git`, `package.json`,
 `go.mod`, `Cargo.toml`, `pyproject.toml`, `.opencode`) and stops at your home
 directory — a stray `.opencode` inside `$HOME` does not turn `~` into a project,
-so the CLI resolves the global pool from `$HOME` or a markerless directory. Run
-it from inside a real project to see that project's pool.
+so the CLI resolves the global pool from `$HOME` or a markerless directory. With
+per-project storage enabled, run it inside a real project to see that project's pool.
 
 A `--config-path` naming a `.migrated-to-keychain.<ts>` file is refused for the write-capable commands — restore it through `codex-keychain rollback` instead.
 
@@ -169,9 +169,9 @@ A `--config-path` naming a `.migrated-to-keychain.<ts>` file is refused for the 
 | --- | --- |
 | (default) / `--plugin-only` | Register plugin/TUI entries without changing `provider.openai` |
 | `--v2` | Register for OpenCode V2 (`plugins` entry only; plugin-only, includes automatic quota UI) |
-| `--modern` | Compact modern catalog: 12 base OAuth models + variant presets |
-| `--full` | Compact bases plus 65 explicit selector entries |
-| `--legacy` | Explicit-only catalog: 65 preset model entries |
+| `--modern` | Compact modern catalog: 14 base OAuth models + variant presets |
+| `--full` | Compact bases plus 77 explicit selector entries |
+| `--legacy` | Explicit-only catalog: 77 preset model entries |
 | `--dry-run` | Show changed paths without values or writes |
 | `--no-cache-clear` | Skip clearing the OpenCode plugin cache |
 | `--version` | Print the installed package version |
@@ -215,7 +215,7 @@ A successful warm clears only unchanged cooldown state, the responding model's o
 
 - **Rotation**: `rotationStrategy` = `hybrid` (default) | `sticky` | `round-robin`, in `~/.opencode/openai-codex-auth-config.json` or `CODEX_AUTH_ROTATION_STRATEGY`.
 - **Model pools**: `modelAccountPools` + `codex-pool`; `preferred` falls back to the general pool, `strict` never leaves its pool.
-- **Per-project accounts**: default on under `~/.opencode/projects/<project-key>/`.
+- **Per-project accounts**: opt in with `CODEX_AUTH_PER_PROJECT_ACCOUNTS=1` or `perProjectAccounts: true`; otherwise the global pool is used.
 - **Stateless Codex contract**: `store: false` + `reasoning.encrypted_content` on every request.
 - **Responses-lite models** (GPT-5.6, GPT-6, Daybreak): client identity defaults to `opencode`; other models use `codex_cli_rs`.
 

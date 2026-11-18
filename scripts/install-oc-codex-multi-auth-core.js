@@ -172,9 +172,9 @@ function printHelp(write = console.log) {
 		"Options:\n" +
 		"  --plugin-only      Register plugins without changing provider.openai\n" +
 		"  --v2               Register for OpenCode V2 (includes automatic quota UI loading)\n" +
-		"  --modern           Force compact modern config (12 base OAuth models + --variant presets)\n" +
-		"  --full             Install compact base models plus 65 explicit selector entries\n" +
-		"  --legacy           Force explicit legacy config (65 preset model entries)\n" +
+		"  --modern           Force compact modern config (14 base OAuth models + --variant presets)\n" +
+		"  --full             Install compact base models plus 77 explicit selector entries\n" +
+		"  --legacy           Force explicit legacy config (77 preset model entries)\n" +
 		"  --dry-run          Show actions without writing\n" +
 		"  --no-cache-clear   Skip clearing OpenCode cache\n" +
 		"  --version          Print the installed version\n"
@@ -732,8 +732,8 @@ function findNonFiniteNumberPaths(value, path = "$", found = [], depth = 0) {
 // --- Per-project account pool resolution --------------------------------------
 // Mirror of `lib/storage/paths.ts` so the standalone CLI lands on the same
 // accounts file the plugin writes: per-project pools under
-// `~/.opencode/projects/<project-key>/` when `perProjectAccounts` is on (the
-// shipped default), the global `~/.opencode/<file>` otherwise. The plugin
+// `~/.opencode/projects/<project-key>/` when `perProjectAccounts` is enabled,
+// the global `~/.opencode/<file>` by default. The plugin
 // receives the project directory from the OpenCode hook input; the CLI
 // equivalent is the directory the command is run from, overridable through
 // `options.projectDir` for tests.
@@ -802,7 +802,7 @@ function findStandaloneProjectRoot(startDir, homeDir = resolveHomeDirectory()) {
  * Mirror of `getPerProjectAccounts` (lib/config.ts): the env override accepts
  * only the literal "1" as true (every other set value is false, per
  * EnvBooleanSchema), then the plugin config file's `perProjectAccounts`, then
- * the shipped default (on). An unreadable config file falls back to the
+ * the shipped default (off). An unreadable config file falls back to the
  * default exactly as `loadPluginConfig` does. The plugin reads its config
  * under `homedir()`; the CLI resolves it under the same home it already uses
  * for the accounts file so a redirected HOME keeps both consistent.
@@ -814,7 +814,7 @@ function resolvePerProjectAccounts(env, opencodeDir) {
 		const configPath = join(opencodeDir, STANDALONE_PLUGIN_CONFIG_FILE_NAME);
 		// A FIFO/device here would block readFileSync forever; treat a
 		// non-regular file the same as an unreadable one and keep the default.
-		if (specialFileError(configPath)) return true;
+		if (specialFileError(configPath)) return false;
 		const parsed = JSON.parse(readFileSync(configPath, "utf-8"));
 		if (isPlainObject(parsed) && typeof parsed.perProjectAccounts === "boolean") {
 			return parsed.perProjectAccounts;
@@ -822,7 +822,7 @@ function resolvePerProjectAccounts(env, opencodeDir) {
 	} catch {
 		// Missing or unreadable plugin config falls through to the default.
 	}
-	return true;
+	return false;
 }
 
 /**
@@ -3772,10 +3772,10 @@ export async function runInstaller(argv = process.argv.slice(2), options = {}) {
 	log("\nDone. Restart OpenCode to (re)install the plugin.");
 	log("Example: opencode");
 	if (!pluginOnly && configMode === "modern") {
-		log("Note: Modern config intentionally shows 12 base OAuth model entries; use the variant picker for reasoning presets.");
+		log("Note: Modern config intentionally shows 14 base OAuth model entries; use the variant picker for reasoning presets.");
 	}
 	if (!pluginOnly && configMode === "legacy") {
-		log("Note: Legacy config writes 65 explicit preset entries and is also safe for older OpenCode versions.");
+		log("Note: Legacy config writes 77 explicit preset entries and is also safe for older OpenCode versions.");
 	}
 	if (!pluginOnly && configMode === "full") {
 		log("Note: Full config installs both compact base models and explicit preset entries for direct selector IDs.");
