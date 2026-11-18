@@ -7,6 +7,21 @@ The current stable release line is `6.x`. This file is the complete release hist
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.33.0] - 2026-11-18
+
+### Added
+- GPT-6.2 Astra and Sol now have canonical model IDs, aliases, reasoning efforts, prompt and request shaping, fallback chains, and entries in both OpenCode templates. The catalog now covers 14 base models and 77 variants. ([#309](https://github.com/ndycode/oc-codex-multi-auth/pull/309), thanks @ndycode)
+
+### Changed
+- Subagents now use the shared global account pool by default. Set `perProjectAccounts` or `CODEX_AUTH_PER_PROJECT_ACCOUNTS=1` to opt into per-project pools. ([#307](https://github.com/ndycode/oc-codex-multi-auth/pull/307), thanks @lubshad)
+- V2 OAuth guidance now explains the service-host callback and offers Device Code and Manual URL Paste options for remote or headless sign-in. ([#306](https://github.com/ndycode/oc-codex-multi-auth/pull/306), thanks @lubshad)
+
+### Fixed
+- Account availability now distinguishes local throttling, authentication and server cooldowns, disabled accounts, and genuine upstream rate limits. Local unavailability returns HTTP 503, while genuine upstream limits retain HTTP 429. ([#306](https://github.com/ndycode/oc-codex-multi-auth/pull/306), thanks @lubshad)
+
+### Internal
+- Integrated PRs [#306](https://github.com/ndycode/oc-codex-multi-auth/pull/306), [#307](https://github.com/ndycode/oc-codex-multi-auth/pull/307), and [#309](https://github.com/ndycode/oc-codex-multi-auth/pull/309) at release commit [`6e9da06`](https://github.com/ndycode/oc-codex-multi-auth/commit/6e9da06c8a9547c0b5e9609bd12939aa9420785e).
+
 ## [6.32.0] - 2026-11-13
 
 ### Added
