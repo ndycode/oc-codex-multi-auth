@@ -11,7 +11,7 @@ Public overview of how the plugin installs config, handles ChatGPT Plus/Pro OAut
 - The plugin registers **25** `codex-*` tools via **25 per-file factories** under `lib/tools/` (`codex-list`, `codex-switch`, `codex-warm`, and 22 others).
 - Requests to the ChatGPT-backed Codex API stay stateless: `store: false`, `stream: true`, and `reasoning.encrypted_content`.
 - GPT-6.2 Astra/Sol, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra, the Daybreak tiers, and GPT-5.6 use the responses-lite request shape; other models keep the classic shape.
-- Account, config, backup, log, and quota state stays local under `~/.opencode` and `~/.config/opencode`. Per-project account pools are on by default.
+- Account, config, backup, log, and quota state stays local under `~/.opencode` and `~/.config/opencode`. The global account pool is the default; per-project account pools are opt-in.
 
 ---
 
@@ -60,7 +60,7 @@ Standalone commands (no agent loop): `doctor`, `status`, `list`, `limits`, `dash
 
 ### Provider plugin (`index.ts`)
 
-Owns the auth loader, account manager lifecycle, the custom fetch pipeline, runtime metrics, and `ToolContext` construction for the tool registry. `PluginInput.directory` (falling back to `worktree`) binds per-project storage to the project OpenCode was launched in.
+Owns the auth loader, account manager lifecycle, the custom fetch pipeline, runtime metrics, and `ToolContext` construction for the tool registry. `PluginInput.directory` (falling back to `worktree`) identifies the project for opt-in per-project storage; the global pool is used by default.
 
 Auth methods exposed to OpenCode are the **four OAuth labels only**: default browser, open URL manually, device code, and manual URL paste. There is no API-key login. All four land in the same account pool; the manual URL paste requires the full callback URL because its `state` parameter binds the pasted value to the login attempt.
 
