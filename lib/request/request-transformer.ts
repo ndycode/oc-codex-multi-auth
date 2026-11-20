@@ -53,7 +53,7 @@ export {
 } from "./helpers/input-utils.js";
 
 /**
- * Model for a missing or unrecognized id. gpt-5.4 retired from Codex with
+ * Model for a missing or unrecognized display name. gpt-5.4 retired from Codex with
  * ChatGPT sign-in on 2026-08-31, and OpenAI's Codex model docs name
  * gpt-6-sol as its replacement. An account outside the GPT-6 rollout still
  * recovers through gpt-6-sol's default auto-fallback chain.
@@ -63,8 +63,8 @@ const DEFAULT_NORMALIZED_MODEL = GPT_6_SOL_MODEL_ID;
 /**
  * Normalize model name to Codex-supported variants
  *
- * Uses explicit model map for known models, with fallback pattern matching
- * for unknown/custom model names.
+ * Uses the model map for known models and pattern matching for display names.
+ * Unknown backend slugs pass through unchanged.
  *
  * @param model - Original model name (e.g., "gpt-5-codex-low", "openai/gpt-5-codex")
  * @returns Normalized model name (e.g., "gpt-5-codex", "gpt-5.1-codex-max")
@@ -81,10 +81,12 @@ export function normalizeModel(model: string | undefined): string {
 		return mappedModel;
 	}
 
-	// Fallback: Pattern-based matching for unknown/custom model names
-	// This preserves backwards compatibility with old verbose names
-	// like "GPT 5 Codex Low (ChatGPT Subscription)"
 	const normalized = modelId.toLowerCase();
+	if (/^[a-z0-9][a-z0-9._-]*$/.test(normalized)) {
+		return getNormalizedModel(stripEffortSuffix(normalized)) ?? modelId;
+	}
+
+	// Pattern matching preserves legacy verbose display names.
 
 	// Priority order for pattern matching (most specific first):
 	// 0. GPT-6 Astra and the Daybreak cyber tiers. These run first because they

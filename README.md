@@ -152,6 +152,8 @@ Accounts whose plan quota is used up are left alone until it resets, even when t
 
 `--modern` and `--full` install **14 base models** covering **77 variants** (selectable via `--variant`); `--legacy` installs the 77 as explicit IDs.
 
+Unknown backend-style model IDs are sent unchanged after removing the provider prefix. The backend may reject an unavailable ID, and configured fallback policies can still apply. Known model aliases and their effort suffixes continue to resolve through the model map.
+
 | Base | Notes |
 | --- | --- |
 | `gpt-6.1-sol` | newest workhorse; the OpenAI Codex catalog's default since 2026-09-29 |

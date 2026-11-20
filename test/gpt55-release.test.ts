@@ -40,9 +40,7 @@ describe("GPT-5.5 activation", () => {
 		expect(normalizeModel("openai/gpt-5.5-high")).toBe("gpt-5.5");
 		expect(normalizeModel("openai/gpt-5.5-fast")).toBe("gpt-5.5");
 		expect(normalizeModel("openai/gpt-5.5-fast-medium")).toBe("gpt-5.5");
-		// User-typed Pro still collapses to the Codex-supported gpt-5.5 so the
-		// fallback chain can rescue it rather than failing 46 accounts.
-		expect(normalizeModel("openai/gpt-5.5-pro-high")).toBe("gpt-5.5");
+		expect(normalizeModel("openai/gpt-5.5-pro-high")).toBe("gpt-5.5-pro-high");
 	});
 
 	it("uses the same reasoning rules as the prior latest general family", () => {
