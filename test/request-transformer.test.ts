@@ -68,9 +68,9 @@ describe('Request Transformer Module', () => {
 			expect(normalizeModel('gpt-5')).toBe('gpt-6-sol');
 		});
 
-		it('should normalize variants containing "codex" to canonical codex', () => {
+		it('preserves unknown slug variants containing "codex"', () => {
 			expect(normalizeModel('openai/gpt-5-codex')).toBe('gpt-5-codex');
-			expect(normalizeModel('custom-gpt-5-codex-variant')).toBe('gpt-5-codex');
+			expect(normalizeModel('custom-gpt-5-codex-variant')).toBe('custom-gpt-5-codex-variant');
 		});
 
 		it('should normalize legacy gpt-5 aliases to proper canonical models', () => {
@@ -83,9 +83,10 @@ describe('Request Transformer Module', () => {
 			expect(normalizeModel('GPT-5.4-Nano')).toBe('gpt-5.4-nano');
 		});
 
-		it('should return gpt-6-sol as default for unknown models', () => {
-			expect(normalizeModel('unknown-model')).toBe('gpt-6-sol');
-			expect(normalizeModel('gpt-4')).toBe('gpt-6-sol');
+		it('preserves unknown backend slugs and their case after removing the provider prefix', () => {
+			expect(normalizeModel('unknown-model')).toBe('unknown-model');
+			expect(normalizeModel('gpt-4')).toBe('gpt-4');
+			expect(normalizeModel('openai/Gpt-6.3-Unreleased-high')).toBe('Gpt-6.3-Unreleased-high');
 		});
 
 		it('should return gpt-6-sol for undefined', () => {
@@ -107,11 +108,9 @@ describe('Request Transformer Module', () => {
 				expect(normalizeModel('gpt-5-high')).toBe('gpt-6-sol');
 			});
 
-			it('should prioritize codex over gpt-5 in model name', () => {
-				// Model name contains BOTH "codex" and "gpt-5"
-				// Should return "gpt-5-codex" (codex checked first)
+			it('maps known codex variants without rewriting unknown slugs', () => {
 				expect(normalizeModel('gpt-5-codex-low')).toBe('gpt-5-codex');
-				expect(normalizeModel('my-gpt-5-codex-model')).toBe('gpt-5-codex');
+				expect(normalizeModel('my-gpt-5-codex-model')).toBe('my-gpt-5-codex-model');
 			});
 
 			it('should normalize codex mini presets to gpt-5.1-codex-mini', () => {
@@ -222,14 +221,13 @@ describe('Request Transformer Module', () => {
 			});
 
 			it('should not misclassify unrelated gpt-5.4x model strings', () => {
-				// Boundary-aware matching avoids false 5.4-family matches, then generic GPT-5 latest fallback applies.
-				expect(normalizeModel('gpt-5.40')).toBe('gpt-6-sol');
-				expect(normalizeModel('gpt-5.4pro')).toBe('gpt-6-sol');
+				expect(normalizeModel('gpt-5.40')).toBe('gpt-5.40');
+				expect(normalizeModel('gpt-5.4pro')).toBe('gpt-5.4pro');
 			});
 
 			it('should prioritize gpt-5.4-mini over generic gpt-5.4 and lightweight fallback matching', () => {
 				expect(normalizeModel('gpt-5.4-mini-high')).toBe('gpt-5.4-mini');
-				expect(normalizeModel('custom-gpt-5.4-mini-variant')).toBe('gpt-5.4-mini');
+				expect(normalizeModel('custom-gpt-5.4-mini-variant')).toBe('custom-gpt-5.4-mini-variant');
 				expect(normalizeModel('openai/gpt-5.4-mini')).not.toBe('gpt-5.4');
 			});
 
@@ -239,8 +237,8 @@ describe('Request Transformer Module', () => {
 			});
 
 			it('should handle special characters', () => {
-				expect(normalizeModel('my_gpt-5_codex')).toBe('gpt-5-codex');
-				expect(normalizeModel('gpt.5.high')).toBe('gpt-6-sol');
+				expect(normalizeModel('my_gpt-5_codex')).toBe('my_gpt-5_codex');
+				expect(normalizeModel('gpt.5.high')).toBe('gpt.5.high');
 			});
 
 			it('should handle old verbose names', () => {
@@ -921,6 +919,22 @@ describe('Request Transformer Module', () => {
 			};
 			const result = await transformRequestBody(body, codexInstructions);
 			expect(result.model).toBe('gpt-6-luna');  // gpt-5-mini maps to gpt-6-luna (gpt-5.4-mini retired)
+		});
+
+		it.each(['openai/gpt-6.1-sol-fast', 'openai/gpt-6.1-sol-fast-high'])(
+			'resolves the known Fast selector %s in the request body',
+			async (model) => {
+				const result = await transformRequestBody({ model, input: [] }, codexInstructions);
+				expect(result.model).toBe('gpt-6.1-sol');
+			},
+		);
+
+		it('preserves an unknown Fast-like selector in the request body', async () => {
+			const result = await transformRequestBody(
+				{ model: 'openai/Gpt-6.3-Unreleased-fast-high', input: [] },
+				codexInstructions,
+			);
+			expect(result.model).toBe('Gpt-6.3-Unreleased-fast-high');
 		});
 
 		it('should apply default reasoning config', async () => {

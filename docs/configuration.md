@@ -152,18 +152,26 @@ usage" on most models).
 
 ### Model normalization
 
-The plugin normalizes the selected id before the upstream call. Highlights:
+Known aliases resolve through the model map, including supported effort suffixes.
+A `-fast` suffix on a known model also resolves to its canonical ID.
+Unknown backend-style model IDs are sent unchanged after removing the provider prefix. The backend may reject an unavailable ID, and configured fallback policies can still apply.
+Legacy display names can still normalize. If no model is supplied, the default is `gpt-6-sol`.
 
-- bare `gpt-6` maps to `gpt-6-astra`; `gpt-6-astra-pro*` collapses onto `gpt-6-astra` (not a Codex-routable id)
+- bare `gpt-6` maps to `gpt-6-astra`
 - bare `gpt-6.1` maps to `gpt-6.1-sol`; `gpt-6.1-terra` is a separate model.
 - bare `gpt-6.2` is this plugin's convenience alias for `gpt-6.2-sol`; the official API ids are `gpt-6.2-astra` and `gpt-6.2-sol`.
-- `gpt-daybreak-blue*` / `gpt-daybreak-red*` map to the catalog `-latest` ids; `gpt-5.6-cyber*` maps to itself, never to Sol
-- bare `gpt-5.6` maps to `gpt-5.6-sol`; `gpt-5.6-terra*`/`gpt-5.6-luna*` map to their own tiers
-- `gpt-5.5*`, `gpt-5.5-fast*`, and `gpt-5.5-pro*` normalize to `gpt-5.5` (GPT-5.5 Pro is ChatGPT-only)
-- legacy `gpt-5` maps to `gpt-6-sol`; any other unrecognized `gpt-5*` name also resolves to `gpt-6-sol` — the plugin-wide default for a missing/unknown id
+- `gpt-daybreak-blue` and `gpt-daybreak-red` map to the catalog `-latest` IDs; `gpt-5.6-cyber` maps to itself
+- bare `gpt-5.6` maps to `gpt-5.6-sol`; `gpt-5.6-terra` and `gpt-5.6-luna` are separate models
+- legacy `gpt-5` maps to `gpt-6-sol`
 - legacy `gpt-5-mini` maps to `gpt-6-luna`; `gpt-5-nano` maps to `gpt-5.4-nano`
 - `gpt-5.1-codex` normalizes to `gpt-5-codex`; `gpt-5.1-codex-max` and `gpt-5.1-codex-mini` are their own families
 - `MODEL_MAP` in `lib/request/helpers/model-map.ts` is the authoritative mapping
+
+| Selected model | Backend model ID |
+| --- | --- |
+| `openai/gpt-5.5-fast-high` | `gpt-5.5` |
+| `openai/gpt-5.5-pro-high` | `gpt-5.5-pro-high` |
+| `openai/gpt-5-unreleased` | `gpt-5-unreleased` |
 
 ### Catalog notes
 

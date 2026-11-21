@@ -149,6 +149,19 @@ function findMissingLabels(content: string, labels: readonly string[]): string[]
 }
 
 describe("runtime documentation parity", () => {
+	it("sends the backend model IDs shown in the configuration examples", async () => {
+		const docs = readRepoFile("docs/configuration.md");
+		const section = docs.split("### Model normalization")[1]?.split("\n### ")[0] ?? "";
+		const examples = [...section.matchAll(/^\| `([^`]+)` \| `([^`]+)` \|$/gm)];
+		expect(examples.map(([, selector]) => selector)).toEqual(
+			expect.arrayContaining(["openai/gpt-5.5-fast-high", "openai/gpt-5.5-pro-high", "openai/gpt-5-unreleased"]),
+		);
+		for (const [, model, expected] of examples) {
+			const result = await transformRequestBody({ model, input: [] }, "test instructions");
+			expect(result.model, model).toBe(expected);
+		}
+	});
+
 	it("keeps the documented stateless request contract aligned with the runtime transform", async () => {
 		const requestBody: RequestBody = {
 			model: "gpt-5",

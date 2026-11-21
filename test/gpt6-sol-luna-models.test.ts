@@ -279,7 +279,7 @@ describe("retired models", () => {
 
 	it("never resolves a default or legacy alias onto a retired id", () => {
 		expect(normalizeModel(undefined)).toBe(SOL);
-		expect(normalizeModel("unknown-model")).toBe(SOL);
+		expect(normalizeModel("unknown-model")).toBe("unknown-model");
 		expect(normalizeModel("gpt-5-mini")).toBe(LUNA);
 	});
 

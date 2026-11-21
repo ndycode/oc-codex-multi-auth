@@ -1790,6 +1790,21 @@ describe('Fetch Helpers Module', () => {
 	});
 
 		describe('transformRequestForCodex', () => {
+			it('preserves an unknown backend selector in the serialized native request', async () => {
+				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
+				const result = await transformRequestForCodex(
+					{ body: JSON.stringify({ model: 'openai/Gpt-6.3-Unreleased-fast-high', input: [] }) },
+					'https://example.com',
+					{ global: {}, models: {} },
+					true,
+					undefined,
+					{ requestTransformMode: 'native' },
+				);
+				const serialized = result?.updatedInit.body;
+				expect(typeof serialized === 'string' ? JSON.parse(serialized) : serialized)
+					.toMatchObject({ model: 'Gpt-6.3-Unreleased-fast-high' });
+			});
+
 			it('normalizes the model in native mode without loading codex instructions', async () => {
 				const { transformRequestForCodex } = await import('../lib/request/fetch-helpers.js');
 				const getInstructionsSpy = vi.spyOn(codexPrompts, 'getCodexInstructions');
