@@ -921,6 +921,22 @@ describe('Request Transformer Module', () => {
 			expect(result.model).toBe('gpt-6-luna');  // gpt-5-mini maps to gpt-6-luna (gpt-5.4-mini retired)
 		});
 
+		it.each(['openai/gpt-6.1-sol-fast', 'openai/gpt-6.1-sol-fast-high'])(
+			'resolves the known Fast selector %s in the request body',
+			async (model) => {
+				const result = await transformRequestBody({ model, input: [] }, codexInstructions);
+				expect(result.model).toBe('gpt-6.1-sol');
+			},
+		);
+
+		it('preserves an unknown Fast-like selector in the request body', async () => {
+			const result = await transformRequestBody(
+				{ model: 'openai/Gpt-6.3-Unreleased-fast-high', input: [] },
+				codexInstructions,
+			);
+			expect(result.model).toBe('Gpt-6.3-Unreleased-fast-high');
+		});
+
 		it('should apply default reasoning config', async () => {
 			const body: RequestBody = {
 				model: 'gpt-5',

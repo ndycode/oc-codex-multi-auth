@@ -83,7 +83,10 @@ export function normalizeModel(model: string | undefined): string {
 
 	const normalized = modelId.toLowerCase();
 	if (/^[a-z0-9][a-z0-9._-]*$/.test(normalized)) {
-		return getNormalizedModel(stripEffortSuffix(normalized)) ?? modelId;
+		const withoutEffort = stripEffortSuffix(normalized);
+		return getNormalizedModel(withoutEffort)
+			?? getNormalizedModel(withoutEffort.replace(/-fast$/, ""))
+			?? modelId;
 	}
 
 	// Pattern matching preserves legacy verbose display names.
@@ -171,8 +174,6 @@ export function normalizeModel(model: string | undefined): string {
 	}
 
 	// 4. GPT-5.5 (general purpose release)
-	// GPT-5.5 Pro is ChatGPT-only per the 2026-04-23 launch and is not mapped here;
-	// any `gpt-5.5-pro*` alias collapses to the Codex-supported `gpt-5.5` slug.
 	if (/\bgpt(?:-| )5\.5(?:\b|[- ])/.test(normalized)) {
 		return GPT_55_MODEL_ID;
 	}
