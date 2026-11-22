@@ -38,6 +38,12 @@ export interface ConfigOptions {
 	 * `default` to opt out of a model's catalog default tier.
 	 */
 	serviceTier?: string;
+	/**
+	 * Daybreak access program sent as `access_programs.cyber`: `standard`,
+	 * `daybreak_blue` or `daybreak_red`. A `-daybreak` model selector means
+	 * `daybreak_blue`.
+	 */
+	cyberAccessProgram?: string;
 }
 
 /**

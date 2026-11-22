@@ -34,6 +34,7 @@ import {
 } from "./helpers/input-utils.js";
 import { cleanupToolDefinitions } from "./helpers/tool-utils.js";
 import { getCodexCatalogEntry } from "./helpers/codex-catalog.js";
+import { stripDaybreakSelector } from "./helpers/cyber-access.js";
 import type {
 	ConfigOptions,
 	InputItem,
@@ -72,8 +73,12 @@ const DEFAULT_NORMALIZED_MODEL = GPT_6_SOL_MODEL_ID;
 export function normalizeModel(model: string | undefined): string {
 	if (!model) return DEFAULT_NORMALIZED_MODEL;
 
-	// Strip provider prefix if present (e.g., "openai/gpt-5-codex" → "gpt-5-codex")
-	const modelId = model.includes("/") ? model.split("/").pop() ?? model : model;
+	// Strip provider prefix if present (e.g., "openai/gpt-5-codex" → "gpt-5-codex").
+	// A `-daybreak` selector names the base model; the access program it
+	// requests travels separately as `access_programs.cyber`.
+	const modelId = stripDaybreakSelector(
+		model.includes("/") ? model.split("/").pop() ?? model : model,
+	).modelId;
 
 	// Try explicit model map first (handles all known model variants)
 	const mappedModel = getNormalizedModel(modelId);
