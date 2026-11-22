@@ -44,6 +44,12 @@ import {
 } from "./helpers/model-map.js";
 import { stripEffortSuffix } from "./helpers/effort-suffix.js";
 import {
+	applyCyberAccessProgram,
+	normalizeCyberAccessProgram,
+	stripDaybreakSelector,
+	type CyberAccessProgram,
+} from "./helpers/cyber-access.js";
+import {
 	RESPONSES_LITE_HEADER,
 	RESPONSES_LITE_HEADER_VALUE,
 	shapeBodyForModel,
@@ -1042,6 +1048,32 @@ export function getRequestedServiceTier(
 	return undefined;
 }
 
+/**
+ * Daybreak access program asked for by the request: an explicit body value,
+ * the provider option, the per-model config option, or a `-daybreak` selector
+ * (`daybreak_blue`). Undefined leaves `access_programs` off the wire.
+ */
+export function getRequestedCyberAccessProgram(
+	originalModel: string | undefined,
+	body: RequestBody,
+	userConfig: UserConfig,
+): CyberAccessProgram | undefined {
+	const fromBody = body.access_programs;
+	if (fromBody && typeof fromBody === "object") {
+		const program = normalizeCyberAccessProgram((fromBody as { cyber?: unknown }).cyber);
+		if (program) return program;
+	}
+	const fromProvider = normalizeCyberAccessProgram(body.providerOptions?.openai?.cyberAccessProgram);
+	if (fromProvider) return fromProvider;
+	if (!originalModel) return undefined;
+	const fromConfig = normalizeCyberAccessProgram(getModelConfig(originalModel, userConfig).cyberAccessProgram);
+	if (fromConfig) return fromConfig;
+	const bare = originalModel.includes("/")
+		? (originalModel.split("/").pop() ?? originalModel)
+		: originalModel;
+	return stripDaybreakSelector(bare.trim().toLowerCase()).daybreak ? "daybreak_blue" : undefined;
+}
+
 /** Put the resolved tier on the body, or remove the field when none applies. */
 export function applyServiceTier(body: RequestBody, requestedServiceTier: string | undefined): void {
 	const tier = resolveServiceTierForModel(body.model, requestedServiceTier);
@@ -1067,6 +1099,8 @@ export async function transformRequestForCodex(
 			updatedInit: RequestInit;
 			/** Tier asked for before per-model filtering; re-resolved on model fallback. */
 			requestedServiceTier?: string;
+			/** Daybreak program on the wire (`access_programs.cyber`), if any. */
+			requestedCyberAccessProgram?: CyberAccessProgram;
 	  }
 	| undefined
 > {
@@ -1089,6 +1123,7 @@ export async function transformRequestForCodex(
 		const originalModel = body.model;
 		const requestTransformMode = options?.requestTransformMode ?? "legacy";
 		const requestedServiceTier = getRequestedServiceTier(originalModel, body, userConfig);
+		const requestedCyberAccessProgram = getRequestedCyberAccessProgram(originalModel, body, userConfig);
 
 		// OpenCode's AI SDK adapter omits `strict` on function tools, and the
 		// Responses backend treats an omitted flag as strict mode — making
@@ -1129,6 +1164,7 @@ export async function transformRequestForCodex(
 				body.reasoning = clampReasoningForModel(body.reasoning, normalizedModel);
 			}
 			applyServiceTier(body, requestedServiceTier);
+			applyCyberAccessProgram(body, requestedCyberAccessProgram);
 			// Codex always sends the catalog default_verbosity when nothing
 			// chose one (core/src/client.rs); native mode does the same rather
 			// than leaving the backend to its own default.
@@ -1168,6 +1204,7 @@ export async function transformRequestForCodex(
 					body: JSON.stringify(shapeBodyForModel(body)),
 				},
 				requestedServiceTier,
+				requestedCyberAccessProgram,
 			};
 		}
 
@@ -1203,6 +1240,7 @@ export async function transformRequestForCodex(
 			options?.fastSessionMaxInputItems ?? 30,
 		);
 		applyServiceTier(transformedBody, requestedServiceTier);
+		applyCyberAccessProgram(transformedBody, requestedCyberAccessProgram);
 
 		// Log transformed request
 		logRequest(LOG_STAGES.AFTER_TRANSFORM, {
@@ -1230,6 +1268,7 @@ export async function transformRequestForCodex(
 					body: JSON.stringify(shapeBodyForModel(transformedBody)),
 				},
 				requestedServiceTier,
+				requestedCyberAccessProgram,
 			};
 	} catch (e) {
 		logError(`${ERROR_MESSAGES.REQUEST_PARSE_ERROR}`, e);

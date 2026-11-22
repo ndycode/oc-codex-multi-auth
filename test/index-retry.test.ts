@@ -18,11 +18,19 @@ vi.mock("@opencode-ai/plugin/tool", () => {
 	return { tool };
 });
 
+const transformState = vi.hoisted(() => ({
+	requestedCyberAccessProgram: undefined as string | undefined,
+}));
+
 vi.mock("../lib/request/fetch-helpers.js", () => ({
 	applyServiceTier: () => undefined,
 	extractRequestUrl: (input: any) => (typeof input === "string" ? input : String(input)),
 	rewriteUrlForCodex: (url: string) => url,
-	transformRequestForCodex: async (init: any) => ({ updatedInit: init, body: { model: "gpt-5.1" } }),
+	transformRequestForCodex: async (init: any) => ({
+		updatedInit: init,
+		body: { model: transformState.requestedCyberAccessProgram ? "gpt-6-sol" : "gpt-5.1" },
+		requestedCyberAccessProgram: transformState.requestedCyberAccessProgram,
+	}),
 	shouldRefreshToken: () => false,
 	refreshAndUpdateToken: async (auth: any) => auth,
 	createCodexHeaders: () => new Headers(),
@@ -41,6 +49,7 @@ vi.mock("../lib/request/fetch-helpers.js", () => ({
 			) {
 				return { response, errorBody: body, retryAsServerError: true };
 			}
+			if (transformState.requestedCyberAccessProgram) return { response, errorBody: body };
 		} catch {
 			// Non-JSON responses are irrelevant to this focused retry regression.
 		}
@@ -257,6 +266,7 @@ describe("OpenAIAuthPlugin rate-limit retry", () => {
 	});
 
 	afterEach(() => {
+		transformState.requestedCyberAccessProgram = undefined;
 		delete process.env.CODEX_AUTH_AUTO_PROTECT_CREDITS;
 		delete process.env.CODEX_AUTH_QUOTA_NOTIFICATIONS;
 		vi.useRealTimers();
@@ -545,5 +555,90 @@ describe("OpenAIAuthPlugin rate-limit retry", () => {
 		// rather than bubbling the 401 straight back (issue #171).
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(response.status).toBe(200);
+	});
+	describe("Daybreak access program", () => {
+		const sse = (program: string | null) =>
+			new Response(
+				`data: ${JSON.stringify({ type: "response.created", response: { model: "gpt-6-sol", access_programs: program ? { cyber: program } : null } })}\n\n` +
+					`data: ${JSON.stringify({ type: "response.completed", response: { model: "gpt-6-sol" } })}\n\n`,
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+
+		const loadFetcher = async () => {
+			const { OpenAIAuthPlugin } = (await import("../index.js")) as any;
+			const client = { tui: { showToast: vi.fn() }, auth: { set: vi.fn() } } as any;
+			const plugin = await OpenAIAuthPlugin({ client } as any);
+			const getAuth = async () => ({
+				type: "oauth" as const, access: "a", refresh: "r", expires: Date.now() + 60_000, multiAccount: true,
+			});
+			return (await (plugin.auth as any).loader(getAuth, { options: {}, models: {} } as any)) as any;
+		};
+
+		it("moves to the next account when the backend silently downgrades to standard", async () => {
+			transformState.requestedCyberAccessProgram = "daybreak_blue";
+			const sdk = await loadFetcher();
+			const fetchMock = vi.mocked(globalThis.fetch);
+			fetchMock.mockReset();
+			fetchMock.mockResolvedValueOnce(sse("standard")).mockResolvedValueOnce(sse("daybreak_blue"));
+
+			const fetchPromise = sdk.fetch("https://example.com", {});
+			await vi.runAllTimersAsync();
+			const response = await fetchPromise;
+
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+			expect(response.status).toBe(200);
+			const text = await response.text();
+			expect(text).toContain('"cyber":"daybreak_blue"');
+		});
+
+		it("fails with access_program_not_enabled when no account serves the program", async () => {
+			transformState.requestedCyberAccessProgram = "daybreak_blue";
+			const sdk = await loadFetcher();
+			const fetchMock = vi.mocked(globalThis.fetch);
+			fetchMock.mockReset();
+			fetchMock.mockImplementation(async () => sse("standard"));
+
+			const fetchPromise = sdk.fetch("https://example.com", {});
+			await vi.runAllTimersAsync();
+			const response = await fetchPromise;
+
+			expect(response.status).toBe(403);
+			const body = await response.json();
+			expect(body.error.code).toBe("access_program_not_enabled");
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+		});
+
+		it("returns a model-level Daybreak refusal without trying other accounts", async () => {
+			transformState.requestedCyberAccessProgram = "daybreak_blue";
+			const sdk = await loadFetcher();
+			const fetchMock = vi.mocked(globalThis.fetch);
+			fetchMock.mockReset();
+			fetchMock.mockImplementation(async () => new Response(
+				JSON.stringify({ detail: "Daybreak isn't available for this model. Turn off Daybreak or choose another model." }),
+				{ status: 403, headers: { "content-type": "application/json" } },
+			));
+
+			const fetchPromise = sdk.fetch("https://example.com", {});
+			await vi.runAllTimersAsync();
+			const response = await fetchPromise;
+
+			expect(response.status).toBe(403);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+
+		it("forwards a matching Daybreak response unchanged", async () => {
+			transformState.requestedCyberAccessProgram = "daybreak_blue";
+			const sdk = await loadFetcher();
+			const fetchMock = vi.mocked(globalThis.fetch);
+			fetchMock.mockReset();
+			fetchMock.mockResolvedValueOnce(sse("daybreak_blue"));
+
+			const fetchPromise = sdk.fetch("https://example.com", {});
+			await vi.runAllTimersAsync();
+			const response = await fetchPromise;
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(await response.text()).toContain("response.completed");
+		});
 	});
 });

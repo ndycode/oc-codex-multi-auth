@@ -150,6 +150,44 @@ Codex's rules (`ModelInfo::service_tier_for_request`):
 Fast uses more of your plan's usage per request (Codex labels it "increased
 usage" on most models).
 
+### Daybreak access program
+
+OpenAI Daybreak (Trusted Access for Cyber) is an access program on a model, not
+a model of its own: the request carries `access_programs: {"cyber": ...}` with
+`standard`, `daybreak_blue`, or `daybreak_red`
+([OpenAI guide](https://developers.openai.com/api/docs/guides/daybreak)). The
+ChatGPT Codex backend serves a request without the field as `standard`.
+
+- The program comes from, in order: a body `access_programs.cyber`, the host's
+  `cyberAccessProgram` provider option, the plugin's per-model or global
+  `cyberAccessProgram` option, or a `-daybreak` model id such as
+  `gpt-6-sol-daybreak` or `gpt-6-luna-daybreak-high` (`daybreak_blue`). The
+  `-daybreak` suffix is removed before the upstream call.
+- The program must match the model and the account. `available_access_programs`
+  in the Codex model catalog lists it per account; Daybreak Blue accounts get it
+  on `gpt-6-sol`, `gpt-6-luna`, and the GPT-5.6 tiers, not on GPT-6.2/6.1 or
+  `gpt-6-astra`.
+- A Daybreak request is never moved to another model: the unsupported-model and
+  quota fallbacks are off for it. A model-level refusal (`Daybreak isn't
+  available for this model`, `invalid_access_program`,
+  `unsupported_access_program`) is returned to the client.
+- An account without the program either answers `access_program_not_enabled`
+  or answers 200 and silently serves `standard`. The plugin reads the first
+  response event before it forwards anything; on a mismatch it marks that
+  account as not entitled for the model and program and tries the next
+  account. When no account remains, it returns 403
+  `access_program_not_enabled`.
+- Pools and entitlement marks use the key `<model>-daybreak`
+  (`<model>-daybreak-red` for Red), so a Daybreak pool does not restrict the
+  model's standard traffic:
+
+```json
+{
+  "modelAccountPools": { "gpt-6-sol-daybreak": ["<account-id>", "seat:<...>"] },
+  "modelAccountPoolModes": { "gpt-6-sol-daybreak": "strict" }
+}
+```
+
 ### Model normalization
 
 The plugin normalizes the selected id before the upstream call. Highlights:
@@ -158,6 +196,7 @@ The plugin normalizes the selected id before the upstream call. Highlights:
 - bare `gpt-6.1` maps to `gpt-6.1-sol`; `gpt-6.1-terra` is a separate model.
 - bare `gpt-6.2` is this plugin's convenience alias for `gpt-6.2-sol`; the official API ids are `gpt-6.2-astra` and `gpt-6.2-sol`.
 - `gpt-daybreak-blue*` / `gpt-daybreak-red*` map to the catalog `-latest` ids; `gpt-5.6-cyber*` maps to itself, never to Sol
+- `<model>-daybreak[-<effort>]` maps to `<model>` and requests `daybreak_blue` (see [Daybreak access program](#daybreak-access-program))
 - bare `gpt-5.6` maps to `gpt-5.6-sol`; `gpt-5.6-terra*`/`gpt-5.6-luna*` map to their own tiers
 - `gpt-5.5*`, `gpt-5.5-fast*`, and `gpt-5.5-pro*` normalize to `gpt-5.5` (GPT-5.5 Pro is ChatGPT-only)
 - legacy `gpt-5` maps to `gpt-6-sol`; any other unrecognized `gpt-5*` name also resolves to `gpt-6-sol` — the plugin-wide default for a missing/unknown id

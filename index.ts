@@ -203,6 +203,12 @@ import {
 } from "./lib/request/fetch-helpers.js";
 import { shapeBodyForModel } from "./lib/request/helpers/responses-lite.js";
 import {
+	classifyCyberAccessError,
+	getCyberAccessPoolKey,
+	isDaybreakProgram,
+	peekServedCyberAccessProgram,
+} from "./lib/request/helpers/cyber-access.js";
+import {
 	DEACTIVATED_WORKSPACE_ERROR_CODE,
 	isDeactivatedWorkspaceErrorMessage,
 	isInvalidatedAuthTokenMessage,
@@ -2895,6 +2901,10 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 										let requestInit = transformation?.updatedInit ?? baseInit;
 										let transformedBody: RequestBody | undefined = transformation?.body;
 										const requestedServiceTier = transformation?.requestedServiceTier;
+										const requestedCyberAccessProgram = transformation?.requestedCyberAccessProgram;
+										// A Daybreak program is bound to the model it was asked for: never
+										// degrade such a request onto another model.
+										const daybreakRequested = isDaybreakProgram(requestedCyberAccessProgram);
 										const promptCacheKey = transformedBody?.prompt_cache_key;
 										let model = transformedBody?.model;
 										const requestedModel = model ?? null;
@@ -3240,8 +3250,11 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 						const unsupportedAccountKeys = new Set<string>();
 						let restartAccountTraversalWithFallback = false;
 						let restartAccountTraversalAfterWorkspaceDeactivation = false;
-						const preferredAccountIds = getModelAccountPool(pluginConfig, model);
-						const accountPoolMode = getModelAccountPoolMode(pluginConfig, model);
+						// Daybreak traffic keys pools and entitlements as `<model>-daybreak`,
+						// so a Daybreak pool never restricts the model's standard traffic.
+						const poolModel = getCyberAccessPoolKey(model, requestedCyberAccessProgram);
+						const preferredAccountIds = getModelAccountPool(pluginConfig, poolModel);
+						const accountPoolMode = getModelAccountPoolMode(pluginConfig, poolModel);
 						const strictAccountPool =
 							preferredAccountIds.length > 0 && accountPoolMode === "strict";
 						const isPoolMember = (index: number): boolean => {
@@ -3251,7 +3264,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 						};
 						const isKnownUnsupported = (candidate: ManagedAccount): boolean =>
 							unsupportedAccountKeys.has(getAccountDiagnosticsKey(candidate)) ||
-							modelEntitlements.isUnsupported(getCreditsAccountKey(candidate), model);
+							modelEntitlements.isUnsupported(getCreditsAccountKey(candidate), poolModel);
 						// One `/wham/usage` read for an account whose balance this
 						// process has not seen recently. Free, and the only way to know
 						// a balance before a turn is billed to it.
@@ -3989,6 +4002,31 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 						);
 					}
 
+			const cyberAccessFailure = daybreakRequested
+				? classifyCyberAccessError(response.status, errorBody)
+				: undefined;
+			if (cyberAccessFailure === "model") {
+				runtimeMetrics.failedRequests++;
+				runtimeMetrics.lastError = `Daybreak ${requestedCyberAccessProgram} is not available for ${model}`;
+				runtimeMetrics.lastErrorCategory = "unsupported-model";
+				logWarn(runtimeMetrics.lastError);
+				return errorResponse;
+			}
+			if (cyberAccessFailure === "account") {
+				unsupportedAccountKeys.add(getAccountDiagnosticsKey(account));
+				if (poolModel) modelEntitlements.markUnsupported(getCreditsAccountKey(account), poolModel);
+				accountManager.refundToken(account, modelFamily, model);
+				runtimeMetrics.lastError = `Daybreak ${requestedCyberAccessProgram} is not enabled on account ${account.index + 1}`;
+				runtimeMetrics.lastErrorCategory = "unsupported-model";
+				logWarn(`${runtimeMetrics.lastError}. Trying the next account.`);
+				if (attempted.size < Math.max(1, accountCount)) {
+					account.lastSwitchReason = "rotation";
+					break;
+				}
+				runtimeMetrics.failedRequests++;
+				return errorResponse;
+			}
+
 			const workspaceDeactivated = isDeactivatedWorkspaceError(errorBody, response.status);
 				if (workspaceDeactivated) {
 					const accountLabel = formatAccountLabel(account, account.index, {
@@ -4057,7 +4095,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 			const unsupportedModelInfo = getUnsupportedCodexModelInfo(errorBody);
 			if (unsupportedModelInfo.isUnsupported) {
 				unsupportedAccountKeys.add(getAccountDiagnosticsKey(account));
-				if (model) modelEntitlements.markUnsupported(getCreditsAccountKey(account), model);
+				if (poolModel) modelEntitlements.markUnsupported(getCreditsAccountKey(account), poolModel);
 			}
 			const hasRemainingAccounts = attempted.size < Math.max(1, accountCount);
 
@@ -4084,7 +4122,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 				break;
 			}
 
-			const fallbackModel = resolveUnsupportedCodexFallbackModel({
+			const fallbackModel = daybreakRequested ? undefined : resolveUnsupportedCodexFallbackModel({
 				requestedModel: model,
 				errorBody,
 				attemptedModels: attemptedUnsupportedFallbackModels,
@@ -4379,6 +4417,37 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 																													return errorResponse;
 																											}
 
+					if (daybreakRequested) {
+						// An account without the program answers 200 and echoes
+						// `standard`: check the first response event before forwarding
+						// anything, and move on instead of passing off a standard turn.
+						const peeked = await peekServedCyberAccessProgram(response);
+						response = peeked.response;
+						if (peeked.served !== undefined && peeked.served !== requestedCyberAccessProgram) {
+							await response.body?.cancel().catch(() => undefined);
+							unsupportedAccountKeys.add(getAccountDiagnosticsKey(account));
+							if (poolModel) modelEntitlements.markUnsupported(getCreditsAccountKey(account), poolModel);
+							accountManager.refundToken(account, modelFamily, model);
+							runtimeMetrics.lastError = `Account ${account.index + 1} served ${model} as ${peeked.served ?? "standard"} instead of ${requestedCyberAccessProgram}`;
+							runtimeMetrics.lastErrorCategory = "unsupported-model";
+							logWarn(`${runtimeMetrics.lastError}. Trying the next account.`);
+							if (attempted.size < Math.max(1, accountCount)) {
+								account.lastSwitchReason = "rotation";
+								break;
+							}
+							runtimeMetrics.failedRequests++;
+							return new Response(
+								JSON.stringify({
+									error: {
+										type: "access_program_not_enabled",
+										code: "access_program_not_enabled",
+										message: `No eligible account served ${model} with ${requestedCyberAccessProgram}; the backend downgraded the request to ${peeked.served ?? "standard"}.`,
+									},
+								}),
+								{ status: 403, headers: { "content-type": "application/json; charset=utf-8" } },
+							);
+						}
+					}
 					resetRateLimitBackoff(account.index, quotaKey);
 					runtimeMetrics.cumulativeLatencyMs += fetchLatencyMs;
 					let successResponse: Response;
@@ -4627,6 +4696,7 @@ async function createPluginRuntime({ client, directory = process.cwd() }: {
 								// An account-wide quota block fails the eligibility test
 								// on every candidate, so it correctly falls through to the wait.
 								if (
+									!daybreakRequested &&
 									upstreamBlocked &&
 									waitMs > 0 &&
 									count > 0 &&

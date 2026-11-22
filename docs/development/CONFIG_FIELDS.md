@@ -38,6 +38,7 @@ These are interpreted by OpenCode (and consumed by the plugin via
 | `provider.openai.options.reasoningSummary` | `auto` \| `concise` \| `detailed` \| `none` (`off` means `none`; `on` normalizes to `auto`) | `auto` | reasoning summary depth; `none` omits the field |
 | `provider.openai.options.textVerbosity` | `low` \| `medium` \| `high` | Codex catalog default (`low`; `high` on Daybreak Red), else `medium` | response verbosity |
 | `provider.openai.options.serviceTier` | `fast` (alias `priority`) \| `flex` \| `default` | Codex catalog default (Fast on `gpt-6-sol`/`gpt-6-luna`) | Codex service tier; see [Service tier (Fast)](../configuration.md#service-tier-fast) |
+| `provider.openai.options.cyberAccessProgram` | `standard` \| `daybreak_blue` \| `daybreak_red` | unset (field omitted; backend serves `standard`) | Daybreak access program sent as `access_programs.cyber`; a `-daybreak` model id means `daybreak_blue`; see [Daybreak access program](../configuration.md#daybreak-access-program) |
 | `provider.openai.options.include` | string[] | `["reasoning.encrypted_content"]` | extra response fields; encrypted reasoning is required with `store: false` and enforced on the wire |
 | `provider.openai.options.store` | `false` | `false` | `true` is not supported by the stateless ChatGPT Codex API |
 | `provider.openai.models.<id>` | object | none | model registry entry (`name`, `family`, `variant`, `context`, `output`, `reasoning`, `tool_call`, `options`, …) |
@@ -72,7 +73,7 @@ logged warning) and keeps the rest of the file.
 | --- | --- | --- | --- | --- | --- |
 | `rotationStrategy` | `CODEX_AUTH_ROTATION_STRATEGY` | `hybrid` \| `sticky` \| `round-robin` | `hybrid` | — | account selection policy; see configuration.md |
 | `spendCredits` | `CODEX_AUTH_SPEND_CREDITS` | boolean | `false` | — | once no entitled account has plan quota, serve from an account with a Codex credit balance; see configuration.md |
-| `modelAccountPools` | (file only) | record: model → account-id array | `{}` | keys/values non-empty strings | pin an effective model to stable account/workspace identities; keys normalize case-insensitively after model normalization |
+| `modelAccountPools` | (file only) | record: model → account-id array | `{}` | keys/values non-empty strings | pin an effective model to stable account/workspace identities; keys normalize case-insensitively after model normalization; a Daybreak request uses the key `<model>-daybreak` (`<model>-daybreak-red` for Red) |
 | `modelAccountPoolModes` | (file only) | record: model → `preferred` \| `strict` | `{}` (all `preferred`) | — | `preferred` falls back to the general pool when the mapping has no selectable account; `strict` never leaves its list (`strict_pool_unavailable`) |
 | `perProjectAccounts` | `CODEX_AUTH_PER_PROJECT_ACCOUNTS` | boolean | `false` | — | `true`: per-project pools under `~/.opencode/projects/<project-key>/`; `false`: the global pool. Toggling switches scope live but never migrates or prunes the other scope's files |
 | `credentialSnapshots` | `CODEX_AUTH_CREDENTIAL_SNAPSHOTS` | boolean | `true` | — | snapshot the previous account store into `backups/` before a significant write; JSON backend only |
